@@ -1,0 +1,13 @@
+{
+  "domain": "controld_manager",
+  "name": "Control D Manager",
+  "codeowners": ["@ccpk1"],
+  "config_flow": true,
+  "documentation": "https://github.com/ccpk1/controld-manager-ha",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/ccpk1/controld-manager-ha/issues",
+  "loggers": ["custom_components.controld_manager"],
+  "requirements": [],
+  "version": "0.1.0"
+}

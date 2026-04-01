@@ -1,0 +1,7 @@
+{
+  "config": {
+    "abort": {
+      "not_implemented": "Control D Manager is currently a scaffold-only repository. The production config flow has not been implemented yet."
+    }
+  }
+}

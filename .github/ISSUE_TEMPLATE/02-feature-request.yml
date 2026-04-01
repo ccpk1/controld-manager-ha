@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest a user-facing improvement for Control D Manager.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion.
+
+        Keep requests concrete and user-facing. If the request depends on unverified Control D API behavior, note that clearly.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Explain the real user problem or friction first.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior you want and how you expect it to work.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any workaround or alternate approach you considered.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Config flow
+        - Profile controls
+        - Analytics
+        - Services
+        - Diagnostics
+        - Documentation
+        - Other
+    validations:
+      required: true
