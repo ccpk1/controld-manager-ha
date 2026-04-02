@@ -206,8 +206,32 @@ Rules:
 
 - prefer `_attr_has_entity_name = True` for entities attached to the instance system device or a profile device
 - user-facing names must be owned by translation keys
-- do not hardcode `_attr_name` for production entity names
+- short explicit `_attr_name` values are acceptable when they preserve the naming contract better than forcing a translation-only pattern
 - mutable labels such as profile names and endpoint labels may use translation placeholders
+
+Scope contract:
+
+- account entities should use explicit summary names such as count labels because the `Account` device alone is not specific enough
+- profile entities may stay short for a small curated set, but high-cardinality profile surfaces should use hierarchical names that include type, category when available, and item name
+- endpoint entities should begin with the endpoint name because endpoints remain entity-only surfaces under a profile device
+- the integration does not need a custom duplicate-endpoint-name fallback policy; Home Assistant owns final `entity_id` disambiguation
+
+Examples:
+
+- account entities: `Account Profile Count`, `Account Endpoint Count`
+- profile switch entities: `Options / Disable`, `Filters / Games`, `Services / Hosting / Alibaba Cloud`
+- profile select entities: `Filters / Ads & Trackers Mode`
+- profile rule entities: `Rules / Domain / example.com`
+- endpoint entities: `<endpoint name> Status`
+
+Critical rules:
+
+- do not expose raw field keys such as `last_active` as final user-facing names
+- do not make endpoint naming part of the identity contract
+- do not add integration-managed suffixes solely to avoid duplicate endpoint display names
+- use Control D terminology in the user-facing entity name when it is the clearest stable label, for example `Disable`
+- when a filter exposes both enabled state and a mode, create both a switch and a select rather than overloading one entity with both concerns
+- mode names such as `Relaxed`, `Balanced`, and `Strict` belong in the select options or state, not in separate entity names
 
 ### Entity identity
 
@@ -233,6 +257,20 @@ Rules:
 - not every Control D setting needs a Home Assistant entity
 - prefer a smaller entity set with clear user value over exhaustive API mirroring
 - endpoint telemetry should remain entity-scoped under the owning profile device rather than expanding the Home Assistant device registry
+- high-cardinality profile surfaces such as filters, services, and rules should default to opt-in exposure
+- endpoint surfaces should also default to opt-in exposure and should begin with one compact status-oriented entity rather than a large sensor set
+
+### Options and exposure policy
+
+- `ConfigEntry.options` should store integration-owned exposure policy only, not mirrored upstream catalogs
+- profile-specific exposure choices must be keyed by immutable profile identifier under the entry options
+- profile policy is the correct home for profile management state, endpoint-sensor toggles, enabled service categories, per-profile service auto-enable behavior, exposed custom-rule targets, and later profile-scoped advanced settings such as endpoint inactivity thresholds
+- filters should not create per-item options-storage burden in v1; they should be created automatically and rely on entity-registry defaults
+- service exposure should be stored by category, not by individual service row, unless a later UI proves that finer control is necessary
+- service entities created from an enabled category should default to disabled in the entity registry
+- any override that defaults category-created service entities to enabled must be treated as an advanced option and accompanied by a warning about large entity counts
+- rule exposure should store compact typed selections only, never full rule payload mirrors
+- endpoint status should be derived from a configurable per-profile activity threshold if the API continues to expose timestamp-only activity data
 
 ### Entity metadata
 
@@ -268,6 +306,9 @@ Rules:
 - prefer split refresh groups over one oversized poll path when analytics and configuration data have materially different cadences
 - benchmark the final polling shape against Home Assistant cloud integrations such as NextDNS before locking the intervals
 - current target posture is a fast analytics poller at 3 to 5 minutes and a slow configuration poller at 30 to 60 minutes
+- refresh groups must be runtime-defined so individual poll categories can be added, removed, or rebalanced without rewriting coordinator architecture
+- each refresh group must have explicit `DEFAULT_*`, `MIN_*`, and `MAX_*` interval constants before it becomes user-configurable
+- options-backed polling changes must stay within bounded ranges per refresh group; unbounded user-defined polling is forbidden
 - after a successful mutation, trigger an immediate refresh of the affected configuration path so the Home Assistant UI reflects the new cloud state promptly
 
 ## Config flow standards
@@ -277,6 +318,12 @@ Rules:
 - do not let users supply a free-form config entry name in the main user step
 - duplicate prevention must use the immutable instance identifier
 - implement reauthentication and reconfiguration explicitly once credentials and instance identity semantics are confirmed
+- options flows should use a menu-based structure when multiple mutable settings families exist
+- options-flow menuing, system-settings steps, and translation structure should follow the Firewalla Local pattern: one top-level menu, one profile selector, one focused per-profile edit form, and one integration-settings form
+- options-flow structure should keep one coherent save surface per scope: submitting the profile form saves that profile policy, and submitting the integration-settings form saves the global polling policy
+- initial setup should include all discovered profiles by default
+- the options flow must allow any profile to be excluded from the integration later without deleting the config entry
+- per-refresh-group polling settings belong in coordinator-owned system settings, not in entity or service configuration surfaces
 
 ## Service standards
 
@@ -285,7 +332,9 @@ Rules:
 - service target resolution must accept `entity_id`, `device_id`, and `config_entry_id` as first-class selectors
 - service handlers must validate Home Assistant-facing input and then delegate to manager methods
 - services must reject ambiguous or mixed-instance targets with specific, translation-ready exceptions
-- the first planned mutation-oriented custom service is `controld_manager.pause_profile`, which should compute the future disable timestamp locally and let the Control D cloud own the countdown state
+- paired pause and resume services should follow the Firewalla Local pattern: explicit target field, explicit timing validation, and translation-ready conflict errors for incompatible inputs
+- the first planned mutation-oriented custom services are `controld_manager.pause_profile` and `controld_manager.resume_profile`, with pause computing the future disable timestamp locally and resume clearing that upstream pause state
+- if later pause semantics are added for filters, services, or other profile sub-resources, the repository must first prove that one shared typed target-resolution family is clearer than separate service surfaces
 
 ## Exception handling rules
 

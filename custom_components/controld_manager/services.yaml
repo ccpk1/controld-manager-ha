@@ -1,0 +1,41 @@
+pause_profile:
+  name: Pause profile
+  description: Pause one or more Control D profiles for a temporary duration.
+  target:
+    entity:
+      domain: switch
+      integration: controld_manager
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        text:
+    config_entry_name:
+      required: false
+      selector:
+        text:
+    minutes:
+      required: false
+      default: 60
+      selector:
+        number:
+          min: 1
+          max: 1440
+          mode: box
+
+resume_profile:
+  name: Resume profile
+  description: Resume one or more paused Control D profiles immediately.
+  target:
+    entity:
+      domain: switch
+      integration: controld_manager
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        text:
+    config_entry_name:
+      required: false
+      selector:
+        text:

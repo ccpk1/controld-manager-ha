@@ -1,17 +1,17 @@
 rules:
   baseline-note:
     status: todo
-    comment: This repository is a structural scaffold only. Quality-scale rules should move to done only after the corresponding behavior exists.
+    comment: The runtime foundation and first conservative entity and service slice now exist, but additional quality-scale behavior still remains.
 
   # Bronze
-  action-setup: todo
+  action-setup: done
   appropriate-polling: todo
   brands:
     status: exempt
     comment: Custom integration branding is intentionally not part of the initial scaffold.
   common-modules: done
   config-flow-test-coverage: todo
-  config-flow: todo
+  config-flow: done
   dependency-transparency: done
   docs-actions: done
   docs-high-level-description: done
@@ -22,25 +22,25 @@ rules:
   entity-event-setup:
     status: exempt
     comment: No event-driven entities exist in the scaffold.
-  entity-unique-id: todo
-  has-entity-name: todo
-  runtime-data: todo
-  test-before-configure: todo
-  test-before-setup: todo
-  unique-config-entry: todo
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure: done
+  test-before-setup: done
+  unique-config-entry: done
 
   # Silver
-  action-exceptions: todo
-  config-entry-unloading: todo
+  action-exceptions: done
+  config-entry-unloading: done
   docs-data-update: todo
-  entity-unavailable: todo
+  entity-unavailable: done
   log-when-unavailable: todo
-  parallel-updates: todo
+  parallel-updates: done
   reauthentication-flow: todo
   reconfigure-flow: todo
 
   # Gold
-  devices: todo
+  devices: done
   diagnostics:
     status: done
     comment: A placeholder diagnostics surface exists and will need expansion once runtime data exists.
@@ -49,12 +49,12 @@ rules:
     comment: No discovery contract has been defined for this cloud integration.
   entity-category: todo
   entity-disabled-by-default: todo
-  entity-translations: todo
+  entity-translations: done
   exception-translations: todo
   icon-translations: todo
-  stale-devices: todo
+  stale-devices: done
 
   # Platinum
-  async-dependency: todo
-  inject-websession: todo
+  async-dependency: done
+  inject-websession: done
   strict-typing: done

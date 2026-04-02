@@ -1,7 +1,129 @@
 {
   "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Control D",
+        "description": "Enter a Control D API token to create one Home Assistant config entry for one authenticated Control D instance.",
+        "data": {
+          "api_token": "API token"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to reach the Control D API. Check network access and any token IP restrictions, then try again.",
+      "invalid_auth": "The Control D API token was rejected. Check that the token is valid and has the required scope.",
+      "unknown": "An unexpected error occurred while validating the Control D API token."
+    },
     "abort": {
+      "already_configured": "This Control D instance is already configured.",
       "not_implemented": "Control D Manager is currently a scaffold-only repository. The production config flow has not been implemented yet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Control D settings",
+        "description": "What would you like to configure?",
+        "menu_options": {
+          "select_profile": "Configure a profile",
+          "integration_settings": "Integration settings"
+        }
+      },
+      "select_profile": {
+        "title": "Select profile",
+        "data": {
+          "profile_pk": "Select profile"
+        }
+      },
+      "edit_profile": {
+        "title": "{profile_name}",
+        "data": {
+          "managed_in_home_assistant": "Enable management in Home Assistant",
+          "endpoint_sensors_enabled": "Generate endpoint sensors",
+          "endpoint_inactivity_threshold_minutes": "Endpoint inactivity threshold (minutes)",
+          "allowed_service_categories": "Allowed service categories",
+          "auto_enable_service_switches": "Auto-enable switches for allowed service categories",
+          "exposed_custom_rules": "Expose custom rules"
+        },
+        "data_description": {
+          "managed_in_home_assistant": "Turn off to exclude this profile and remove its entities from Home Assistant.",
+          "endpoint_sensors_enabled": "Create telemetry entities for devices under this profile.",
+          "endpoint_inactivity_threshold_minutes": "How long before an endpoint is marked as inactive.",
+          "allowed_service_categories": "Select which categories to expose as switches.",
+          "auto_enable_service_switches": "Warning: turning this on may create significant entity clutter if Control D adds new services.",
+          "exposed_custom_rules": "Select specific custom rule folders or domains to expose as switches."
+        }
+      },
+      "integration_settings": {
+        "title": "Integration settings",
+        "data": {
+          "configuration_sync_interval_minutes": "Configuration sync interval (minutes)",
+          "profile_analytics_interval_minutes": "Profile analytics interval (minutes)",
+          "endpoint_analytics_interval_minutes": "Endpoint analytics interval (minutes)"
+        },
+        "data_description": {
+          "configuration_sync_interval_minutes": "How often to fetch structural changes such as new rules and services. Default: 15.",
+          "profile_analytics_interval_minutes": "How often to fetch high-level query and block counts. Default: 5.",
+          "endpoint_analytics_interval_minutes": "How often to fetch granular device-level telemetry. Default: 5."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "config_entry_not_found": {
+      "message": "The selected Control D config entry could not be found."
+    },
+    "config_entry_name_not_found": {
+      "message": "The selected Control D config entry name could not be found."
+    },
+    "config_entry_name_ambiguous": {
+      "message": "More than one Control D config entry has that name. Use the config entry ID instead."
+    },
+    "config_entry_not_loaded": {
+      "message": "The selected Control D config entry is not currently loaded."
+    },
+    "multiple_entries_loaded": {
+      "message": "More than one Control D config entry is loaded. Select a specific config entry or target a profile switch entity."
+    },
+    "wrong_integration_entry": {
+      "message": "The selected config entry does not belong to Control D Manager."
+    },
+    "profile_target_required": {
+      "message": "Select a Control D profile switch entity, config entry ID, or config entry name."
+    },
+    "profile_target_not_found": {
+      "message": "The selected Control D profile target could not be resolved."
+    },
+    "profile_target_ambiguous": {
+      "message": "The selected Control D profile target is ambiguous or belongs to a different config entry."
+    }
+  },
+  "entity": {
+    "button": {
+      "sync": {
+        "name": "Sync now"
+      }
+    },
+    "sensor": {
+      "status": {
+        "name": "Status",
+        "state": {
+          "healthy": "Healthy",
+          "degraded": "Degraded",
+          "problem": "Problem"
+        }
+      },
+      "profile_count": {
+        "name": "Profile count"
+      },
+      "endpoint_count": {
+        "name": "Endpoint count"
+      }
+    },
+    "switch": {
+      "paused": {
+        "name": "Disable"
+      }
     }
   }
 }
