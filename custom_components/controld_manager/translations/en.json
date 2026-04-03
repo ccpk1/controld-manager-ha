@@ -42,14 +42,14 @@
           "endpoint_sensors_enabled": "Generate endpoint sensors",
           "endpoint_inactivity_threshold_minutes": "Endpoint inactivity threshold (minutes)",
           "allowed_service_categories": "Allowed service categories",
-          "auto_enable_service_switches": "Auto-enable switches for allowed service categories",
+          "auto_enable_service_switches": "Auto-enable service controls for allowed service categories",
           "exposed_custom_rules": "Expose custom rules"
         },
         "data_description": {
           "managed_in_home_assistant": "Turn off to exclude this profile and remove its entities from Home Assistant.",
           "endpoint_sensors_enabled": "Create telemetry entities for devices under this profile.",
           "endpoint_inactivity_threshold_minutes": "How long before an endpoint is marked as inactive.",
-          "allowed_service_categories": "Select which categories to expose as switches.",
+          "allowed_service_categories": "Select which categories to expose as service controls.",
           "auto_enable_service_switches": "Warning: turning this on may create significant entity clutter if Control D adds new services.",
           "exposed_custom_rules": "Select specific custom rule folders or domains to expose as switches."
         }

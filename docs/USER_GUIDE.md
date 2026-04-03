@@ -51,9 +51,9 @@ Each profile can be configured with these controls:
 	Controls how long an endpoint can remain inactive before its endpoint status
 	entity reports inactive.
 - Allowed service categories
-	Limits which Control D service categories are exposed as switches.
-- Auto-enable switches for allowed service categories
-	Leaves newly created service switches enabled by default for the allowed
+	Limits which Control D service categories are exposed as service controls.
+- Auto-enable service controls for allowed service categories
+	Leaves newly created service controls enabled by default for the allowed
 	categories. This can increase entity count over time.
 - Expose custom rules
 	Lets you expose selected rule folders or individual custom rules as switches.
@@ -95,7 +95,7 @@ Current profile surfaces can include:
 - a pause or disable switch for the profile
 - filter switches
 - filter mode selectors where the upstream filter supports multiple levels
-- service switches for allowed service categories
+- service mode selectors for allowed service categories
 - custom rule switches for exposed rules
 - endpoint status entities for endpoints owned by that profile when enabled
 
@@ -168,12 +168,15 @@ Turning it off resumes the profile.
 ### Filter switches and mode selectors
 
 Filters are exposed as switches. Filters with multiple upstream levels also get
-a selector entity for the active mode.
+a selector entity for the active mode. Filter mode selectors follow the same
+default entity-registry visibility as their companion filter switch.
 
-### Service switches
+### Service mode selectors
 
-Service switches are only created for the service categories you allow in the
-profile options.
+Service mode selectors are only created for the service categories you allow in
+the profile options.
+
+Current options are `Off`, `Blocked`, `Bypassed`, and `Redirected`.
 
 ### Custom rule switches
 
@@ -220,7 +223,7 @@ persistent state across Home Assistant restarts.
 - If Status reports Degraded or Problem, check the last refresh error attribute.
 - If a profile should disappear from Home Assistant, verify that Enable
 	management in Home Assistant is turned off for that profile.
-- If expected service switches are missing, verify that the relevant service
+- If expected service controls are missing, verify that the relevant service
 	categories are enabled for that profile.
 - If expected custom rule switches are missing, verify that the specific rules
 	or rule folders are exposed for that profile.

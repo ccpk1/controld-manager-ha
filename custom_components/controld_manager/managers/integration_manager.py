@@ -119,14 +119,18 @@ class IntegrationManager(BaseManager):
                 for level_payload in payload.get("levels", [])
                 if isinstance(level_payload, dict)
             )
+            selected_level_slug = IntegrationManager._optional_string(action.get("lvl"))
+            if selected_level_slug is None:
+                selected_level_slug = next(
+                    (level.slug for level in levels if level.enabled),
+                    None,
+                )
             filters[filter_pk] = ControlDFilter(
                 filter_pk=filter_pk,
                 name=IntegrationManager._require_string(payload, "name"),
                 enabled=bool(payload.get("status", 0)),
                 action_do=int(action.get("do", 0) or 0),
-                selected_level_slug=IntegrationManager._optional_string(
-                    action.get("lvl")
-                ),
+                selected_level_slug=selected_level_slug,
                 levels=levels,
             )
         return filters
@@ -163,7 +167,7 @@ class IntegrationManager(BaseManager):
                     else category_pk.replace("_", " ").title()
                 ),
                 enabled=bool(action.get("status", 0)),
-                action_do=int(action.get("do", 1) or 1),
+                action_do=(int(action["do"]) if "do" in action else 1),
                 warning=IntegrationManager._optional_string(payload.get("warning")),
                 unlock_location=IntegrationManager._optional_string(
                     payload.get("unlock_location")

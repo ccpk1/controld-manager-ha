@@ -168,12 +168,12 @@ class ControlDAPIClient:
         action_do: int,
         level_slug: str | None,
     ) -> None:
-        """Update one profile filter using the current action model."""
-        payload: dict[str, Any] = {"do": action_do, "status": int(enabled)}
+        """Update one profile filter using the browser-verified filter contract."""
+        payload: dict[str, Any] = {"status": int(enabled), "do": action_do}
         if level_slug is not None:
             payload["lvl"] = level_slug
         await self._async_request(
-            "PUT", f"/profiles/{profile_pk}/filters/{filter_pk}", payload
+            "PUT", f"/profiles/{profile_pk}/filters/filter/{filter_pk}", payload
         )
 
     async def async_set_profile_service(

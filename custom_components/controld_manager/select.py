@@ -14,8 +14,14 @@ from .api import (
     ControlDApiConnectionError,
     ControlDApiResponseError,
 )
+from .const import DEFAULT_ENABLED_FILTERS
 from .entity import ControlDManagerProfileEntity
-from .models import ControlDFilter, ControlDManagerRuntime
+from .models import (
+    ControlDFilter,
+    ControlDManagerRuntime,
+    ControlDService,
+    service_mode_options,
+)
 
 if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -55,6 +61,11 @@ def _build_select_entity(
         return ControlDManagerProfileFilterModeSelect(
             config_entry, profile_pk, filter_pk
         )
+    if "::service::" in key:
+        _, profile_pk, _, service_pk = key.split("::", 3)
+        return ControlDManagerProfileServiceModeSelect(
+            config_entry, profile_pk, service_pk
+        )
     raise ValueError(f"Unsupported Control D select key {key!r}")
 
 
@@ -79,6 +90,9 @@ class ControlDManagerProfileFilterModeSelect(
             f"Filters / {filter_row.name} Mode"
             if filter_row is not None
             else f"Filters / {filter_pk} Mode"
+        )
+        self._attr_entity_registry_enabled_default = (
+            filter_pk in DEFAULT_ENABLED_FILTERS
         )
 
     @property
@@ -110,10 +124,7 @@ class ControlDManagerProfileFilterModeSelect(
         filter_row = self.filter_row
         if filter_row is None:
             return None
-        for level in filter_row.levels:
-            if level.slug == filter_row.selected_level_slug:
-                return str(level.title)
-        return None
+        return filter_row.effective_level_title
 
     def select_option(self, option: str) -> None:
         """Select option is handled asynchronously by Home Assistant."""
@@ -142,3 +153,77 @@ class ControlDManagerProfileFilterModeSelect(
             raise HomeAssistantError(
                 "Unable to update the Control D filter mode"
             ) from err
+
+
+class ControlDManagerProfileServiceModeSelect(
+    ControlDManagerProfileEntity, SelectEntity
+):
+    """Select surface for one dynamically exposed service."""
+
+    _purpose = "profile_service"
+
+    def __init__(
+        self,
+        config_entry: ConfigEntry[ControlDManagerRuntime],
+        profile_pk: str,
+        service_pk: str,
+    ) -> None:
+        """Initialize one service-mode select."""
+        self._service_pk = service_pk
+        super().__init__(config_entry, profile_pk, f"service::{service_pk}")
+        service_row = self.service_row
+        self._attr_name = (
+            f"Services / {service_row.category_name} / {service_row.name}"
+            if service_row is not None
+            else f"Services / {service_pk}"
+        )
+        self._attr_entity_registry_enabled_default = (
+            self.runtime.options.profile_policy(profile_pk).auto_enable_service_switches
+        )
+
+    @property
+    def service_row(self) -> ControlDService | None:
+        """Return the current normalized service row."""
+        return self.runtime.registry.services_by_profile.get(self._profile_pk, {}).get(
+            self._service_pk
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return whether the service still exists in the registry."""
+        return super().available and self.service_row is not None
+
+    @property
+    def options(self) -> list[str]:
+        """Return the supported service-mode options."""
+        return list(service_mode_options())
+
+    @property
+    def current_option(self) -> str | None:
+        """Return the current service mode."""
+        service_row = self.service_row
+        if service_row is None:
+            return None
+        return service_row.current_mode
+
+    def select_option(self, option: str) -> None:
+        """Select option is handled asynchronously by Home Assistant."""
+        raise NotImplementedError
+
+    async def async_select_option(self, option: str) -> None:
+        """Set a new mode for the service."""
+        service_row = self.service_row
+        if service_row is None:
+            raise HomeAssistantError("Unable to find the selected Control D service")
+        if option not in service_mode_options():
+            raise HomeAssistantError("Unsupported Control D service mode")
+        try:
+            await self.runtime.managers.profile.async_set_service_mode(
+                self._profile_pk, self._service_pk, option
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+        ) as err:
+            raise HomeAssistantError("Unable to update the Control D service") from err

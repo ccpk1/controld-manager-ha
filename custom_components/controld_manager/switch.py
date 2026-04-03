@@ -28,7 +28,6 @@ from .models import (
     ControlDFilter,
     ControlDManagerRuntime,
     ControlDRule,
-    ControlDService,
 )
 
 if TYPE_CHECKING:
@@ -70,9 +69,6 @@ def _build_switch_entity(
     if "::filter::" in key:
         _, profile_pk, _, filter_pk = key.split("::", 3)
         return ControlDManagerProfileFilterSwitch(config_entry, profile_pk, filter_pk)
-    if "::service::" in key:
-        _, profile_pk, _, service_pk = key.split("::", 3)
-        return ControlDManagerProfileServiceSwitch(config_entry, profile_pk, service_pk)
     if "::rule::" in key:
         _, profile_pk, _, rule_identity = key.split("::", 3)
         return ControlDManagerProfileRuleSwitch(config_entry, profile_pk, rule_identity)
@@ -223,85 +219,6 @@ class ControlDManagerProfileFilterSwitch(ControlDManagerProfileEntity, SwitchEnt
             ControlDApiResponseError,
         ) as err:
             raise HomeAssistantError("Unable to disable the Control D filter") from err
-
-
-class ControlDManagerProfileServiceSwitch(ControlDManagerProfileEntity, SwitchEntity):
-    """Switch surface for one dynamically exposed service."""
-
-    _purpose = "profile_service"
-
-    def __init__(
-        self,
-        config_entry: ConfigEntry[ControlDManagerRuntime],
-        profile_pk: str,
-        service_pk: str,
-    ) -> None:
-        """Initialize one service switch."""
-        self._service_pk = service_pk
-        super().__init__(config_entry, profile_pk, f"service::{service_pk}")
-        service_row = self.service_row
-        self._attr_name = (
-            f"Services / {service_row.category_name} / {service_row.name}"
-            if service_row is not None
-            else f"Services / {service_pk}"
-        )
-        self._attr_entity_registry_enabled_default = (
-            self.runtime.options.profile_policy(profile_pk).auto_enable_service_switches
-        )
-
-    @property
-    def service_row(self) -> ControlDService | None:
-        """Return the current normalized service row."""
-        return self.runtime.registry.services_by_profile.get(self._profile_pk, {}).get(
-            self._service_pk
-        )
-
-    @property
-    def available(self) -> bool:
-        """Return whether the service still exists in the registry."""
-        return super().available and self.service_row is not None
-
-    @property
-    def is_on(self) -> bool:
-        """Return whether the service rule is enabled."""
-        service_row = self.service_row
-        return bool(service_row is not None and service_row.enabled)
-
-    def turn_on(self, **kwargs: object) -> None:
-        """Switch turn_on is handled asynchronously by Home Assistant."""
-        raise NotImplementedError
-
-    def turn_off(self, **kwargs: object) -> None:
-        """Switch turn_off is handled asynchronously by Home Assistant."""
-        raise NotImplementedError
-
-    async def async_turn_on(self, **kwargs: object) -> None:
-        """Enable the service rule."""
-        del kwargs
-        try:
-            await self.runtime.managers.profile.async_set_service_enabled(
-                self._profile_pk, self._service_pk, True
-            )
-        except (
-            ControlDApiAuthError,
-            ControlDApiConnectionError,
-            ControlDApiResponseError,
-        ) as err:
-            raise HomeAssistantError("Unable to enable the Control D service") from err
-
-    async def async_turn_off(self, **kwargs: object) -> None:
-        """Disable the service rule."""
-        del kwargs
-        try:
-            await self.runtime.managers.profile.async_set_service_enabled(
-                self._profile_pk, self._service_pk, False
-            )
-        except (
-            ControlDApiAuthError,
-            ControlDApiConnectionError,
-            ControlDApiResponseError,
-        ) as err:
-            raise HomeAssistantError("Unable to disable the Control D service") from err
 
 
 class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntity):

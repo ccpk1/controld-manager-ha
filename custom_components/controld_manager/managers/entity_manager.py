@@ -108,12 +108,6 @@ class EntityManager(BaseManager):
                     )
                 )
                 desired_keys.update(
-                    f"profile::{profile_pk}::service::{service_pk}"
-                    for service_pk in self.runtime.registry.services_by_profile.get(
-                        profile_pk, {}
-                    )
-                )
-                desired_keys.update(
                     f"profile::{profile_pk}::rule::{rule_identity}"
                     for rule_identity in self.runtime.options.profile_policy(
                         profile_pk
@@ -134,6 +128,12 @@ class EntityManager(BaseManager):
                     f"profile::{profile_pk}::filter_mode::{filter_pk}"
                     for filter_pk, filter_row in profile_filters.items()
                     if filter_row.supports_modes
+                )
+                select_keys.update(
+                    f"profile::{profile_pk}::service::{service_pk}"
+                    for service_pk in self.runtime.registry.services_by_profile.get(
+                        profile_pk, {}
+                    )
                 )
             return select_keys
         raise ValueError(f"Unsupported Control D platform {platform!r}")

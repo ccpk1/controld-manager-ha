@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -92,10 +93,18 @@ class ProfileManager(BaseManager):
             profile_pk,
             filter_pk,
             enabled=enabled,
-            action_do=filter_row.action_do,
-            level_slug=filter_row.selected_level_slug,
+            action_do=(1 if not enabled else filter_row.action_do),
+            level_slug=filter_row.effective_level_slug if enabled else None,
         )
-        await self.runtime.active_coordinator.async_refresh()
+        self.runtime.registry.filters_by_profile[profile_pk][filter_pk] = replace(
+            filter_row,
+            enabled=enabled,
+            selected_level_slug=filter_row.effective_level_slug,
+        )
+        self.runtime.active_coordinator.async_update_listeners()
+        self.runtime.active_coordinator.hass.async_create_task(
+            self.runtime.active_coordinator.async_refresh()
+        )
 
     async def async_set_filter_mode(
         self, profile_pk: str, filter_pk: str, level_slug: str
@@ -109,20 +118,44 @@ class ProfileManager(BaseManager):
             action_do=filter_row.action_do,
             level_slug=level_slug,
         )
-        await self.runtime.active_coordinator.async_refresh()
+        self.runtime.registry.filters_by_profile[profile_pk][filter_pk] = replace(
+            filter_row,
+            enabled=True,
+            selected_level_slug=level_slug,
+        )
+        self.runtime.active_coordinator.async_update_listeners()
+        self.runtime.active_coordinator.hass.async_create_task(
+            self.runtime.active_coordinator.async_refresh()
+        )
 
-    async def async_set_service_enabled(
-        self, profile_pk: str, service_pk: str, enabled: bool
+    async def async_set_service_mode(
+        self, profile_pk: str, service_pk: str, mode: str
     ) -> None:
-        """Enable or disable one service rule."""
+        """Set the selected mode for one service rule."""
         service_row = self.runtime.registry.services_by_profile[profile_pk][service_pk]
+        enabled = mode != "Off"
+        action_do = service_row.action_do
+        if mode == "Blocked":
+            action_do = 0
+        elif mode == "Bypassed":
+            action_do = 1
+        elif mode == "Redirected":
+            action_do = 2
         await self.runtime.client.async_set_profile_service(
             profile_pk,
             service_pk,
             enabled=enabled,
-            action_do=service_row.action_do,
+            action_do=action_do,
         )
-        await self.runtime.active_coordinator.async_refresh()
+        self.runtime.registry.services_by_profile[profile_pk][service_pk] = replace(
+            service_row,
+            enabled=enabled,
+            action_do=action_do,
+        )
+        self.runtime.active_coordinator.async_update_listeners()
+        self.runtime.active_coordinator.hass.async_create_task(
+            self.runtime.active_coordinator.async_refresh()
+        )
 
     async def async_set_rule_enabled(
         self, profile_pk: str, rule_identity: str, enabled: bool

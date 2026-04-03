@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.select import ATTR_OPTION
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.exceptions import ServiceValidationError
@@ -148,6 +149,16 @@ def _detail_payload(
             "action": {"do": 0, "status": 0},
             "status": 0,
         },
+        {
+            "PK": "adult_content",
+            "name": "Adult Content",
+            "levels": [
+                {"title": "Relaxed", "name": "adult_relaxed", "status": 1},
+                {"title": "Strict", "name": "adult_strict", "status": 0},
+            ],
+            "action": {"do": 0, "status": 0},
+            "status": 0,
+        },
     )
     services = (
         (
@@ -228,6 +239,9 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     ads_mode_entity_id = entity_registry.async_get_entity_id(
         "select", DOMAIN, "user-123::profile::profile-1::filter_mode::ads"
     )
+    adult_mode_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::filter_mode::adult_content"
+    )
     endpoint_status_entity_id = entity_registry.async_get_entity_id(
         "binary_sensor", DOMAIN, "user-123::endpoint::device-1::status"
     )
@@ -245,6 +259,7 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert pause_switch_entity_id is not None
     assert ads_filter_entity_id is not None
     assert ads_mode_entity_id is not None
+    assert adult_mode_entity_id is not None
     assert endpoint_status_entity_id is None
     assert service_entity_id is None
     assert hass.states.get(profile_count_entity_id).state == "2"
@@ -283,6 +298,10 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert (
         hass.states.get(ads_filter_entity_id).name == "Primary Filters / Ads & Trackers"
     )
+    assert hass.states.get(ads_mode_entity_id).state == "Relaxed"
+    adult_mode_entry = entity_registry.async_get(adult_mode_entity_id)
+    assert adult_mode_entry is not None
+    assert adult_mode_entry.disabled_by is not None
 
 
 async def test_phase5_policy_enabled_entities_are_created_and_attached(hass) -> None:
@@ -312,7 +331,7 @@ async def test_phase5_policy_enabled_entities_are_created_and_attached(hass) -> 
         "binary_sensor", DOMAIN, "user-123::endpoint::device-1::status"
     )
     service_entity_id = entity_registry.async_get_entity_id(
-        "switch", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
     )
     rule_entity_id = entity_registry.async_get_entity_id(
         "switch", DOMAIN, "user-123::profile::profile-1::rule::root|example.com"
@@ -337,6 +356,75 @@ async def test_phase5_policy_enabled_entities_are_created_and_attached(hass) -> 
     assert service_entry.disabled_by is not None
     assert (
         hass.states.get(rule_entity_id).name == "Primary Rules / Domain / example.com"
+    )
+
+
+async def test_filter_and_service_selects_update_expected_modes(hass) -> None:
+    """Mode-capable controls should expose and write the expected selected values."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"}),
+                    auto_enable_service_switches=True,
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    ads_mode_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::filter_mode::ads"
+    )
+    service_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+    runtime = entry.runtime_data
+
+    assert ads_mode_entity_id is not None
+    assert service_entity_id is not None
+    assert hass.states.get(ads_mode_entity_id).state == "Relaxed"
+    assert hass.states.get(service_entity_id).state == "Bypassed"
+
+    with (
+        patch.object(
+            runtime.managers.profile,
+            "async_set_filter_mode",
+            new=AsyncMock(),
+        ) as async_set_filter_mode,
+        patch.object(
+            runtime.managers.profile,
+            "async_set_service_mode",
+            new=AsyncMock(),
+        ) as async_set_service_mode,
+    ):
+        await hass.services.async_call(
+            "select",
+            "select_option",
+            {
+                ATTR_ENTITY_ID: ads_mode_entity_id,
+                ATTR_OPTION: "Balanced",
+            },
+            blocking=True,
+        )
+        await hass.services.async_call(
+            "select",
+            "select_option",
+            {
+                ATTR_ENTITY_ID: service_entity_id,
+                ATTR_OPTION: "Blocked",
+            },
+            blocking=True,
+        )
+
+    async_set_filter_mode.assert_awaited_once_with("profile-1", "ads", "ads_medium")
+    async_set_service_mode.assert_awaited_once_with(
+        "profile-1", "amazonmusic", "Blocked"
     )
 
 

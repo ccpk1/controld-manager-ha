@@ -107,6 +107,28 @@ class ControlDFilter:
         """Return whether the filter exposes a selectable mode list."""
         return len(self.levels) > 1
 
+    @property
+    def effective_level_slug(self) -> str | None:
+        """Return the best available level slug for reads and enable writes."""
+        if self.selected_level_slug is not None:
+            return self.selected_level_slug
+        for level in self.levels:
+            if level.enabled:
+                return level.slug
+        if self.levels:
+            return self.levels[0].slug
+        return None
+
+    @property
+    def effective_level_title(self) -> str | None:
+        """Return the best available level title for the current filter state."""
+        if (level_slug := self.effective_level_slug) is None:
+            return None
+        for level in self.levels:
+            if level.slug == level_slug:
+                return level.title
+        return None
+
 
 @dataclass(slots=True, frozen=True)
 class ControlDServiceCategory:
@@ -130,6 +152,13 @@ class ControlDService:
     action_do: int
     warning: str | None = None
     unlock_location: str | None = None
+
+    @property
+    def current_mode(self) -> str:
+        """Return the current service mode for Home Assistant controls."""
+        if not self.enabled:
+            return "Off"
+        return service_mode_from_action_do(self.action_do)
 
 
 @dataclass(slots=True, frozen=True)
@@ -357,13 +386,18 @@ class ControlDInventoryPayload:
     service_catalog: tuple[dict[str, Any], ...] = ()
 
 
+def _build_endpoint_inventory_stats() -> ControlDEndpointInventoryStats:
+    """Build a default endpoint inventory stats instance."""
+    return ControlDEndpointInventoryStats()
+
+
 @dataclass(slots=True, frozen=True)
 class ControlDRegistry:
     """Coordinator-owned normalized snapshot for one config entry."""
 
     user: ControlDUser | None = None
     endpoint_inventory: ControlDEndpointInventoryStats = field(
-        default_factory=lambda: ControlDEndpointInventoryStats()
+        default_factory=_build_endpoint_inventory_stats
     )
     profiles: dict[str, ControlDProfileSummary] = field(default_factory=dict)
     endpoints: dict[str, ControlDEndpointSummary] = field(default_factory=dict)
@@ -398,6 +432,20 @@ class ControlDEndpointInventoryStats:
     discovered_endpoint_count: int = 0
     router_client_count: int = 0
     protected_endpoint_count: int = 0
+
+
+def service_mode_from_action_do(action_do: int) -> str:
+    """Translate a Control D service action code into a UI mode label."""
+    return {
+        0: "Blocked",
+        1: "Bypassed",
+        2: "Redirected",
+    }.get(action_do, "Bypassed")
+
+
+def service_mode_options() -> tuple[str, ...]:
+    """Return the supported Home Assistant service-mode options."""
+    return ("Off", "Blocked", "Bypassed", "Redirected")
 
 
 @dataclass(slots=True)

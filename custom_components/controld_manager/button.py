@@ -63,6 +63,10 @@ class ControlDManagerSyncButton(ControlDManagerInstanceEntity, ButtonEntity):
         super().__init__(config_entry, "sync")
         self._attr_name = "Sync now"
 
+    def press(self) -> None:
+        """Button press is handled asynchronously by Home Assistant."""
+        raise NotImplementedError
+
     async def async_press(self) -> None:
         """Run a one-shot refresh for the current account state."""
         await self.runtime.active_coordinator.async_run_manual_refresh()

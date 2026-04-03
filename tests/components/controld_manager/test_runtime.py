@@ -7,8 +7,10 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
+from aiohttp import ClientSession
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.controld_manager.api.client import ControlDAPIClient
 from custom_components.controld_manager.const import CONF_API_TOKEN, DOMAIN
 from custom_components.controld_manager.managers import (
     DeviceManager,
@@ -97,6 +99,103 @@ def test_integration_manager_builds_normalized_registry() -> None:
     assert registry.endpoint_inventory.discovered_endpoint_count == 2
     assert registry.endpoint_inventory.router_client_count == 1
     assert registry.endpoint_inventory.protected_endpoint_count == 3
+
+
+def test_integration_manager_preserves_filter_fallback_and_service_modes() -> None:
+    """Disabled modal filters and block services should normalize predictably."""
+    device_manager = DeviceManager()
+    entity_manager = EntityManager()
+    integration_manager = IntegrationManager(
+        profile_manager=ProfileManager(),
+        endpoint_manager=EndpointManager(),
+        device_manager=device_manager,
+        entity_manager=entity_manager,
+    )
+
+    inventory = ControlDInventoryPayload(
+        user=_sample_inventory().user,
+        profiles=_sample_inventory().profiles,
+        devices=_sample_inventory().devices,
+        profile_details={
+            "profile-1": ControlDProfileDetailPayload(
+                filters=(
+                    {
+                        "PK": "porn",
+                        "name": "Adult Content",
+                        "levels": [
+                            {"title": "Relaxed", "name": "porn", "status": 0},
+                            {
+                                "title": "Strict",
+                                "name": "porn_strict",
+                                "status": 0,
+                            },
+                        ],
+                        "action": None,
+                        "status": 0,
+                    },
+                ),
+                services=(
+                    {
+                        "PK": "truthsocial",
+                        "name": "Truth Social",
+                        "category": "social",
+                        "action": {"do": 0, "status": 1},
+                    },
+                ),
+            )
+        },
+        service_categories=({"PK": "social", "name": "Social", "count": 1},),
+        service_catalog=(
+            {"PK": "truthsocial", "name": "Truth Social", "category": "social"},
+        ),
+    )
+
+    with (
+        patch.object(device_manager, "sync_registry"),
+        patch.object(entity_manager, "sync_registry"),
+    ):
+        integration_manager.attach_runtime(
+            cast(
+                Any,
+                SimpleNamespace(
+                    options=ControlDOptions.from_mapping(
+                        {
+                            "profile_policies": {
+                                "profile-1": {"allowed_service_categories": ["social"]}
+                            }
+                        }
+                    )
+                ),
+            )
+        )
+        registry = integration_manager.build_registry(inventory)
+
+    filter_row = registry.filters_by_profile["profile-1"]["porn"]
+    service_row = registry.services_by_profile["profile-1"]["truthsocial"]
+    assert filter_row.effective_level_slug == "porn"
+    assert filter_row.effective_level_title == "Relaxed"
+    assert service_row.current_mode == "Blocked"
+
+
+async def test_filter_write_payload_matches_browser_contract() -> None:
+    """Filter writes should match the browser-verified filter API contract."""
+    async with ClientSession() as session:
+        client = ControlDAPIClient("token-value", session)
+
+        with patch.object(client, "_async_request", new=AsyncMock()) as async_request:
+            await client.async_set_profile_filter(
+                "profile-1",
+                "ads",
+                enabled=True,
+                action_do=0,
+                level_slug="ads_medium",
+            )
+
+    async_request.assert_awaited_once_with(
+        "PUT",
+        "/profiles/profile-1/filters/filter/ads",
+        {"status": 1, "do": 0, "lvl": "ads_medium"},
+    )
 
 
 async def test_setup_entry_creates_entry_scoped_runtime(hass) -> None:
