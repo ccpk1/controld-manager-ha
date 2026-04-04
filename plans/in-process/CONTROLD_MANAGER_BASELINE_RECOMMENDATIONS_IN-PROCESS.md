@@ -44,6 +44,17 @@ Latest approved direction:
 - services should be exposed by per-profile category policy and should default to disabled when category-created
 - rules should be exposed by explicit per-profile selection using typed rule identities
 - endpoint status should be a compact opt-in surface with a configurable per-profile activity threshold
+- the first dedicated profile-option slice should always create and enable, for
+	each included profile:
+	- one Default Rule select using Control D terms `Blocking`, `Bypassing`, and
+	  `Redirecting`
+	- one AI Malware Filter select with `Off`, `Minimal`, `Standard`, and
+	  `Aggressive`
+	- one Safe Search toggle
+	- one Restricted Youtube toggle
+- the edit-profile form should gain one per-profile advanced-options exposure
+	flag; when enabled, the remaining profile-option entities for that profile
+	should be created in disabled-by-default entity-registry state
 
 ## Execution guardrails
 
@@ -112,6 +123,37 @@ Builder handoff:
 
 Phase 5 is complete.
 
+Current status update:
+
+- config flow and user-selection behavior are now broadly implemented for the
+	currently approved scope:
+	- per-profile include or exclude policy
+	- per-profile advanced-options exposure flag
+	- per-profile service-category selection
+	- explicit custom-rule and folder selection
+	- endpoint-status opt-in controls
+- the first approved always-on profile-option slice is now implemented for each
+	included profile:
+	- Default Rule select
+	- AI Malware Filter select
+	- Safe Search toggle
+	- Restricted Youtube toggle
+- grouped custom rules now support both folder-level mode entities and
+	explicit child-rule toggle entities when selected
+- dynamic entity lifecycle cleanup is now handled by stable unique ID against
+	the Home Assistant entity registry, not only by in-memory live entities
+- removed custom rules, removed rule folders, and other no-longer-desired
+	dynamic entities are now pruned correctly from the entity registry during
+	reconciliation
+
+Remaining follow-on scope after the current slice:
+
+- broader advanced profile options remain intentionally partial and should stay
+	in a follow-on slice until their read and write semantics are fully closed
+- `ecs_subnet` remains intentionally excluded from entity exposure
+- TTL-style options remain intentionally limited to advanced toggle behavior
+	rather than editable numeric controls
+
 ### Phase 5: Add scalable per-profile options policy and high-cardinality profile surfaces
 
 - [x] Rework `custom_components/controld_manager/config_flow.py` so the options flow follows the Firewalla Local pattern: top-level menu, one live profile selector, one focused per-profile edit form, and one integration-settings form.
@@ -123,11 +165,49 @@ Phase 5 is complete.
 - [x] Implement typed per-profile custom-rule exposure using the proven `groups`, `rules`, and `rules/all` contracts so only explicitly selected folders or domains become Home Assistant entities.
 - [x] Implement the first endpoint status surface as an opt-in endpoint entity with attributes, using a per-profile activity-threshold option bounded to 5 to 60 minutes and defaulting to 15 minutes if no stronger upstream status contract is proven.
 - [x] Add focused tests for menu navigation, persisted per-profile policy, profile inclusion or exclusion behavior, service-category defaults, grouped-rule persistence, and endpoint-threshold behavior.
+- [x] Close the dynamic entity lifecycle gap so removed rules, removed rule folders, and other no-longer-desired dynamic entities are removed from the Home Assistant entity registry by stable unique ID during reconciliation.
 
 Phase 5 required research closeouts before code for that specific surface starts:
 
 - prove the best persisted typed identity for grouped rules
 - confirm whether endpoint status remains timestamp-derived or gains a stronger upstream signal
+
+Additional follow-on work discovered after Phase 5 completion:
+
+- main profile-option controls from the full Control D profile page remain
+	partially unimplemented and should be treated as a separate detail-driven
+	follow-on slice, beginning with the dedicated default-rule endpoint
+	`/profiles/{profile_id}/default`
+- browser-backed captures now also prove a second dedicated family under
+	`/profiles/{profile_id}/options/{option_key}` with at least three payload
+	shapes: boolean toggles, enabled-plus-value controls, and unresolved TTL-style
+	controls
+- browser-backed captures also prove a global discovery catalog at
+	`GET /profiles/options`, which provides stable option keys, upstream titles,
+	types, defaults, and documentation links but not per-profile current state
+- browser-backed captures now strongly indicate per-profile current state is
+	read from `GET /profiles/{profile_id}/options`, with a sparse list of option
+	keys and active values that must be joined to the global catalog
+- browser-backed captures now also prove that `ecs_subnet` uses concrete value
+	mappings `0` and `1`, and that `ttl_blck` is an enabled numeric field whose
+	disable state collapses to `value = 0`
+- browser-backed captures now also prove the default-rule read contract at
+	`GET /profiles/{profile_id}/default`, and the repository now implements that
+	surface as the first always-on profile-option select
+
+Current approved execution target for that slice:
+
+- ship a small always-on option surface first:
+	- Default Rule select
+	- AI Malware Filter select
+	- Safe Search toggle
+	- Restricted Youtube toggle
+- add a per-profile advanced-options flag in the edit-profile form
+- create the remaining profile-option entities only when that flag is enabled,
+	and register those additional entities as disabled by default
+- keep `ecs_subnet` out of entity exposure for now
+- surface TTL options only as advanced toggles, not as editable numeric
+	controls
 
 ## Per-phase details with checkboxes
 

@@ -79,13 +79,29 @@ class ControlDAPIClient:
         payload = await self._async_get_json(f"/profiles/{profile_pk}/services")
         return self._extract_body_list(payload, "services")
 
+    async def async_get_profile_options(self, profile_pk: str) -> list[dict[str, Any]]:
+        """Fetch the current sparse option-state rows for one profile."""
+        payload = await self._async_get_json(f"/profiles/{profile_pk}/options")
+        return self._extract_body_list(payload, "options")
+
+    async def async_get_profile_default_rule(self, profile_pk: str) -> dict[str, Any]:
+        """Fetch the current default-rule row for one profile."""
+        payload = await self._async_get_json(f"/profiles/{profile_pk}/default")
+        body = self._extract_body_mapping(payload)
+        default_rule = body.get("default")
+        if not isinstance(default_rule, dict):
+            raise ControlDApiResponseError(
+                "Control D response body is missing the expected 'default' mapping"
+            )
+        return default_rule
+
     async def async_get_profile_groups(self, profile_pk: str) -> list[dict[str, Any]]:
         """Fetch grouped-rule folders for one profile."""
         payload = await self._async_get_json(f"/profiles/{profile_pk}/groups")
         return self._extract_body_list(payload, "groups")
 
     async def async_get_profile_rules(self, profile_pk: str) -> list[dict[str, Any]]:
-        """Fetch all rules for one profile, including grouped rows."""
+        """Fetch all rules for one profile, including grouped-rule members."""
         payload = await self._async_get_json(f"/profiles/{profile_pk}/rules/all")
         return self._extract_body_list(payload, "rules")
 
@@ -98,6 +114,8 @@ class ControlDAPIClient:
     ) -> ControlDProfileDetailPayload:
         """Fetch the detail payloads required for one profile policy."""
         filters_task = self.async_get_profile_filters(profile_pk)
+        options_task = self.async_get_profile_options(profile_pk)
+        default_rule_task = self.async_get_profile_default_rule(profile_pk)
         services_task = (
             self.async_get_profile_services(profile_pk)
             if include_services
@@ -113,18 +131,27 @@ class ControlDAPIClient:
             if include_rules
             else asyncio.sleep(0, result=[])
         )
-        filters, services, groups, rules = await asyncio.gather(
+        filters, options, default_rule, services, groups, rules = await asyncio.gather(
             filters_task,
+            options_task,
+            default_rule_task,
             services_task,
             groups_task,
             rules_task,
         )
         return ControlDProfileDetailPayload(
             filters=tuple(filters),
+            options=tuple(options),
+            default_rule=default_rule,
             services=tuple(services),
             groups=tuple(groups),
             rules=tuple(rules),
         )
+
+    async def async_get_profile_option_catalog(self) -> list[dict[str, Any]]:
+        """Fetch the global profile-option catalog."""
+        payload = await self._async_get_json("/profiles/options")
+        return self._extract_body_list(payload, "options")
 
     async def async_get_service_categories(self) -> list[dict[str, Any]]:
         """Fetch service-category metadata."""
@@ -210,6 +237,57 @@ class ControlDAPIClient:
         await self._async_request(
             "PUT", f"/profiles/{profile_pk}/rules/{rule_pk}", payload
         )
+
+    async def async_set_profile_group(
+        self,
+        profile_pk: str,
+        group_pk: str,
+        *,
+        name: str,
+        enabled: bool,
+        action_do: int | None,
+    ) -> None:
+        """Update one profile rule folder using the browser-backed group contract."""
+        payload: dict[str, Any] = {
+            "name": name,
+            "status": int(enabled),
+            "via": "-1",
+            "via_v6": "-1",
+        }
+        if action_do is not None:
+            payload["do"] = action_do
+        await self._async_request(
+            "PUT", f"/profiles/{profile_pk}/groups/{group_pk}", payload
+        )
+
+    async def async_set_profile_option(
+        self,
+        profile_pk: str,
+        option_pk: str,
+        *,
+        enabled: bool,
+        value: str | None = None,
+    ) -> None:
+        """Update one profile option using the browser-verified option contract."""
+        payload: dict[str, Any] = {"status": int(enabled)}
+        if value is not None:
+            payload["value"] = value
+        await self._async_request(
+            "PUT", f"/profiles/{profile_pk}/options/{option_pk}", payload
+        )
+
+    async def async_set_profile_default_rule(
+        self,
+        profile_pk: str,
+        *,
+        action_do: int,
+        via: str | None = None,
+    ) -> None:
+        """Update one profile default rule using the browser-verified contract."""
+        payload: dict[str, Any] = {"do": action_do, "status": 1}
+        if via is not None:
+            payload["via"] = via
+        await self._async_request("PUT", f"/profiles/{profile_pk}/default", payload)
 
     async def _async_get_json(self, path: str) -> Any:
         """Perform a GET request and decode JSON safely."""

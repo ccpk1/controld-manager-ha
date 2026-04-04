@@ -20,6 +20,8 @@ from .const import (
     ATTR_REFRESH_IN_PROGRESS,
     ATTR_ROUTER_CLIENT_COUNT,
     ATTR_STATS_ENDPOINT,
+    PURPOSE_INSTANCE_STATUS,
+    PURPOSE_INSTANCE_SUMMARY,
 )
 from .entity import ControlDManagerInstanceEntity
 from .models import ControlDManagerRuntime
@@ -72,7 +74,7 @@ class ControlDManagerStatusSensor(ControlDManagerInstanceEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_translation_key = "status"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _purpose = "instance_status"
+    _purpose = PURPOSE_INSTANCE_STATUS
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
         """Initialize the account-status sensor."""
@@ -128,7 +130,7 @@ class ControlDManagerProfileCountSensor(ControlDManagerInstanceEntity, SensorEnt
     """Expose the current number of discovered profiles."""
 
     _attr_translation_key = "profile_count"
-    _purpose = "instance_summary"
+    _purpose = PURPOSE_INSTANCE_SUMMARY
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
         """Initialize the profile-count sensor."""
@@ -145,7 +147,7 @@ class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEn
     """Expose the current number of discovered endpoints."""
 
     _attr_translation_key = "endpoint_count"
-    _purpose = "instance_summary"
+    _purpose = PURPOSE_INSTANCE_SUMMARY
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
         """Initialize the endpoint-count sensor."""

@@ -9,7 +9,11 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-from ..models import ControlDProfileSummary
+from ..models import (
+    ControlDProfileSummary,
+    default_rule_action_from_mode,
+    rule_group_action_from_mode,
+)
 from .base_manager import BaseManager
 
 
@@ -149,6 +153,95 @@ class ProfileManager(BaseManager):
         )
         self.runtime.registry.services_by_profile[profile_pk][service_pk] = replace(
             service_row,
+            enabled=enabled,
+            action_do=action_do,
+        )
+        self.runtime.active_coordinator.async_update_listeners()
+        self.runtime.active_coordinator.hass.async_create_task(
+            self.runtime.active_coordinator.async_refresh()
+        )
+
+    async def async_set_profile_option_toggle(
+        self, profile_pk: str, option_pk: str, enabled: bool
+    ) -> None:
+        """Enable or disable one toggle-style profile option."""
+        option_row = self.runtime.registry.options_by_profile[profile_pk][option_pk]
+        payload_value: str | None = None
+        next_value_key = "1" if enabled else None
+        if option_row.option_type == "field":
+            payload_value = option_row.default_value_key if enabled else None
+            next_value_key = payload_value
+        await self.runtime.client.async_set_profile_option(
+            profile_pk,
+            option_pk,
+            enabled=enabled,
+            value=payload_value,
+        )
+        self.runtime.registry.options_by_profile[profile_pk][option_pk] = replace(
+            option_row,
+            current_value_key=next_value_key,
+        )
+        self.runtime.active_coordinator.async_update_listeners()
+        self.runtime.active_coordinator.hass.async_create_task(
+            self.runtime.active_coordinator.async_refresh()
+        )
+
+    async def async_set_profile_option_select(
+        self, profile_pk: str, option_pk: str, option_label: str
+    ) -> None:
+        """Set one select-style profile option."""
+        option_row = self.runtime.registry.options_by_profile[profile_pk][option_pk]
+        selected_value = option_row.choice_value_for_label(option_label)
+        await self.runtime.client.async_set_profile_option(
+            profile_pk,
+            option_pk,
+            enabled=selected_value is not None,
+            value=selected_value,
+        )
+        self.runtime.registry.options_by_profile[profile_pk][option_pk] = replace(
+            option_row,
+            current_value_key=selected_value,
+        )
+        self.runtime.active_coordinator.async_update_listeners()
+        self.runtime.active_coordinator.hass.async_create_task(
+            self.runtime.active_coordinator.async_refresh()
+        )
+
+    async def async_set_default_rule_mode(self, profile_pk: str, mode: str) -> None:
+        """Set the current default-rule mode for one profile."""
+        default_rule_row = self.runtime.registry.default_rules_by_profile[profile_pk]
+        action_do, via = default_rule_action_from_mode(mode)
+        await self.runtime.client.async_set_profile_default_rule(
+            profile_pk,
+            action_do=action_do,
+            via=via,
+        )
+        self.runtime.registry.default_rules_by_profile[profile_pk] = replace(
+            default_rule_row,
+            enabled=True,
+            action_do=action_do,
+            via=via,
+        )
+        self.runtime.active_coordinator.async_update_listeners()
+        self.runtime.active_coordinator.hass.async_create_task(
+            self.runtime.active_coordinator.async_refresh()
+        )
+
+    async def async_set_rule_group_mode(
+        self, profile_pk: str, group_pk: str, mode: str
+    ) -> None:
+        """Set the current folder-rule mode for one profile group."""
+        group_row = self.runtime.registry.rule_groups_by_profile[profile_pk][group_pk]
+        enabled, action_do = rule_group_action_from_mode(mode)
+        await self.runtime.client.async_set_profile_group(
+            profile_pk,
+            group_pk,
+            name=group_row.name,
+            enabled=enabled,
+            action_do=action_do,
+        )
+        self.runtime.registry.rule_groups_by_profile[profile_pk][group_pk] = replace(
+            group_row,
             enabled=enabled,
             action_do=action_do,
         )

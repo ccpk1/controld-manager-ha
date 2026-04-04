@@ -17,16 +17,23 @@ from .api import (
     ControlDApiResponseError,
 )
 from .const import (
+    ATTR_ACTION,
+    ATTR_COMMENT,
     ATTR_GROUP,
     ATTR_PAUSED_UNTIL,
     ATTR_RULE_IDENTITY,
     DEFAULT_ENABLED_FILTERS,
     DEFAULT_PAUSE_MINUTES,
+    PURPOSE_PROFILE_FILTER,
+    PURPOSE_PROFILE_OPTION,
+    PURPOSE_PROFILE_PAUSE,
+    PURPOSE_PROFILE_RULE,
 )
 from .entity import ControlDManagerProfileEntity
 from .models import (
     ControlDFilter,
     ControlDManagerRuntime,
+    ControlDProfileOption,
     ControlDRule,
 )
 
@@ -72,6 +79,9 @@ def _build_switch_entity(
     if "::rule::" in key:
         _, profile_pk, _, rule_identity = key.split("::", 3)
         return ControlDManagerProfileRuleSwitch(config_entry, profile_pk, rule_identity)
+    if "::option::" in key:
+        _, profile_pk, _, option_pk = key.split("::", 3)
+        return ControlDManagerProfileOptionSwitch(config_entry, profile_pk, option_pk)
     raise ValueError(f"Unsupported Control D switch key {key!r}")
 
 
@@ -79,7 +89,7 @@ class ControlDManagerProfilePausedSwitch(ControlDManagerProfileEntity, SwitchEnt
     """Switch surface for the documented profile pause state."""
 
     _attr_translation_key = "paused"
-    _purpose = "profile_pause"
+    _purpose = PURPOSE_PROFILE_PAUSE
 
     def __init__(
         self, config_entry: ConfigEntry[ControlDManagerRuntime], profile_pk: str
@@ -145,7 +155,8 @@ class ControlDManagerProfilePausedSwitch(ControlDManagerProfileEntity, SwitchEnt
 class ControlDManagerProfileFilterSwitch(ControlDManagerProfileEntity, SwitchEntity):
     """Switch surface for one auto-created profile filter."""
 
-    _purpose = "profile_filter"
+    _attr_translation_key = "profile_filter"
+    _purpose = PURPOSE_PROFILE_FILTER
 
     def __init__(
         self,
@@ -224,7 +235,8 @@ class ControlDManagerProfileFilterSwitch(ControlDManagerProfileEntity, SwitchEnt
 class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntity):
     """Switch surface for one explicitly selected rule."""
 
-    _purpose = "profile_rule"
+    _attr_translation_key = "profile_rule"
+    _purpose = PURPOSE_PROFILE_RULE
 
     def __init__(
         self,
@@ -275,8 +287,11 @@ class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntit
         attributes = super().extra_state_attributes or {}
         attributes[ATTR_RULE_IDENTITY] = self._rule_identity
         rule_row = self.rule_row
-        if rule_row is not None and rule_row.group_name is not None:
-            attributes[ATTR_GROUP] = rule_row.group_name
+        if rule_row is not None:
+            if rule_row.group_name is not None:
+                attributes[ATTR_GROUP] = rule_row.group_name
+            attributes[ATTR_COMMENT] = rule_row.comment
+            attributes[ATTR_ACTION] = rule_row.action_key
         return attributes
 
     async def async_turn_on(self, **kwargs: object) -> None:
@@ -306,3 +321,89 @@ class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntit
             ControlDApiResponseError,
         ) as err:
             raise HomeAssistantError("Unable to disable the Control D rule") from err
+
+
+class ControlDManagerProfileOptionSwitch(ControlDManagerProfileEntity, SwitchEntity):
+    """Switch surface for one toggle-style profile option."""
+
+    _attr_translation_key = "profile_option"
+    _purpose = PURPOSE_PROFILE_OPTION
+
+    def __init__(
+        self,
+        config_entry: ConfigEntry[ControlDManagerRuntime],
+        profile_pk: str,
+        option_pk: str,
+    ) -> None:
+        """Initialize one profile option switch."""
+        self._option_pk = option_pk
+        super().__init__(config_entry, profile_pk, f"option::{option_pk}")
+        option_row = self.option_row
+        self._attr_name = (
+            f"Options / {option_row.title}"
+            if option_row is not None
+            else f"Options / {option_pk}"
+        )
+        self._attr_entity_registry_enabled_default = option_pk in {
+            "safesearch",
+            "safeyoutube",
+        }
+
+    @property
+    def option_row(self) -> ControlDProfileOption | None:
+        """Return the current normalized option row."""
+        return self.runtime.registry.options_by_profile.get(self._profile_pk, {}).get(
+            self._option_pk
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return whether the option still exists and supports toggle behavior."""
+        option_row = self.option_row
+        return bool(
+            super().available
+            and option_row is not None
+            and option_row.entity_kind == "toggle"
+        )
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether the option is enabled."""
+        option_row = self.option_row
+        return bool(option_row is not None and option_row.is_enabled)
+
+    def turn_on(self, **kwargs: object) -> None:
+        """Switch turn_on is handled asynchronously by Home Assistant."""
+        raise NotImplementedError
+
+    def turn_off(self, **kwargs: object) -> None:
+        """Switch turn_off is handled asynchronously by Home Assistant."""
+        raise NotImplementedError
+
+    async def async_turn_on(self, **kwargs: object) -> None:
+        """Enable the profile option."""
+        del kwargs
+        try:
+            await self.runtime.managers.profile.async_set_profile_option_toggle(
+                self._profile_pk, self._option_pk, True
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+        ) as err:
+            raise HomeAssistantError("Unable to enable the Control D option") from err
+
+    async def async_turn_off(self, **kwargs: object) -> None:
+        """Disable the profile option."""
+        del kwargs
+        try:
+            await self.runtime.managers.profile.async_set_profile_option_toggle(
+                self._profile_pk, self._option_pk, False
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+        ) as err:
+            raise HomeAssistantError("Unable to disable the Control D option") from err

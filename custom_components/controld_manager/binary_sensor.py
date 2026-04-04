@@ -18,6 +18,7 @@ from .const import (
     ATTR_ATTACHED_PROFILES,
     ATTR_LAST_ACTIVE,
     ATTR_PARENT_DEVICE_ID,
+    PURPOSE_ENDPOINT_STATUS,
 )
 from .entity import ControlDManagerEndpointEntity
 from .models import ControlDManagerRuntime
@@ -70,8 +71,9 @@ class ControlDManagerEndpointStatusBinarySensor(
 ):
     """Compact endpoint status surface derived from last activity."""
 
+    _attr_translation_key = "endpoint_status"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-    _purpose = "endpoint_status"
+    _purpose = PURPOSE_ENDPOINT_STATUS
 
     def __init__(
         self,

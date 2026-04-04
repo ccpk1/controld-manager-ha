@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Self
 
 from .const import (
+    CONF_ADVANCED_PROFILE_OPTIONS,
     CONF_ALLOWED_SERVICE_CATEGORIES,
     CONF_AUTO_ENABLE_SERVICE_SWITCHES,
     CONF_CONFIGURATION_SYNC_INTERVAL_MINUTES,
@@ -25,6 +26,10 @@ from .const import (
     MAX_REFRESH_INTERVAL,
     MIN_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
     MIN_REFRESH_INTERVAL,
+    RULE_ACTION_BLOCK,
+    RULE_ACTION_BYPASS,
+    RULE_ACTION_OFF,
+    RULE_ACTION_REDIRECT,
 )
 
 if TYPE_CHECKING:
@@ -167,7 +172,79 @@ class ControlDRuleGroup:
 
     group_pk: str
     name: str
+    enabled: bool = False
     action_do: int | None = None
+
+    @property
+    def current_mode(self) -> str:
+        """Return the current folder-rule mode key."""
+        return rule_group_mode_from_action(self.action_do, self.enabled)
+
+
+@dataclass(slots=True, frozen=True)
+class ControlDProfileOptionChoice:
+    """One selectable value for a profile option."""
+
+    value: str
+    label: str
+
+
+@dataclass(slots=True, frozen=True)
+class ControlDProfileOption:
+    """Normalized profile option state for one profile."""
+
+    option_pk: str
+    title: str
+    description: str | None
+    option_type: str
+    info_url: str | None
+    current_value_key: str | None = None
+    default_value_key: str | None = None
+    choices: tuple[ControlDProfileOptionChoice, ...] = ()
+    entity_kind: str = "unsupported"
+
+    @property
+    def is_enabled(self) -> bool:
+        """Return whether the option is currently enabled."""
+        return self.current_value_key is not None
+
+    @property
+    def current_select_option(self) -> str:
+        """Return the current label for a select-style option."""
+        if self.current_value_key is None:
+            return "Off"
+        for choice in self.choices:
+            if choice.value == self.current_value_key:
+                return choice.label
+        return "Off"
+
+    @property
+    def select_options(self) -> tuple[str, ...]:
+        """Return the UI options for a select-style option."""
+        return ("Off", *(choice.label for choice in self.choices))
+
+    def choice_value_for_label(self, label: str) -> str | None:
+        """Return the upstream value for one select label."""
+        if label == "Off":
+            return None
+        for choice in self.choices:
+            if choice.label == label:
+                return choice.value
+        return None
+
+
+@dataclass(slots=True, frozen=True)
+class ControlDDefaultRule:
+    """Normalized default-rule state for one profile."""
+
+    enabled: bool
+    action_do: int
+    via: str | None = None
+
+    @property
+    def current_mode(self) -> str:
+        """Return the current default-rule mode label."""
+        return default_rule_mode_from_action(self.action_do, self.enabled, self.via)
 
 
 def build_rule_identity(group_pk: str | None, rule_pk: str) -> str:
@@ -198,7 +275,13 @@ class ControlDRule:
     group_name: str | None
     enabled: bool
     action_do: int
+    comment: str = ""
     ttl: int | None = None
+
+    @property
+    def action_key(self) -> str:
+        """Return the current rule action key."""
+        return rule_action_key_from_action_do(self.action_do)
 
 
 @dataclass(slots=True, frozen=True)
@@ -206,6 +289,7 @@ class ControlDProfilePolicy:
     """Compact stored policy for one Control D profile."""
 
     managed_in_home_assistant: bool = True
+    advanced_profile_options: bool = False
     endpoint_sensors_enabled: bool = False
     endpoint_inactivity_threshold_minutes: int = (
         DEFAULT_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES
@@ -232,6 +316,9 @@ class ControlDProfilePolicy:
             managed_in_home_assistant=bool(
                 data.get(CONF_MANAGED_IN_HOME_ASSISTANT, True)
             ),
+            advanced_profile_options=bool(
+                data.get(CONF_ADVANCED_PROFILE_OPTIONS, False)
+            ),
             endpoint_sensors_enabled=bool(
                 data.get(CONF_ENDPOINT_SENSORS_ENABLED, False)
             ),
@@ -255,6 +342,7 @@ class ControlDProfilePolicy:
         """Serialize the policy into config-entry options storage."""
         return {
             CONF_MANAGED_IN_HOME_ASSISTANT: self.managed_in_home_assistant,
+            CONF_ADVANCED_PROFILE_OPTIONS: self.advanced_profile_options,
             CONF_ENDPOINT_SENSORS_ENABLED: self.endpoint_sensors_enabled,
             CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES: (
                 self.endpoint_inactivity_threshold_minutes
@@ -267,22 +355,25 @@ class ControlDProfilePolicy:
     def exposed_rule_identities(
         self, rules_by_identity: dict[str, ControlDRule]
     ) -> set[str]:
-        """Resolve stored folder and rule targets into concrete rule identities."""
+        """Resolve stored explicit rule targets into concrete rule identities."""
         resolved: set[str] = set()
         for target in self.exposed_custom_rules:
-            if target.startswith("group:") and not target.startswith("group:group:"):
-                group_pk = target.removeprefix("group:")
-                resolved.update(
-                    rule.identity
-                    for rule in rules_by_identity.values()
-                    if rule.group_pk == group_pk
-                )
-                continue
             if target.startswith("rule:"):
                 rule_identity = target.removeprefix("rule:")
                 if rule_identity in rules_by_identity:
                     resolved.add(rule_identity)
         return resolved
+
+    def exposed_rule_group_pks(
+        self, groups_by_pk: dict[str, ControlDRuleGroup]
+    ) -> set[str]:
+        """Resolve stored folder targets into concrete folder identifiers."""
+        return {
+            group_pk
+            for target in self.exposed_custom_rules
+            if target.startswith("group:") and not target.startswith("group:group:")
+            if (group_pk := target.removeprefix("group:")) in groups_by_pk
+        }
 
 
 @dataclass(slots=True, frozen=True)
@@ -367,6 +458,8 @@ class ControlDProfileDetailPayload:
     """Raw detail payloads for one profile."""
 
     filters: tuple[dict[str, Any], ...] = ()
+    options: tuple[dict[str, Any], ...] = ()
+    default_rule: dict[str, Any] | None = None
     services: tuple[dict[str, Any], ...] = ()
     groups: tuple[dict[str, Any], ...] = ()
     rules: tuple[dict[str, Any], ...] = ()
@@ -382,6 +475,7 @@ class ControlDInventoryPayload:
     profile_details: dict[str, ControlDProfileDetailPayload] = field(
         default_factory=dict
     )
+    option_catalog: tuple[dict[str, Any], ...] = ()
     service_categories: tuple[dict[str, Any], ...] = ()
     service_catalog: tuple[dict[str, Any], ...] = ()
 
@@ -404,10 +498,19 @@ class ControlDRegistry:
     filters_by_profile: dict[str, dict[str, ControlDFilter]] = field(
         default_factory=dict
     )
+    default_rules_by_profile: dict[str, ControlDDefaultRule] = field(
+        default_factory=dict
+    )
+    rule_groups_by_profile: dict[str, dict[str, ControlDRuleGroup]] = field(
+        default_factory=dict
+    )
     services_by_profile: dict[str, dict[str, ControlDService]] = field(
         default_factory=dict
     )
     rules_by_profile: dict[str, dict[str, ControlDRule]] = field(default_factory=dict)
+    options_by_profile: dict[str, dict[str, ControlDProfileOption]] = field(
+        default_factory=dict
+    )
     service_categories: dict[str, ControlDServiceCategory] = field(default_factory=dict)
 
     @classmethod
@@ -446,6 +549,81 @@ def service_mode_from_action_do(action_do: int) -> str:
 def service_mode_options() -> tuple[str, ...]:
     """Return the supported Home Assistant service-mode options."""
     return ("Off", "Blocked", "Bypassed", "Redirected")
+
+
+def rule_action_key_from_action_do(action_do: int) -> str:
+    """Translate a Control D rule action code into a stable key."""
+    return {
+        0: RULE_ACTION_BLOCK,
+        1: RULE_ACTION_BYPASS,
+        2: RULE_ACTION_REDIRECT,
+    }.get(action_do, RULE_ACTION_BYPASS)
+
+
+def rule_action_label_from_action_do(action_do: int) -> str:
+    """Translate a Control D rule action code into an English label."""
+    return {
+        0: "Block",
+        1: "Bypass",
+        2: "Redirect",
+    }.get(action_do, "Bypass")
+
+
+def default_rule_mode_from_action(
+    action_do: int, enabled: bool, via: str | None
+) -> str:
+    """Translate a Control D default-rule action into a UI mode label."""
+    del enabled, via
+    return {
+        0: "Blocking",
+        1: "Bypassing",
+        3: "Redirecting",
+    }.get(action_do, "Blocking")
+
+
+def default_rule_action_from_mode(mode: str) -> tuple[int, str | None]:
+    """Translate a UI mode label into the Control D default-rule payload."""
+    return {
+        "Blocking": (0, None),
+        "Bypassing": (1, None),
+        "Redirecting": (3, "LOCAL"),
+    }[mode]
+
+
+def default_rule_mode_options() -> tuple[str, ...]:
+    """Return the supported Home Assistant default-rule options."""
+    return ("Blocking", "Bypassing", "Redirecting")
+
+
+def rule_group_mode_from_action(action_do: int | None, enabled: bool) -> str:
+    """Translate a folder action into a stable mode key."""
+    if not enabled or action_do is None or action_do < 0:
+        return RULE_ACTION_OFF
+    return {
+        0: RULE_ACTION_BLOCK,
+        1: RULE_ACTION_BYPASS,
+        2: RULE_ACTION_REDIRECT,
+    }.get(action_do, RULE_ACTION_OFF)
+
+
+def rule_group_action_from_mode(mode: str) -> tuple[bool, int]:
+    """Translate a folder-rule mode key into the Control D payload model."""
+    return {
+        RULE_ACTION_OFF: (True, -1),
+        RULE_ACTION_BLOCK: (True, 0),
+        RULE_ACTION_BYPASS: (True, 1),
+        RULE_ACTION_REDIRECT: (True, 2),
+    }[mode]
+
+
+def rule_group_mode_options() -> tuple[str, ...]:
+    """Return the supported Home Assistant folder-rule option keys."""
+    return (
+        RULE_ACTION_OFF,
+        RULE_ACTION_BLOCK,
+        RULE_ACTION_BYPASS,
+        RULE_ACTION_REDIRECT,
+    )
 
 
 @dataclass(slots=True)

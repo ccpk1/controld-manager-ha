@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import timedelta
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 import voluptuous as vol
 from homeassistant.config_entries import (
@@ -24,6 +24,7 @@ from .api import (
     ControlDApiResponseError,
 )
 from .const import (
+    CONF_ADVANCED_PROFILE_OPTIONS,
     CONF_ALLOWED_SERVICE_CATEGORIES,
     CONF_API_TOKEN,
     CONF_AUTO_ENABLE_SERVICE_SWITCHES,
@@ -53,6 +54,7 @@ from .models import (
     build_rule_group_target,
     build_rule_identity,
     build_rule_item_target,
+    rule_action_label_from_action_do,
 )
 
 
@@ -127,6 +129,28 @@ class ControlDManagerConfigFlow(ConfigFlow, domain=DOMAIN):
 
 class ControlDManagerOptionsFlow(OptionsFlow):
     """Handle the menu-driven options flow."""
+
+    _RULE_STATE_PREFIX: ClassVar[dict[int, str]] = {
+        0: "⛔ ",
+        1: "✅ ",
+        2: "↪️ ",
+    }
+    _FOLDER_STATE_PREFIX: ClassVar[dict[int | None, str]] = {
+        0: "📁 ",
+        1: "📁 ",
+        2: "📁 ",
+        None: "📁 ",
+    }
+
+    @classmethod
+    def _rule_prefix(cls, action_do: int) -> str:
+        """Return the web-style prefix for one rule action."""
+        return cls._RULE_STATE_PREFIX.get(action_do, cls._RULE_STATE_PREFIX[1])
+
+    @classmethod
+    def _folder_prefix(cls, action_do: int | None) -> str:
+        """Return the web-style prefix for one folder action."""
+        return cls._FOLDER_STATE_PREFIX.get(action_do, cls._FOLDER_STATE_PREFIX[None])
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialize the options flow."""
@@ -219,6 +243,9 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                 managed_in_home_assistant=bool(
                     user_input[CONF_MANAGED_IN_HOME_ASSISTANT]
                 ),
+                advanced_profile_options=bool(
+                    user_input[CONF_ADVANCED_PROFILE_OPTIONS]
+                ),
                 endpoint_sensors_enabled=bool(
                     user_input[CONF_ENDPOINT_SENSORS_ENABLED]
                 ),
@@ -244,6 +271,10 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                     vol.Required(
                         CONF_MANAGED_IN_HOME_ASSISTANT,
                         default=profile_policy.managed_in_home_assistant,
+                    ): selector.BooleanSelector(),
+                    vol.Required(
+                        CONF_ADVANCED_PROFILE_OPTIONS,
+                        default=profile_policy.advanced_profile_options,
                     ): selector.BooleanSelector(),
                     vol.Required(
                         CONF_ENDPOINT_SENSORS_ENABLED,
@@ -420,10 +451,14 @@ class ControlDManagerOptionsFlow(OptionsFlow):
             ):
                 continue
             folder_pk = str(group["PK"])
-            count = int(group.get("count", 0) or 0)
-            suffix = f" ({count} rules)" if count else ""
+            group_action_do: int | None = None
+            group_action = ""
+            if isinstance(group.get("action"), dict) and "do" in group["action"]:
+                group_action_do = int(group["action"]["do"])
+                group_action = rule_action_label_from_action_do(group_action_do)
+            action_suffix = f" ({group_action})" if group_action else ""
             choices[build_rule_group_target(folder_pk)] = (
-                f"Folder / {group['group']}{suffix}"
+                f"{self._folder_prefix(group_action_do)}{group['group']}{action_suffix}"
             )
         for rule in rules:
             if not isinstance(rule.get("PK"), str):
@@ -436,10 +471,27 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                 group_pk = group_value
             identity = build_rule_identity(group_pk, rule["PK"])
             target = build_rule_item_target(identity)
+            action_label = rule_action_label_from_action_do(
+                int(
+                    rule.get("action", {}).get("do", 1)
+                    if isinstance(rule.get("action"), dict)
+                    else 1
+                )
+            )
+            action_do = int(
+                rule.get("action", {}).get("do", 1)
+                if isinstance(rule.get("action"), dict)
+                else 1
+            )
             if group_pk is not None and group_pk in group_names:
-                choices[target] = f"Domain / {rule['PK']} ({group_names[group_pk]})"
+                choices[target] = (
+                    f"📁 {group_names[group_pk]} / "
+                    f"↳ {self._rule_prefix(action_do)}{rule['PK']} ({action_label})"
+                )
             else:
-                choices[target] = f"Domain / {rule['PK']}"
+                choices[target] = (
+                    f"{self._rule_prefix(action_do)}{rule['PK']} ({action_label})"
+                )
         return dict(sorted(choices.items(), key=lambda item: item[1].lower()))
 
     async def _async_apply_updated_options(self) -> None:

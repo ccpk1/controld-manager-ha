@@ -14,12 +14,24 @@ from .api import (
     ControlDApiConnectionError,
     ControlDApiResponseError,
 )
-from .const import DEFAULT_ENABLED_FILTERS
+from .const import (
+    DEFAULT_ENABLED_FILTERS,
+    PURPOSE_PROFILE_DEFAULT_RULE,
+    PURPOSE_PROFILE_FILTER_MODE,
+    PURPOSE_PROFILE_OPTION,
+    PURPOSE_PROFILE_RULE_GROUP,
+    PURPOSE_PROFILE_SERVICE,
+)
 from .entity import ControlDManagerProfileEntity
 from .models import (
+    ControlDDefaultRule,
     ControlDFilter,
     ControlDManagerRuntime,
+    ControlDProfileOption,
+    ControlDRuleGroup,
     ControlDService,
+    default_rule_mode_options,
+    rule_group_mode_options,
     service_mode_options,
 )
 
@@ -56,6 +68,12 @@ def _build_select_entity(
     config_entry: ConfigEntry[ControlDManagerRuntime], key: str
 ) -> SelectEntity:
     """Build one select entity from the entity-manager key."""
+    if key.endswith("::default_rule"):
+        _, profile_pk, _ = key.split("::", 2)
+        return ControlDManagerProfileDefaultRuleSelect(config_entry, profile_pk)
+    if "::rule_group::" in key:
+        _, profile_pk, _, group_pk = key.split("::", 3)
+        return ControlDManagerProfileRuleGroupSelect(config_entry, profile_pk, group_pk)
     if "::filter_mode::" in key:
         _, profile_pk, _, filter_pk = key.split("::", 3)
         return ControlDManagerProfileFilterModeSelect(
@@ -66,6 +84,9 @@ def _build_select_entity(
         return ControlDManagerProfileServiceModeSelect(
             config_entry, profile_pk, service_pk
         )
+    if "::option::" in key:
+        _, profile_pk, _, option_pk = key.split("::", 3)
+        return ControlDManagerProfileOptionSelect(config_entry, profile_pk, option_pk)
     raise ValueError(f"Unsupported Control D select key {key!r}")
 
 
@@ -74,7 +95,8 @@ class ControlDManagerProfileFilterModeSelect(
 ):
     """Select surface for modal profile filters."""
 
-    _purpose = "profile_filter_mode"
+    _attr_translation_key = "profile_filter_mode"
+    _purpose = PURPOSE_PROFILE_FILTER_MODE
 
     def __init__(
         self,
@@ -160,7 +182,8 @@ class ControlDManagerProfileServiceModeSelect(
 ):
     """Select surface for one dynamically exposed service."""
 
-    _purpose = "profile_service"
+    _attr_translation_key = "profile_service"
+    _purpose = PURPOSE_PROFILE_SERVICE
 
     def __init__(
         self,
@@ -227,3 +250,221 @@ class ControlDManagerProfileServiceModeSelect(
             ControlDApiResponseError,
         ) as err:
             raise HomeAssistantError("Unable to update the Control D service") from err
+
+
+class ControlDManagerProfileDefaultRuleSelect(
+    ControlDManagerProfileEntity, SelectEntity
+):
+    """Select surface for one profile default rule."""
+
+    _attr_translation_key = "profile_default_rule"
+    _purpose = PURPOSE_PROFILE_DEFAULT_RULE
+
+    def __init__(
+        self,
+        config_entry: ConfigEntry[ControlDManagerRuntime],
+        profile_pk: str,
+    ) -> None:
+        """Initialize one default-rule select."""
+        super().__init__(config_entry, profile_pk, "default_rule")
+        self._attr_name = "Options / Default Rule"
+        self._attr_entity_registry_enabled_default = True
+
+    @property
+    def default_rule_row(self) -> ControlDDefaultRule | None:
+        """Return the current normalized default-rule row."""
+        return self.runtime.registry.default_rules_by_profile.get(self._profile_pk)
+
+    @property
+    def available(self) -> bool:
+        """Return whether the default rule still exists in the registry."""
+        return super().available and self.default_rule_row is not None
+
+    @property
+    def options(self) -> list[str]:
+        """Return the supported default-rule labels."""
+        return list(default_rule_mode_options())
+
+    @property
+    def current_option(self) -> str | None:
+        """Return the current default-rule mode label."""
+        default_rule_row = self.default_rule_row
+        if default_rule_row is None:
+            return None
+        return default_rule_row.current_mode
+
+    def select_option(self, option: str) -> None:
+        """Select option is handled asynchronously by Home Assistant."""
+        raise NotImplementedError
+
+    async def async_select_option(self, option: str) -> None:
+        """Set a new default-rule mode for the profile."""
+        if option not in default_rule_mode_options():
+            raise HomeAssistantError("Unsupported Control D default rule mode")
+        if self.default_rule_row is None:
+            raise HomeAssistantError(
+                "Unable to find the selected Control D default rule"
+            )
+        try:
+            await self.runtime.managers.profile.async_set_default_rule_mode(
+                self._profile_pk, option
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+        ) as err:
+            raise HomeAssistantError(
+                "Unable to update the Control D default rule"
+            ) from err
+
+
+class ControlDManagerProfileRuleGroupSelect(ControlDManagerProfileEntity, SelectEntity):
+    """Select surface for one exposed profile rule folder."""
+
+    _attr_translation_key = "profile_rule_group"
+    _purpose = PURPOSE_PROFILE_RULE_GROUP
+
+    def __init__(
+        self,
+        config_entry: ConfigEntry[ControlDManagerRuntime],
+        profile_pk: str,
+        group_pk: str,
+    ) -> None:
+        """Initialize one profile folder-rule select."""
+        self._group_pk = group_pk
+        super().__init__(config_entry, profile_pk, f"rule_group::{group_pk}")
+        group_row = self.group_row
+        self._attr_name = (
+            f"Rules / Folder / {group_row.name}"
+            if group_row is not None
+            else f"Rules / Folder / {group_pk}"
+        )
+        self._attr_entity_registry_enabled_default = True
+
+    @property
+    def group_row(self) -> ControlDRuleGroup | None:
+        """Return the current normalized folder row."""
+        return self.runtime.registry.rule_groups_by_profile.get(
+            self._profile_pk, {}
+        ).get(self._group_pk)
+
+    @property
+    def available(self) -> bool:
+        """Return whether the folder still exists in the registry."""
+        return super().available and self.group_row is not None
+
+    @property
+    def options(self) -> list[str]:
+        """Return the supported folder-rule option keys."""
+        return list(rule_group_mode_options())
+
+    @property
+    def current_option(self) -> str | None:
+        """Return the current folder-rule mode key."""
+        group_row = self.group_row
+        if group_row is None:
+            return None
+        return group_row.current_mode
+
+    def select_option(self, option: str) -> None:
+        """Select option is handled asynchronously by Home Assistant."""
+        raise NotImplementedError
+
+    async def async_select_option(self, option: str) -> None:
+        """Set a new folder-rule mode for the profile."""
+        if option not in rule_group_mode_options():
+            raise HomeAssistantError("Unsupported Control D folder rule mode")
+        if self.group_row is None:
+            raise HomeAssistantError("Unable to find the selected Control D folder")
+        try:
+            await self.runtime.managers.profile.async_set_rule_group_mode(
+                self._profile_pk, self._group_pk, option
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+        ) as err:
+            raise HomeAssistantError(
+                "Unable to update the Control D folder rule"
+            ) from err
+
+
+class ControlDManagerProfileOptionSelect(ControlDManagerProfileEntity, SelectEntity):
+    """Select surface for one profile option."""
+
+    _attr_translation_key = "profile_option"
+    _purpose = PURPOSE_PROFILE_OPTION
+
+    def __init__(
+        self,
+        config_entry: ConfigEntry[ControlDManagerRuntime],
+        profile_pk: str,
+        option_pk: str,
+    ) -> None:
+        """Initialize one profile option select."""
+        self._option_pk = option_pk
+        super().__init__(config_entry, profile_pk, f"option::{option_pk}")
+        option_row = self.option_row
+        self._attr_name = (
+            f"Options / {option_row.title}"
+            if option_row is not None
+            else f"Options / {option_pk}"
+        )
+        self._attr_entity_registry_enabled_default = option_pk == "ai_malware"
+
+    @property
+    def option_row(self) -> ControlDProfileOption | None:
+        """Return the current normalized profile option row."""
+        return self.runtime.registry.options_by_profile.get(self._profile_pk, {}).get(
+            self._option_pk
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return whether the option still exists and supports select behavior."""
+        option_row = self.option_row
+        return bool(
+            super().available
+            and option_row is not None
+            and option_row.entity_kind == "select"
+        )
+
+    @property
+    def options(self) -> list[str]:
+        """Return the supported option labels."""
+        option_row = self.option_row
+        if option_row is None:
+            return []
+        return list(option_row.select_options)
+
+    @property
+    def current_option(self) -> str | None:
+        """Return the current selected option label."""
+        option_row = self.option_row
+        if option_row is None:
+            return None
+        return option_row.current_select_option
+
+    def select_option(self, option: str) -> None:
+        """Select option is handled asynchronously by Home Assistant."""
+        raise NotImplementedError
+
+    async def async_select_option(self, option: str) -> None:
+        """Set a new value for the profile option."""
+        option_row = self.option_row
+        if option_row is None:
+            raise HomeAssistantError("Unable to find the selected Control D option")
+        if option not in option_row.select_options:
+            raise HomeAssistantError("Unsupported Control D option value")
+        try:
+            await self.runtime.managers.profile.async_set_profile_option_select(
+                self._profile_pk, self._option_pk, option
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+        ) as err:
+            raise HomeAssistantError("Unable to update the Control D option") from err

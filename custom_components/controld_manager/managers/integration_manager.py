@@ -5,9 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import (
+    ControlDDefaultRule,
     ControlDFilter,
     ControlDFilterLevel,
     ControlDInventoryPayload,
+    ControlDProfileOption,
+    ControlDProfileOptionChoice,
     ControlDRegistry,
     ControlDRule,
     ControlDRuleGroup,
@@ -60,6 +63,18 @@ class IntegrationManager(BaseManager):
                 for profile_pk, detail in inventory.profile_details.items()
                 if profile_pk in included_profile_pks
             },
+            default_rules_by_profile={
+                profile_pk: default_rule
+                for profile_pk, detail in inventory.profile_details.items()
+                if profile_pk in included_profile_pks
+                if (default_rule := self._normalize_default_rule(detail.default_rule))
+                is not None
+            },
+            rule_groups_by_profile={
+                profile_pk: self._normalize_rule_groups(detail.groups)
+                for profile_pk, detail in inventory.profile_details.items()
+                if profile_pk in included_profile_pks
+            },
             services_by_profile={
                 profile_pk: self._normalize_services(
                     detail.services,
@@ -74,6 +89,14 @@ class IntegrationManager(BaseManager):
             },
             rules_by_profile={
                 profile_pk: self._normalize_rules(detail.groups, detail.rules)
+                for profile_pk, detail in inventory.profile_details.items()
+                if profile_pk in included_profile_pks
+            },
+            options_by_profile={
+                profile_pk: self._normalize_profile_options(
+                    inventory.option_catalog,
+                    detail.options,
+                )
                 for profile_pk, detail in inventory.profile_details.items()
                 if profile_pk in included_profile_pks
             },
@@ -134,6 +157,19 @@ class IntegrationManager(BaseManager):
                 levels=levels,
             )
         return filters
+
+    @staticmethod
+    def _normalize_default_rule(
+        payload: dict[str, Any] | None,
+    ) -> ControlDDefaultRule | None:
+        """Normalize one default-rule payload."""
+        if not isinstance(payload, dict):
+            return None
+        return ControlDDefaultRule(
+            enabled=bool(payload.get("status", 0)),
+            action_do=int(payload.get("do", 0) or 0),
+            via=IntegrationManager._optional_string(payload.get("via")),
+        )
 
     @staticmethod
     def _normalize_services(
@@ -211,9 +247,103 @@ class IntegrationManager(BaseManager):
                 group_name=group_name,
                 enabled=bool(action.get("status", 0)),
                 action_do=int(action.get("do", 0) or 0),
+                comment=IntegrationManager._optional_string(payload.get("comment"))
+                or "",
                 ttl=(int(action["ttl"]) if "ttl" in action else None),
             )
         return rules
+
+    @staticmethod
+    def _normalize_rule_groups(
+        groups_payload: tuple[dict[str, Any], ...],
+    ) -> dict[str, ControlDRuleGroup]:
+        """Normalize grouped-rule folders for entity surfaces and writes."""
+        groups: dict[str, ControlDRuleGroup] = {}
+        for payload in groups_payload:
+            folder_pk = str(payload.get("PK"))
+            action = IntegrationManager._mapping_or_empty(payload.get("action"))
+            groups[folder_pk] = ControlDRuleGroup(
+                group_pk=folder_pk,
+                name=IntegrationManager._require_string(payload, "group"),
+                enabled=bool(action.get("status", 0)) and "do" in action,
+                action_do=(int(action["do"]) if "do" in action else None),
+            )
+        return groups
+
+    @staticmethod
+    def _normalize_profile_options(
+        catalog_payload: tuple[dict[str, Any], ...],
+        state_payload: tuple[dict[str, Any], ...],
+    ) -> dict[str, ControlDProfileOption]:
+        """Normalize profile options by joining catalog metadata to sparse state."""
+        state_by_pk = {
+            IntegrationManager._require_string(
+                payload, "PK"
+            ): IntegrationManager._normalize_option_value_key(payload.get("value"))
+            for payload in state_payload
+            if isinstance(payload, dict) and isinstance(payload.get("PK"), str)
+        }
+        options: dict[str, ControlDProfileOption] = {}
+        for payload in catalog_payload:
+            option_pk = IntegrationManager._require_string(payload, "PK")
+            option_type = IntegrationManager._require_string(payload, "type")
+            choices = IntegrationManager._normalize_option_choices(payload)
+            entity_kind = "unsupported"
+            if option_type == "toggle":
+                entity_kind = "toggle"
+            elif option_type == "dropdown" and choices:
+                entity_kind = "select"
+            elif option_type == "field" and option_pk in {
+                "ttl_blck",
+                "ttl_spff",
+                "ttl_pass",
+            }:
+                entity_kind = "toggle"
+            options[option_pk] = ControlDProfileOption(
+                option_pk=option_pk,
+                title=IntegrationManager._require_string(payload, "title"),
+                description=IntegrationManager._optional_string(
+                    payload.get("description")
+                ),
+                option_type=option_type,
+                info_url=IntegrationManager._optional_string(payload.get("info_url")),
+                current_value_key=state_by_pk.get(option_pk),
+                default_value_key=IntegrationManager._normalize_option_value_key(
+                    payload.get("default_value")
+                ),
+                choices=choices,
+                entity_kind=entity_kind,
+            )
+        return options
+
+    @staticmethod
+    def _normalize_option_choices(
+        payload: dict[str, Any],
+    ) -> tuple[ControlDProfileOptionChoice, ...]:
+        """Normalize selectable choices for one option payload."""
+        default_value = payload.get("default_value")
+        if isinstance(default_value, dict):
+            return tuple(
+                ControlDProfileOptionChoice(value=str(value), label=str(label))
+                for value, label in default_value.items()
+                if isinstance(label, str)
+            )
+        return ()
+
+    @staticmethod
+    def _normalize_option_value_key(value: Any) -> str | None:
+        """Normalize a profile option value into a stable string key."""
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return "1" if value else None
+        if isinstance(value, int | float):
+            if value == 0:
+                return None
+            return format(value, "g")
+        if isinstance(value, str):
+            return value or None
+        return None
 
     @staticmethod
     def _normalize_user(user_payload: dict[str, Any]) -> ControlDUser:

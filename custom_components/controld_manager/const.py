@@ -19,6 +19,7 @@ CONF_PROFILE_ANALYTICS_INTERVAL_MINUTES = "profile_analytics_interval_minutes"
 CONF_ENDPOINT_ANALYTICS_INTERVAL_MINUTES = "endpoint_analytics_interval_minutes"
 CONF_PROFILE_POLICIES = "profile_policies"
 CONF_MANAGED_IN_HOME_ASSISTANT = "managed_in_home_assistant"
+CONF_ADVANCED_PROFILE_OPTIONS = "advanced_profile_options"
 CONF_ENDPOINT_SENSORS_ENABLED = "endpoint_sensors_enabled"
 CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES = "endpoint_inactivity_threshold_minutes"
 CONF_ALLOWED_SERVICE_CATEGORIES = "allowed_service_categories"
@@ -38,7 +39,28 @@ MAX_REFRESH_INTERVAL = timedelta(minutes=60)
 DEFAULT_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES = 15
 MIN_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES = 5
 MAX_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES = 60
-DEFAULT_ENABLED_FILTERS = frozenset({"ads", "ai_malware", "typo"})
+DEFAULT_ENABLED_FILTERS = frozenset({"ads", "typo"})
+CORE_PROFILE_OPTION_TOGGLES = frozenset({"safesearch", "safeyoutube"})
+CORE_PROFILE_OPTION_SELECTS = frozenset({"ai_malware"})
+ADVANCED_PROFILE_OPTION_TOGGLES = frozenset(
+    {
+        "block_rfc1918",
+        "no_dnssec",
+        "spoof_ipv6",
+        "dns64",
+        "cflat",
+        "ttl_blck",
+        "ttl_spff",
+        "ttl_pass",
+    }
+)
+ADVANCED_PROFILE_OPTION_SELECTS = frozenset({"b_resp"})
+SUPPORTED_PROFILE_OPTION_TOGGLES = (
+    CORE_PROFILE_OPTION_TOGGLES | ADVANCED_PROFILE_OPTION_TOGGLES
+)
+SUPPORTED_PROFILE_OPTION_SELECTS = (
+    CORE_PROFILE_OPTION_SELECTS | ADVANCED_PROFILE_OPTION_SELECTS
+)
 
 PLATFORMS: tuple[Platform, ...] = (
     Platform.BINARY_SENSOR,
@@ -63,6 +85,8 @@ ATTR_LAST_ACTIVE = "last_active"
 ATTR_ACTIVITY_THRESHOLD_MINUTES = "activity_threshold_minutes"
 ATTR_GROUP = "group"
 ATTR_RULE_IDENTITY = "rule_identity"
+ATTR_ACTION = "action"
+ATTR_COMMENT = "comment"
 ATTR_DISCOVERED_ENDPOINT_COUNT = "discovered_endpoint_count"
 ATTR_ROUTER_CLIENT_COUNT = "router_client_count"
 ATTR_LAST_REFRESH_ATTEMPT = "last_refresh_attempt"
@@ -88,3 +112,21 @@ TRANS_KEY_WRONG_INTEGRATION_ENTRY = "wrong_integration_entry"
 TRANS_KEY_PROFILE_TARGET_REQUIRED = "profile_target_required"
 TRANS_KEY_PROFILE_TARGET_NOT_FOUND = "profile_target_not_found"
 TRANS_KEY_PROFILE_TARGET_AMBIGUOUS = "profile_target_ambiguous"
+
+PURPOSE_INSTANCE_ACTION = "purpose_instance_action"
+PURPOSE_INSTANCE_STATUS = "purpose_instance_status"
+PURPOSE_INSTANCE_SUMMARY = "purpose_instance_summary"
+PURPOSE_ENDPOINT_STATUS = "purpose_endpoint_status"
+PURPOSE_PROFILE_PAUSE = "purpose_profile_pause"
+PURPOSE_PROFILE_FILTER = "purpose_profile_filter"
+PURPOSE_PROFILE_FILTER_MODE = "purpose_profile_filter_mode"
+PURPOSE_PROFILE_SERVICE = "purpose_profile_service"
+PURPOSE_PROFILE_DEFAULT_RULE = "purpose_profile_default_rule"
+PURPOSE_PROFILE_RULE_GROUP = "purpose_profile_rule_group"
+PURPOSE_PROFILE_OPTION = "purpose_profile_option"
+PURPOSE_PROFILE_RULE = "purpose_profile_rule"
+
+RULE_ACTION_BLOCK = "block"
+RULE_ACTION_BYPASS = "bypass"
+RULE_ACTION_REDIRECT = "redirect"
+RULE_ACTION_OFF = "off"

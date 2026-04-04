@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -40,6 +41,70 @@ SERVICE_CATALOG = [
         "warning": "",
         "unlock_location": "JFK",
     }
+]
+OPTION_CATALOG = [
+    {
+        "PK": "ai_malware",
+        "title": "AI Malware Filter",
+        "description": "Blocks malicious domains using machine learning.",
+        "type": "dropdown",
+        "default_value": {"0.9": "Minimal", "0.7": "Standard", "0.5": "Aggressive"},
+        "info_url": "https://docs.controld.com/docs/ai-malware-filter",
+    },
+    {
+        "PK": "safesearch",
+        "title": "Safe Search",
+        "description": "Prevent search engines from showing mature content.",
+        "type": "toggle",
+        "default_value": 0,
+        "info_url": "https://docs.controld.com/docs/safe-search",
+    },
+    {
+        "PK": "safeyoutube",
+        "title": "Restricted Youtube",
+        "description": "Prevent Youtube from showing mature content.",
+        "type": "toggle",
+        "default_value": 0,
+        "info_url": "https://docs.controld.com/docs/restricted-youtube",
+    },
+    {
+        "PK": "block_rfc1918",
+        "title": "DNS Rebind Protection",
+        "description": "Blocks domains that point to RFC1918 addresses.",
+        "type": "toggle",
+        "default_value": 0,
+        "info_url": "https://docs.controld.com/docs/dns-rebind-option",
+    },
+    {
+        "PK": "b_resp",
+        "title": "Block Response",
+        "description": "Choose how to respond to blocked queries.",
+        "type": "dropdown",
+        "default_value": {
+            "0": "0.0.0.0 / ::",
+            "3": "NXDOMAIN",
+            "5": "REFUSED",
+            "7": "Custom",
+            "9": "Branded",
+        },
+        "info_url": "https://docs.controld.com/docs/blocked-query-response",
+    },
+    {
+        "PK": "ttl_blck",
+        "title": "Block TTL",
+        "description": "DNS record TTL (in seconds) when blocking.",
+        "type": "field",
+        "default_value": 10,
+        "info_url": "https://docs.controld.com/docs/ttl-overrides",
+    },
+    {
+        "PK": "ecs_subnet",
+        "title": "EDNS Client Subnet",
+        "description": "Override the EDNS Client Subnet for this profile.",
+        "type": "dropdown",
+        "default_value": ["No ECS", "Auto", "Custom"],
+        "info_url": "https://docs.controld.com/docs/ecs-custom-subnet",
+    },
 ]
 
 
@@ -105,6 +170,10 @@ async def _async_setup_entry(
                     )
                 )
             ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
         ),
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
@@ -192,6 +261,7 @@ def _detail_payload(
                 "order": 1,
                 "group": 1,
                 "action": {"do": 1, "status": 1},
+                "comment": "Here is my reason",
             },
         )
         if include_rules and profile_pk == "profile-1"
@@ -199,6 +269,13 @@ def _detail_payload(
     )
     return ControlDProfileDetailPayload(
         filters=filters,
+        options=(
+            {"PK": "ai_malware", "value": 0.9},
+            {"PK": "safesearch", "value": 1},
+            {"PK": "block_rfc1918", "value": 1},
+            {"PK": "ttl_blck", "value": 11},
+        ),
+        default_rule={"do": 1, "status": 1},
         services=services,
         groups=groups,
         rules=rules,
@@ -242,6 +319,18 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     adult_mode_entity_id = entity_registry.async_get_entity_id(
         "select", DOMAIN, "user-123::profile::profile-1::filter_mode::adult_content"
     )
+    default_rule_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::default_rule"
+    )
+    ai_malware_option_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::option::ai_malware"
+    )
+    safe_search_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::option::safesearch"
+    )
+    restricted_youtube_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::option::safeyoutube"
+    )
     endpoint_status_entity_id = entity_registry.async_get_entity_id(
         "binary_sensor", DOMAIN, "user-123::endpoint::device-1::status"
     )
@@ -260,6 +349,10 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert ads_filter_entity_id is not None
     assert ads_mode_entity_id is not None
     assert adult_mode_entity_id is not None
+    assert default_rule_entity_id is not None
+    assert ai_malware_option_entity_id is not None
+    assert safe_search_entity_id is not None
+    assert restricted_youtube_entity_id is not None
     assert endpoint_status_entity_id is None
     assert service_entity_id is None
     assert hass.states.get(profile_count_entity_id).state == "2"
@@ -299,6 +392,10 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
         hass.states.get(ads_filter_entity_id).name == "Primary Filters / Ads & Trackers"
     )
     assert hass.states.get(ads_mode_entity_id).state == "Relaxed"
+    assert hass.states.get(default_rule_entity_id).state == "Bypassing"
+    assert hass.states.get(ai_malware_option_entity_id).state == "Minimal"
+    assert hass.states.get(safe_search_entity_id).state == "on"
+    assert hass.states.get(restricted_youtube_entity_id).state == "off"
     adult_mode_entry = entity_registry.async_get(adult_mode_entity_id)
     assert adult_mode_entry is not None
     assert adult_mode_entry.disabled_by is not None
@@ -312,10 +409,15 @@ async def test_phase5_policy_enabled_entities_are_created_and_attached(hass) -> 
         options=ControlDOptions(
             profile_policies={
                 "profile-1": ControlDProfilePolicy(
+                    advanced_profile_options=True,
                     endpoint_sensors_enabled=True,
                     allowed_service_categories=frozenset({"audio"}),
                     exposed_custom_rules=frozenset(
-                        {"rule:root|example.com", "group:1"}
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
                     ),
                 )
             }
@@ -333,6 +435,21 @@ async def test_phase5_policy_enabled_entities_are_created_and_attached(hass) -> 
     service_entity_id = entity_registry.async_get_entity_id(
         "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
     )
+    advanced_toggle_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::option::block_rfc1918"
+    )
+    ttl_toggle_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::option::ttl_blck"
+    )
+    ecs_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::option::ecs_subnet"
+    )
+    advanced_select_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::option::b_resp"
+    )
+    rule_group_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::rule_group::1"
+    )
     rule_entity_id = entity_registry.async_get_entity_id(
         "switch", DOMAIN, "user-123::profile::profile-1::rule::root|example.com"
     )
@@ -345,17 +462,85 @@ async def test_phase5_policy_enabled_entities_are_created_and_attached(hass) -> 
 
     assert status_entity_id is not None
     assert service_entity_id is not None
+    assert advanced_toggle_entity_id is not None
+    assert ttl_toggle_entity_id is not None
+    assert ecs_entity_id is None
+    assert advanced_select_entity_id is not None
+    assert rule_group_entity_id is not None
     assert rule_entity_id is not None
     assert grouped_rule_entity_id is not None
     status_entry = entity_registry.async_get(status_entity_id)
     service_entry = entity_registry.async_get(service_entity_id)
+    advanced_toggle_entry = entity_registry.async_get(advanced_toggle_entity_id)
+    ttl_toggle_entry = entity_registry.async_get(ttl_toggle_entity_id)
+    advanced_select_entry = entity_registry.async_get(advanced_select_entity_id)
     assert status_entry is not None
     assert service_entry is not None
+    assert advanced_toggle_entry is not None
+    assert ttl_toggle_entry is not None
+    assert advanced_select_entry is not None
     assert profile_device is not None
     assert status_entry.device_id == profile_device.id
     assert service_entry.disabled_by is not None
+    assert advanced_toggle_entry.disabled_by is not None
+    assert ttl_toggle_entry.disabled_by is not None
+    assert advanced_select_entry.disabled_by is not None
+    assert hass.states.get(rule_group_entity_id).state == "bypass"
     assert (
         hass.states.get(rule_entity_id).name == "Primary Rules / Domain / example.com"
+    )
+    assert (
+        hass.states.get(rule_entity_id).attributes["purpose"] == "purpose_profile_rule"
+    )
+    assert hass.states.get(rule_entity_id).attributes["action"] == "block"
+    assert hass.states.get(rule_entity_id).attributes["comment"] == ""
+    assert hass.states.get(grouped_rule_entity_id).attributes["group"] == "Allow folder"
+    assert hass.states.get(grouped_rule_entity_id).attributes["action"] == "bypass"
+    assert (
+        hass.states.get(grouped_rule_entity_id).attributes["comment"]
+        == "Here is my reason"
+    )
+
+
+async def test_option_entities_expose_raw_purpose_attributes(hass) -> None:
+    """Option entities should expose raw purpose translation keys."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    default_rule_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::default_rule"
+    )
+    ai_malware_option_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::option::ai_malware"
+    )
+    safe_search_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::option::safesearch"
+    )
+    rule_group_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::rule_group::1"
+    )
+
+    assert default_rule_entity_id is not None
+    assert ai_malware_option_entity_id is not None
+    assert safe_search_entity_id is not None
+    assert rule_group_entity_id is None
+    assert (
+        hass.states.get(default_rule_entity_id).attributes["purpose"]
+        == "purpose_profile_default_rule"
+    )
+    assert (
+        hass.states.get(ai_malware_option_entity_id).attributes["purpose"]
+        == "purpose_profile_option"
+    )
+    assert (
+        hass.states.get(safe_search_entity_id).attributes["purpose"]
+        == "purpose_profile_option"
     )
 
 
@@ -384,12 +569,26 @@ async def test_filter_and_service_selects_update_expected_modes(hass) -> None:
     service_entity_id = entity_registry.async_get_entity_id(
         "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
     )
+    default_rule_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::default_rule"
+    )
+    rule_group_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::rule_group::1"
+    )
+    ai_malware_option_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::option::ai_malware"
+    )
     runtime = entry.runtime_data
 
     assert ads_mode_entity_id is not None
     assert service_entity_id is not None
+    assert default_rule_entity_id is not None
+    assert rule_group_entity_id is None
+    assert ai_malware_option_entity_id is not None
     assert hass.states.get(ads_mode_entity_id).state == "Relaxed"
     assert hass.states.get(service_entity_id).state == "Bypassed"
+    assert hass.states.get(default_rule_entity_id).state == "Bypassing"
+    assert hass.states.get(ai_malware_option_entity_id).state == "Minimal"
 
     with (
         patch.object(
@@ -402,6 +601,16 @@ async def test_filter_and_service_selects_update_expected_modes(hass) -> None:
             "async_set_service_mode",
             new=AsyncMock(),
         ) as async_set_service_mode,
+        patch.object(
+            runtime.managers.profile,
+            "async_set_default_rule_mode",
+            new=AsyncMock(),
+        ) as async_set_default_rule_mode,
+        patch.object(
+            runtime.managers.profile,
+            "async_set_profile_option_select",
+            new=AsyncMock(),
+        ) as async_set_profile_option_select,
     ):
         await hass.services.async_call(
             "select",
@@ -416,6 +625,24 @@ async def test_filter_and_service_selects_update_expected_modes(hass) -> None:
             "select",
             "select_option",
             {
+                ATTR_ENTITY_ID: default_rule_entity_id,
+                ATTR_OPTION: "Redirecting",
+            },
+            blocking=True,
+        )
+        await hass.services.async_call(
+            "select",
+            "select_option",
+            {
+                ATTR_ENTITY_ID: ai_malware_option_entity_id,
+                ATTR_OPTION: "Aggressive",
+            },
+            blocking=True,
+        )
+        await hass.services.async_call(
+            "select",
+            "select_option",
+            {
                 ATTR_ENTITY_ID: service_entity_id,
                 ATTR_OPTION: "Blocked",
             },
@@ -423,9 +650,63 @@ async def test_filter_and_service_selects_update_expected_modes(hass) -> None:
         )
 
     async_set_filter_mode.assert_awaited_once_with("profile-1", "ads", "ads_medium")
+    async_set_default_rule_mode.assert_awaited_once_with("profile-1", "Redirecting")
+    async_set_profile_option_select.assert_awaited_once_with(
+        "profile-1", "ai_malware", "Aggressive"
+    )
     async_set_service_mode.assert_awaited_once_with(
         "profile-1", "amazonmusic", "Blocked"
     )
+
+
+async def test_rule_group_select_updates_expected_mode(hass) -> None:
+    """Folder rule controls should expose and write the expected selected values."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {"group:1", "rule:group:1|example2.com"}
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    rule_group_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::rule_group::1"
+    )
+    grouped_rule_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::rule::group:1|example2.com"
+    )
+    runtime = entry.runtime_data
+
+    assert rule_group_entity_id is not None
+    assert grouped_rule_entity_id is not None
+    assert hass.states.get(rule_group_entity_id).state == "bypass"
+
+    with patch.object(
+        runtime.managers.profile,
+        "async_set_rule_group_mode",
+        new=AsyncMock(),
+    ) as async_set_rule_group_mode:
+        await hass.services.async_call(
+            "select",
+            "select_option",
+            {
+                ATTR_ENTITY_ID: rule_group_entity_id,
+                ATTR_OPTION: "block",
+            },
+            blocking=True,
+        )
+
+    async_set_rule_group_mode.assert_awaited_once_with("profile-1", "1", "block")
 
 
 async def test_endpoint_roaming_reassigns_device_attachment(hass) -> None:
@@ -465,6 +746,10 @@ async def test_endpoint_roaming_reassigns_device_attachment(hass) -> None:
                     )
                 )
             ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
         ),
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
@@ -536,6 +821,10 @@ async def test_excluded_profile_device_is_removed_from_registry(hass) -> None:
             ),
         ),
         patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
             new=AsyncMock(return_value=SERVICE_CATEGORIES),
         ),
@@ -551,6 +840,198 @@ async def test_excluded_profile_device_is_removed_from_registry(hass) -> None:
         identifiers={(DOMAIN, "instance::user-123::profile::profile-2")}
     )
     assert removed_profile_device is None
+
+
+async def test_removed_rule_entities_are_pruned_from_entity_registry(hass) -> None:
+    """Removed rule entities should be deleted from the entity registry."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "group:1",
+                            "rule:root|example.com",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    rule_group_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::rule_group::1"
+    )
+    rule_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::rule::root|example.com"
+    )
+    grouped_rule_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::rule::group:1|example2.com"
+    )
+
+    assert rule_group_entity_id is not None
+    assert rule_entity_id is not None
+    assert grouped_rule_entity_id is not None
+
+    entity_registry.async_update_entity(
+        grouped_rule_entity_id,
+        disabled_by=er.RegistryEntryDisabler.USER,
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(grouped_rule_entity_id) is None
+
+    runtime = entry.runtime_data
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    replace(
+                        _detail_payload(
+                            profile_pk,
+                            include_services=include_services,
+                            include_rules=include_rules,
+                        ),
+                        groups=(),
+                        rules=(),
+                    )
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+    ):
+        await runtime.active_coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    assert entity_registry.async_get(rule_group_entity_id) is None
+    assert entity_registry.async_get(rule_entity_id) is None
+    assert entity_registry.async_get(grouped_rule_entity_id) is None
+
+
+async def test_removed_dynamic_entities_are_pruned_across_platforms(hass) -> None:
+    """Disabled and live dynamic entities should be removed when no longer desired."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    advanced_profile_options=True,
+                    endpoint_sensors_enabled=True,
+                    allowed_service_categories=frozenset({"audio"}),
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    endpoint_status_entity_id = entity_registry.async_get_entity_id(
+        "binary_sensor", DOMAIN, "user-123::endpoint::device-1::status"
+    )
+    service_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+    advanced_toggle_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::option::block_rfc1918"
+    )
+    advanced_select_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::option::b_resp"
+    )
+    social_filter_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::filter::social"
+    )
+    adult_mode_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::filter_mode::adult_content"
+    )
+
+    assert endpoint_status_entity_id is not None
+    assert service_entity_id is not None
+    assert advanced_toggle_entity_id is not None
+    assert advanced_select_entity_id is not None
+    assert social_filter_entity_id is not None
+    assert adult_mode_entity_id is not None
+
+    runtime = entry.runtime_data
+    runtime.options = ControlDOptions(
+        profile_policies={"profile-1": ControlDProfilePolicy()}
+    )
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    replace(
+                        _detail_payload(
+                            profile_pk,
+                            include_services=include_services,
+                            include_rules=include_rules,
+                        ),
+                        filters=tuple(
+                            filter_payload
+                            for filter_payload in _detail_payload(
+                                profile_pk,
+                                include_services=include_services,
+                                include_rules=include_rules,
+                            ).filters
+                            if filter_payload["PK"] in {"ads", "ai_malware"}
+                        ),
+                    )
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+    ):
+        await runtime.active_coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    assert entity_registry.async_get(endpoint_status_entity_id) is None
+    assert entity_registry.async_get(service_entity_id) is None
+    assert entity_registry.async_get(advanced_toggle_entity_id) is None
+    assert entity_registry.async_get(advanced_select_entity_id) is None
+    assert entity_registry.async_get(social_filter_entity_id) is None
+    assert entity_registry.async_get(adult_mode_entity_id) is None
 
 
 async def test_sync_button_runs_manual_refresh(hass) -> None:
@@ -727,6 +1208,10 @@ async def test_pause_service_rejects_mixed_instance_targets(hass) -> None:
                 )
             ),
         ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
     ):
         assert await hass.config_entries.async_setup(entry_one.entry_id)
         await hass.async_block_till_done()
@@ -820,6 +1305,10 @@ async def test_pause_service_requires_explicit_entry_when_multiple_loaded(hass) 
                     )
                 )
             ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
         ),
     ):
         assert await hass.config_entries.async_setup(entry_one.entry_id)

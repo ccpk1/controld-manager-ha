@@ -1432,6 +1432,441 @@ Additional consequence from the latest sample:
 
 Firewalla Local is also the right current reference for options-flow structure.
 
+## Profile option detail findings
+
+The main profile-options page is broader than the currently implemented
+filter, service, and custom-rule surfaces.
+
+### Default rule write contract
+
+Browser-backed captures now prove a dedicated default-rule mutation endpoint for
+one profile.
+
+Observed requests:
+
+- endpoint:
+  - `PUT /profiles/{profile_id}/default`
+- observed payloads:
+  - `{"do":0,"status":1}`
+  - `{"do":1,"status":1}`
+  - `{"do":3,"via":"LOCAL","status":1}`
+
+Observed consequences:
+
+- the default rule is not part of the generic filter, service, or custom-rule
+  mutation families
+- the default rule has its own dedicated profile-scoped endpoint
+- the default rule is action-driven in the same general style as rules and
+  services, but it also introduces an additional redirect-style variant using
+  `via = "LOCAL"`
+
+Working interpretation:
+
+- `do = 0` corresponds to the blocked default-rule mode
+- `do = 1` corresponds to the bypassed default-rule mode
+- `do = 3` with `via = "LOCAL"` corresponds to the locally resolved
+  default-rule mode shown in the web UI
+- the currently captured write set proves active-mode writes, but it does not
+  yet prove whether a disabled or status-zero state exists for this surface
+
+### Dedicated option endpoint write families
+
+Browser-backed captures now also prove that several controls from the same main
+profile page are implemented as dedicated profile-option endpoints under:
+
+- endpoint family:
+  - `PUT /profiles/{profile_id}/options/{option_key}`
+
+Observed option keys and payloads:
+
+- boolean toggle style:
+  - `safesearch`
+    - enable: `{"status":1}`
+    - disable: `{"status":0}`
+  - `safeyoutube`
+    - enable: `{"status":1}`
+    - disable: `{"status":0}`
+  - `block_rfc1918`
+    - enable: `{"status":1}`
+    - disable: `{"status":0}`
+  - `no_dnssec`
+    - enable: `{"status":1}`
+    - disable: `{"status":0}`
+  - `spoof_ipv6`
+    - enable: `{"status":1}`
+    - disable: `{"status":0}`
+  - `dns64`
+    - enable: `{"status":1}`
+    - disable: `{"status":0}`
+  - `cflat`
+    - enable: `{"status":1}`
+    - disable: `{"status":0}`
+- enabled plus value style:
+  - `ai_malware`
+    - disable: `{"status":0}`
+    - enable with value: `{"status":1,"value":"0.9"}`
+  - `b_resp`
+    - disable: `{"status":0}`
+    - enable with value: `{"status":1,"value":"0"}`
+  - `ecs_subnet`
+    - disable: `{"status":0}`
+    - enable with value: `{"status":1,"value":"0"}`
+- disable-only evidence so far:
+  - `ttl_blck`
+    - observed write: `{"status":0}`
+  - `ttl_spff`
+    - observed write: `{"status":0}`
+  - `ttl_pass`
+    - observed write: `{"status":0}`
+
+Observed consequences:
+
+- the main profile-options page is not one uniform control type; it already
+  contains at least three mutation families:
+  - pure boolean toggles
+  - enablement plus bounded or enumerated value controls
+  - controls where only disable writes are proven so far
+- the option key itself is a stable typed identity candidate for repository
+  modeling, unlike the broader filter and service catalogs that require more
+  normalization context
+- `status` remains the common top-level enablement signal across the captured
+  option endpoints
+- `value` is optional and option-specific, which argues against exposing every
+  option immediately through one generic Home Assistant abstraction
+
+Working interpretation:
+
+- `safesearch`, `safeyoutube`, `block_rfc1918`, `no_dnssec`, `spoof_ipv6`,
+  `dns64`, and `cflat` are strong candidates for direct profile-scoped switch
+  entities once their read contracts are captured
+- `ai_malware`, `b_resp`, and `ecs_subnet` likely need a typed two-part model:
+  either one select that implies enablement or a split switch-plus-select
+  surface, depending on how their read contracts represent disabled state and
+  allowed values
+- `ttl_blck`, `ttl_spff`, and `ttl_pass` are not ready for implementation yet
+  because the captured evidence only proves a disable write and does not yet
+  prove how the web UI enables or parameterizes them
+
+### Global profile option catalog contract
+
+Browser-backed captures now also prove a global option-catalog discovery
+endpoint:
+
+- endpoint:
+  - `GET /profiles/options`
+
+Observed response shape:
+
+- body key:
+  - `options[]`
+- per-option fields observed:
+  - `PK`
+  - `title`
+  - `description`
+  - `type`
+  - `default_value`
+  - `info_url`
+
+Observed type metadata:
+
+- `type = "toggle"`
+  - `safesearch`
+  - `safeyoutube`
+  - `block_rfc1918`
+  - `no_dnssec`
+  - `spoof_ipv6`
+  - `dns64`
+  - `cflat`
+- `type = "dropdown"`
+  - `ai_malware`
+    - `default_value` map:
+      - `0.9 -> Minimal`
+      - `0.7 -> Standard`
+      - `0.5 -> Aggressive`
+  - `b_resp`
+    - `default_value` map:
+      - `0 -> 0.0.0.0 / ::`
+      - `3 -> NXDOMAIN`
+      - `5 -> REFUSED`
+      - `7 -> Custom`
+      - `9 -> Branded`
+  - `ecs_subnet`
+    - `default_value` list:
+      - `No ECS`
+      - `Auto`
+      - `Custom`
+- `type = "field"`
+  - `ttl_blck`
+    - `default_value = 10`
+  - `ttl_spff`
+    - `default_value = 20`
+  - `ttl_pass`
+    - `default_value = 60`
+
+Observed consequences:
+
+- the repository now has strong evidence that profile-option identity should be
+  keyed by `PK` from the global catalog and enriched with catalog metadata
+  rather than by repository-owned labels
+- the earlier write families line up with the catalog types:
+  - `toggle` aligns with pure `status` writes
+  - `dropdown` aligns with `status` plus option-specific `value`
+  - `field` aligns with the TTL-style controls, although their enable and read
+    semantics are still not proven
+- `GET /profiles/options` is a discovery and typing contract, not a per-profile
+  state contract; it does not yet prove which options are enabled for a
+  specific profile or what current values are applied there
+
+Working interpretation:
+
+- the integration should introduce a typed repository-owned option catalog model
+  sourced from `GET /profiles/options`
+- toggle options can use the global catalog directly for translation-ready
+  names, descriptions, and documentation links while still waiting for
+  profile-scoped state reads before entity creation
+- dropdown options now have partly proven allowed values:
+  - `ai_malware` and `b_resp` expose explicit upstream value maps that are good
+    candidates for repository enums
+  - `ecs_subnet` still needs additional captures because the catalog exposes a
+    label list, but the write payload only proved raw value `"0"`; the mapping
+    between visible labels and write values is not yet closed
+- field options now have confirmed upstream defaults, which is enough to treat
+  them as numeric settings conceptually, but not enough yet to know whether the
+  Home Assistant surface should be a number entity, an options-flow setting, or
+  another pattern
+
+### Per-profile option state contract
+
+Browser-backed captures now strongly suggest the profile-specific current-state
+read for this option family is:
+
+- endpoint:
+  - `GET /profiles/{profile_id}/options`
+
+Observed response shape:
+
+- body key:
+  - `options[]`
+- per-item fields observed:
+  - `PK`
+  - `value`
+
+Observed sample:
+
+- `{"PK":"block_rfc1918","value":1}`
+- `{"PK":"ai_malware","value":0.9}`
+
+Observed consequences:
+
+- this appears to be the missing profile-scoped state read that pairs with the
+  global catalog from `GET /profiles/options`
+- the profile option model now has a clean three-part contract:
+  - global catalog: `GET /profiles/options`
+  - per-profile current state: `GET /profiles/{profile_id}/options`
+  - per-profile writes: `PUT /profiles/{profile_id}/options/{option_key}`
+- the response is currently observed as a sparse list of configured or active
+  option values rather than a fully expanded object covering every known option
+
+Working interpretation:
+
+- the runtime should join the global catalog to the per-profile option state by
+  `PK`
+- `value = 1` for `block_rfc1918` is strong evidence that enabled toggle
+  options may be represented as numeric truthy values rather than as a nested
+  `status` field in the read path
+- `value = 0.9` for `ai_malware` is strong evidence that dropdown-style options
+  read back their active selected value directly
+- the repository still should not assume absence semantics yet:
+  - absence may mean disabled
+  - absence may mean default value
+  - absence may mean the profile has no explicit override for that option
+  - one more capture is still needed to close that distinction
+
+### Newly closed advanced-option contracts
+
+Browser-backed captures now strengthen two previously unresolved advanced
+option families.
+
+#### `ecs_subnet`
+
+Observed writes and responses:
+
+- `PUT /profiles/{profile_id}/options/ecs_subnet`
+  - `{"status":1,"value":"0"}` -> response `{"PK":"ecs_subnet","value":0}`
+  - `{"status":1,"value":"1"}` -> response `{"PK":"ecs_subnet","value":1}`
+  - `{"status":0}` -> response `{"PK":"ecs_subnet","value":0}`
+
+Observed consequence:
+
+- the `ecs_subnet` option is definitively part of the enabled-plus-value family
+- two upstream value mappings are now strongly indicated against the catalog
+  label order:
+  - `0 -> No ECS`
+  - `1 -> Auto`
+- the disabled response currently collapses back to `value = 0`, which means
+  the read model still needs repository-owned interpretation for `Off` versus
+  `No ECS`
+
+Working interpretation:
+
+- `ecs_subnet` is close to implementation as an advanced select, but it still
+  has one unresolved edge:
+  - whether `Off` is distinct from `No ECS` in the effective read model
+  - the write or read value for the remaining `Custom` catalog option is still
+    unproven
+- current product direction is to keep `ecs_subnet` out of entity exposure for
+  now rather than ship a partially ambiguous control
+
+#### `ttl_blck`
+
+Observed writes and responses:
+
+- `PUT /profiles/{profile_id}/options/ttl_blck`
+  - `{"status":1,"value":"11"}` -> response `{"PK":"ttl_blck","value":11}`
+  - `{"status":0}` -> response `{"PK":"ttl_blck","value":0}`
+
+Observed consequence:
+
+- `ttl_blck` is no longer a write-ambiguous field; it is an enabled numeric
+  field option
+- disable semantics collapse to `value = 0`
+- the field-option family now looks number-like rather than free-form text-like
+
+Working interpretation:
+
+- `ttl_blck` is now a strong candidate for an advanced number-style entity or a
+  number-backed configuration surface
+- the same enable/value pattern likely applies to the sibling TTL fields, but
+  that is not yet proven for `ttl_spff` or `ttl_pass`
+- the remaining design choice is Home Assistant surface type, not whether the
+  upstream contract exists
+- current product direction is to surface TTL options only as advanced toggles,
+  using the upstream default numeric value on enable and `status = 0` on
+  disable, rather than exposing user-editable numeric controls
+
+### Engineering consequence
+
+- the repository should treat the main profile-options page as a separate
+  detail-driven profile-control family rather than as an extension of the
+  current high-cardinality entity surfaces
+- `opt.data[]` from `GET /profiles` remains useful for discovery, but it is not
+  sufficient as the write contract for the default rule
+- default-rule support should be implemented through a dedicated typed manager
+  path and dedicated API client methods rather than by overloading existing
+  filter, rule, or service logic
+- dedicated profile-option endpoints should be grouped into typed subfamilies
+  instead of one generic `set_option` abstraction in entity code:
+  - default-rule style action modes
+  - boolean option toggles
+  - valued option controls
+  - unresolved option controls that remain deferred until their read and enable
+    contracts are captured
+- `GET /profiles/options` should be treated as the authoritative discovery and
+  type catalog for the profile-option family, while profile-scoped option reads
+  and writes should be treated as the state and mutation contracts
+- `GET /profiles/{profile_id}/options` should be treated as the current best
+  candidate for the authoritative per-profile state source for option entities
+- the option normalizer should be written to support sparse state payloads and
+  resolve effective behavior by joining explicit profile values to upstream
+  catalog defaults
+- advanced options now split into three practical implementation buckets:
+  - proven advanced toggles
+  - mostly proven advanced selects with remaining label or off-state edge cases
+  - proven numeric fields that still need a final Home Assistant surface choice
+- current implementation narrows that further:
+  - TTL-style options are treated as advanced toggles only
+  - `ecs_subnet` stays excluded from entity exposure until its semantics are
+    fully closed
+
+### Implementation approach
+
+Current recommended implementation posture:
+
+- add a dedicated profile-options detail layer for main profile controls that
+  have their own endpoints, beginning with the default rule
+- model the default rule as a typed profile-scoped mode control backed by a
+  small explicit enum rather than by raw `do` integers in entity code
+- model option endpoints by typed key and payload family rather than by
+  hard-coded UI labels:
+  - boolean options can map cleanly to switches once read contracts are known
+  - valued options should use explicit enums or bounded value types owned by the
+    repository
+  - unresolved TTL-style controls should remain documented only until their full
+    write and read semantics are proven
+- add a typed option-catalog layer sourced from `GET /profiles/options` so the
+  runtime can separate upstream metadata from profile-specific current state
+- add a typed per-profile option-state layer sourced from
+  `GET /profiles/{profile_id}/options` and keyed by option `PK`
+- keep the API contract manager-owned:
+  - API client owns the `/profiles/{profile_id}/default` transport
+  - API client should own `GET /profiles/options` as typed catalog transport
+  - API client should own `GET /profiles/{profile_id}/options` as typed
+    profile-state transport
+  - API client should also own `/profiles/{profile_id}/options/{option_key}`
+    transport through typed helpers, not raw free-form dictionaries from entity
+    code
+  - profile manager owns validation, optimistic updates, and refresh behavior
+  - entities only present the mode and delegate writes
+- do not implement the default rule from write-only evidence alone; capture the
+  corresponding read contract before choosing the final Home Assistant surface
+  type or normalized runtime model
+- do not implement option entities from write-only evidence alone; capture the
+  read contracts for at least one boolean option, one valued option, and the
+  TTL-style controls before finalizing the normalized model
+- boolean and dropdown options are now close enough to begin implementation
+  once sparse-list semantics are confirmed on one more sample; TTL-style field
+  options still need more proof before code starts
+
+### Approved product direction for the first option slice
+
+The current preferred build direction for the integration is now:
+
+- always create and enable the following profile option entities for every
+  included profile:
+  - one default-rule select using Control D terminology:
+    - `Blocking`
+    - `Bypassing`
+    - `Redirecting`
+  - one AI Malware Filter select with options:
+    - `Off`
+    - `Minimal`
+    - `Standard`
+    - `Aggressive`
+  - one Safe Search toggle
+  - one Restricted Youtube toggle
+- add one per-profile flag in the edit-profile form to expose advanced profile
+  options
+- when that flag is enabled for a profile, create the remaining profile-option
+  entities for that profile in disabled-by-default entity-registry state
+
+Engineering consequence:
+
+- the first option slice should not wait for the full advanced option family to
+  be modeled before shipping user-visible value
+- AI Malware should be modeled as one select that includes `Off` as a first
+  class option instead of a split switch-plus-select surface
+- the default rule should also be modeled as one select rather than as paired
+  enablement and mode entities
+- advanced option exposure belongs in per-profile exposure policy, not in the
+  live option state model itself
+- the advanced-options flag should gate entity creation for the remaining
+  option family, while entity-registry defaults should keep those additional
+  entities disabled until the user opts into them explicitly
+- the advanced create list should include the proven advanced toggles and `b_resp`
+  but should exclude `ecs_subnet`
+- TTL options should be exposed only as advanced toggle entities, not as
+  editable number entities
+
+Current implementation recommendation:
+
+- treat the default rule as the first item in a new `profile option detail`
+  family
+- once the read payload is captured, prefer one profile-scoped select entity if
+  the surface is purely modal
+- if the read contract also exposes an independent enabled or disabled state,
+  split it into the same pattern used elsewhere: one switch for enablement and
+  one select for mode only if both concerns genuinely exist upstream
+
 Reusable pattern:
 
 - top-level options menu
@@ -1465,6 +1900,14 @@ These findings are strong enough to convert several planning topics from theory 
 - paused-profile reads should be normalized from either `disable` or `disable_ttl` into one internal paused-until field
 - user-facing profile entities should align to Control D terminology, including `Disable` for the profile-wide off surface
 - filters with both enabled state and mode should be modeled as two entities: a switch for enablement and a select for mode
+- main profile options with dedicated profile-scoped endpoints should be treated
+  as a separate typed control family instead of being forced into the filter,
+  service, or rule abstractions
+- option keys under `/profiles/{profile_id}/options/{option_key}` already break
+  down into distinct typed payload families and should not be modeled as one
+  generic Home Assistant surface
+- the initial always-on profile-option surface should be deliberately small:
+  default rule, AI Malware, Safe Search, and Restricted Youtube
 - high-cardinality profile surfaces should use a hierarchical naming pattern that includes type, category when available, and item name
 - endpoint scope should begin with one opt-in status-oriented entity whose additional details are carried by attributes rather than many separate endpoint sensors
 - profile-specific exposure policy is the right storage model for profile management state, endpoint-sensor toggles, service-category exposure, per-profile service auto-enable behavior, exposed custom-rule targets, and endpoint inactivity thresholds
@@ -1499,6 +1942,19 @@ These findings are strong enough to convert several planning topics from theory 
 - what exact count endpoint backs the blocked card total, since visible top-N filter and service rows undercount the displayed blocked-card value for the endpoint sample
 - whether the `Benign Blocks` denominator uses all blocked filter categories or another filtered subset beyond the currently visible ranked rows
 - which exact profile-backed controls should be summary-driven versus detail-driven in the first entity slice
+- whether any remaining main profile-options controls still rely on uncaptured
+  sibling endpoints beyond the now-proven `GET /profiles/{profile_id}/default`
+  and `GET /profiles/{profile_id}/options`
+- what allowed values and disabled-state semantics exist for `ecs_subnet`,
+  where `0` and `1` are now proven but the remaining `Custom` mapping and
+  `Off` semantics are still incomplete
+- whether the sibling TTL-style options (`ttl_spff`, `ttl_pass`) follow the
+  same enabled numeric-field contract now proven for `ttl_blck`
+- whether missing entries from `GET /profiles/{profile_id}/options` mean
+  disabled state, inherited default state, or only the absence of an explicit
+  override
+- the exact create list for advanced profile options once the per-profile
+  advanced-options exposure flag is enabled
 - whether billing product metadata should remain diagnostics-only or also surface on the instance system device
 - whether filter and service pause semantics can share the same target-resolution family as profile pause and resume
 - what immutable typed identity format is best for persisted grouped-rule selections
@@ -1517,3 +1973,7 @@ These findings are strong enough to convert several planning topics from theory 
 10. Capture companion requests around `v2/statistic/count/srcCountry` and the earlier protocol-filtered `v2/statistic/count` call so the repository can determine whether protocol filters are part of the visible sources-panel contract and whether the surface is instance-scoped or profile-scoped.
 11. Capture matching blocked-tab samples for `trigger=filter` and `trigger=service` both with and without `profileId` so the repository can lock the scope rules for ranked analytics breakdowns.
 12. Capture the direct blocked-card total query and one endpoint or profile sample where phishing is non-zero so the repository can confirm the exact `Benign Blocks` denominator and the full security-category mapping.
+13. Capture the remaining dedicated profile-option endpoints from the same web page so the repository can decide which controls belong in the next follow-on implementation slice and which should stay deferred.
+14. Capture one more `GET /profiles/{profile_id}/options` sample where a known toggle is off and one dropdown is unset so the repository can determine the semantics of missing entries in the sparse state list.
+15. Capture the remaining `ecs_subnet` `Custom` mapping and one sparse-state sample where the option is absent so the repository can close the `Off` versus `No ECS` interpretation.
+16. Capture the same enable and read behavior for `ttl_spff` and `ttl_pass` so the repository can confirm whether all TTL options share the numeric-field contract now proven for `ttl_blck`.

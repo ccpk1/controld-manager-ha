@@ -39,6 +39,7 @@
         "title": "{profile_name}",
         "data": {
           "managed_in_home_assistant": "Enable management in Home Assistant",
+          "advanced_profile_options": "Expose advanced profile options",
           "endpoint_sensors_enabled": "Generate endpoint sensors",
           "endpoint_inactivity_threshold_minutes": "Endpoint inactivity threshold (minutes)",
           "allowed_service_categories": "Allowed service categories",
@@ -47,6 +48,7 @@
         },
         "data_description": {
           "managed_in_home_assistant": "Turn off to exclude this profile and remove its entities from Home Assistant.",
+          "advanced_profile_options": "Create the remaining profile option entities for this profile in disabled-by-default state.",
           "endpoint_sensors_enabled": "Create telemetry entities for devices under this profile.",
           "endpoint_inactivity_threshold_minutes": "How long before an endpoint is marked as inactive.",
           "allowed_service_categories": "Select which categories to expose as service controls.",
@@ -101,7 +103,27 @@
   "entity": {
     "button": {
       "sync": {
-        "name": "Sync now"
+        "name": "Sync now",
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_instance_action": "Runs an on-demand synchronization for this Control D account"
+            }
+          }
+        }
+      }
+    },
+    "binary_sensor": {
+      "endpoint_status": {
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_endpoint_status": "Shows whether this endpoint is currently considered active based on the configured inactivity threshold"
+            }
+          }
+        }
       }
     },
     "sensor": {
@@ -111,18 +133,155 @@
           "healthy": "Healthy",
           "degraded": "Degraded",
           "problem": "Problem"
+        },
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_instance_status": "Shows the current refresh health and account status for this Control D integration"
+            }
+          }
         }
       },
       "profile_count": {
-        "name": "Profile count"
+        "name": "Profile count",
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_instance_summary": "Shows a summary count for the current Control D account"
+            }
+          }
+        }
       },
       "endpoint_count": {
-        "name": "Endpoint count"
+        "name": "Endpoint count",
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_instance_summary": "Shows a summary count for the current Control D account"
+            }
+          }
+        }
+      }
+    },
+    "select": {
+      "profile_filter_mode": {
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_profile_filter_mode": "Changes the enforcement mode for the selected profile filter"
+            }
+          }
+        }
+      },
+      "profile_service": {
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_profile_service": "Changes the action applied to the selected Control D service"
+            }
+          }
+        }
+      },
+      "profile_default_rule": {
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_profile_default_rule": "Changes the default action used for queries that do not match a more specific profile rule"
+            }
+          }
+        }
+      },
+      "profile_rule_group": {
+        "state": {
+          "off": "Off",
+          "block": "Block",
+          "bypass": "Bypass",
+          "redirect": "Redirect"
+        },
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_profile_rule_group": "Changes the folder-wide action for the selected custom rule folder"
+            }
+          }
+        }
+      },
+      "profile_option": {
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_profile_option": "Changes the selected Control D profile option"
+            }
+          }
+        }
       }
     },
     "switch": {
       "paused": {
-        "name": "Disable"
+        "name": "Disable",
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_profile_pause": "Pauses or resumes the selected Control D profile"
+            }
+          }
+        }
+      },
+      "profile_filter": {
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_profile_filter": "Enables or disables the selected Control D profile filter"
+            }
+          }
+        }
+      },
+      "profile_option": {
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_profile_option": "Enables or disables the selected Control D profile option"
+            }
+          }
+        }
+      },
+      "profile_rule": {
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_profile_rule": "Enables or disables the selected custom profile rule"
+            }
+          },
+          "action": {
+            "name": "Action",
+            "state": {
+              "block": "Block",
+              "bypass": "Bypass",
+              "redirect": "Redirect"
+            }
+          },
+          "comment": {
+            "name": "Comment"
+          },
+          "group": {
+            "name": "Folder"
+          },
+          "rule_identity": {
+            "name": "Rule identity"
+          }
+        }
       }
     }
   }

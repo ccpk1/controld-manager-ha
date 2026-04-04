@@ -68,7 +68,11 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
                 for profile_pk in included_profile_pks
             )
             if included_profile_pks:
+                option_catalog_task = (
+                    self._runtime.client.async_get_profile_option_catalog()
+                )
                 detail_results = await asyncio.gather(
+                    option_catalog_task,
                     *(
                         self._runtime.client.async_get_profile_detail(
                             profile_pk,
@@ -84,15 +88,22 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
                             ),
                         )
                         for profile_pk in sorted(included_profile_pks)
-                    )
+                    ),
                 )
+                option_catalog = detail_results[0]
+                profile_detail_results = detail_results[1:]
                 inventory = ControlDInventoryPayload(
                     user=inventory.user,
                     profiles=inventory.profiles,
                     devices=inventory.devices,
                     profile_details=dict(
-                        zip(sorted(included_profile_pks), detail_results, strict=True)
+                        zip(
+                            sorted(included_profile_pks),
+                            profile_detail_results,
+                            strict=True,
+                        )
                     ),
+                    option_catalog=tuple(option_catalog),
                     service_categories=tuple(
                         await (
                             self._runtime.client.async_get_service_categories()

@@ -10,6 +10,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 
+from .const import PURPOSE_INSTANCE_ACTION
 from .entity import ControlDManagerInstanceEntity
 from .models import ControlDManagerRuntime
 
@@ -56,7 +57,7 @@ class ControlDManagerSyncButton(ControlDManagerInstanceEntity, ButtonEntity):
 
     _attr_translation_key = "sync"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _purpose = "instance_action"
+    _purpose = PURPOSE_INSTANCE_ACTION
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
         """Initialize the manual sync button."""

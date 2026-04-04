@@ -5,8 +5,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import Entity
 
+from ..const import (
+    ADVANCED_PROFILE_OPTION_SELECTS,
+    ADVANCED_PROFILE_OPTION_TOGGLES,
+    CORE_PROFILE_OPTION_SELECTS,
+    CORE_PROFILE_OPTION_TOGGLES,
+    DOMAIN,
+)
 from ..models import ControlDRegistry
 from .base_manager import BaseManager
 
@@ -48,6 +56,7 @@ class EntityManager(BaseManager):
         """Synchronize a platform's live entities with the current registry."""
         registered = self._registered_platforms[platform]
         desired_keys = self._desired_keys(platform)
+        desired_unique_ids = self._desired_unique_ids(platform, desired_keys)
         live_keys = set(registered.live_entities)
 
         new_keys = desired_keys - live_keys
@@ -67,8 +76,44 @@ class EntityManager(BaseManager):
                 continue
             await entity.async_remove(force_remove=True)
 
+        self._async_remove_stale_registry_entries(platform, desired_unique_ids)
+
         if platform == "binary_sensor":
             await self._async_reconcile_endpoint_sensor_attachments()
+
+    def _desired_unique_ids(self, platform: str, desired_keys: set[str]) -> set[str]:
+        """Return the stable unique IDs that should exist for one platform."""
+        registered = self._registered_platforms[platform]
+        desired_unique_ids: set[str] = set()
+
+        for key in desired_keys:
+            entity = registered.live_entities.get(key)
+            if entity is None:
+                entity = registered.factory(key)
+            if entity.unique_id is None:
+                raise ValueError(
+                    f"Control D {platform} entity {key!r} did not expose a unique ID"
+                )
+            desired_unique_ids.add(entity.unique_id)
+
+        return desired_unique_ids
+
+    def _async_remove_stale_registry_entries(
+        self, platform: str, desired_unique_ids: set[str]
+    ) -> None:
+        """Remove stale registry-only entities for one platform."""
+        entity_registry = er.async_get(self.runtime.active_coordinator.hass)
+
+        for entity_entry in er.async_entries_for_config_entry(
+            entity_registry, self.runtime.entry_id
+        ):
+            if entity_entry.platform != DOMAIN or entity_entry.domain != platform:
+                continue
+            if not entity_entry.unique_id.startswith(f"{self.runtime.instance_id}::"):
+                continue
+            if entity_entry.unique_id in desired_unique_ids:
+                continue
+            entity_registry.async_remove(entity_entry.entity_id)
 
     def _desired_keys(self, platform: str) -> set[str]:
         """Return the desired entity keys for one platform."""
@@ -106,7 +151,23 @@ class EntityManager(BaseManager):
                     for filter_pk in self.runtime.registry.filters_by_profile.get(
                         profile_pk, {}
                     )
+                    if filter_pk != "ai_malware"
                 )
+                desired_keys.update(
+                    f"profile::{profile_pk}::option::{option_pk}"
+                    for option_pk in CORE_PROFILE_OPTION_TOGGLES
+                    if option_pk
+                    in self.runtime.registry.options_by_profile.get(profile_pk, {})
+                )
+                if self.runtime.options.profile_policy(
+                    profile_pk
+                ).advanced_profile_options:
+                    desired_keys.update(
+                        f"profile::{profile_pk}::option::{option_pk}"
+                        for option_pk in ADVANCED_PROFILE_OPTION_TOGGLES
+                        if option_pk
+                        in self.runtime.registry.options_by_profile.get(profile_pk, {})
+                    )
                 desired_keys.update(
                     f"profile::{profile_pk}::rule::{rule_identity}"
                     for rule_identity in self.runtime.options.profile_policy(
@@ -121,14 +182,39 @@ class EntityManager(BaseManager):
         if platform == "select":
             select_keys: set[str] = set()
             for profile_pk in included_profiles:
+                if profile_pk in self.runtime.registry.default_rules_by_profile:
+                    select_keys.add(f"profile::{profile_pk}::default_rule")
+                select_keys.update(
+                    f"profile::{profile_pk}::rule_group::{group_pk}"
+                    for group_pk in self.runtime.options.profile_policy(
+                        profile_pk
+                    ).exposed_rule_group_pks(
+                        self.runtime.registry.rule_groups_by_profile.get(profile_pk, {})
+                    )
+                )
                 profile_filters = self.runtime.registry.filters_by_profile.get(
                     profile_pk, {}
                 )
                 select_keys.update(
                     f"profile::{profile_pk}::filter_mode::{filter_pk}"
                     for filter_pk, filter_row in profile_filters.items()
-                    if filter_row.supports_modes
+                    if filter_row.supports_modes and filter_pk != "ai_malware"
                 )
+                select_keys.update(
+                    f"profile::{profile_pk}::option::{option_pk}"
+                    for option_pk in CORE_PROFILE_OPTION_SELECTS
+                    if option_pk
+                    in self.runtime.registry.options_by_profile.get(profile_pk, {})
+                )
+                if self.runtime.options.profile_policy(
+                    profile_pk
+                ).advanced_profile_options:
+                    select_keys.update(
+                        f"profile::{profile_pk}::option::{option_pk}"
+                        for option_pk in ADVANCED_PROFILE_OPTION_SELECTS
+                        if option_pk
+                        in self.runtime.registry.options_by_profile.get(profile_pk, {})
+                    )
                 select_keys.update(
                     f"profile::{profile_pk}::service::{service_pk}"
                     for service_pk in self.runtime.registry.services_by_profile.get(

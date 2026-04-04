@@ -11,6 +11,7 @@ from aiohttp import ClientSession
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.controld_manager.api.client import ControlDAPIClient
+from custom_components.controld_manager.config_flow import ControlDManagerOptionsFlow
 from custom_components.controld_manager.const import CONF_API_TOKEN, DOMAIN
 from custom_components.controld_manager.managers import (
     DeviceManager,
@@ -24,6 +25,44 @@ from custom_components.controld_manager.models import (
     ControlDOptions,
     ControlDProfileDetailPayload,
     ControlDRegistry,
+)
+
+OPTION_CATALOG = (
+    {
+        "PK": "ai_malware",
+        "title": "AI Malware Filter",
+        "description": "Blocks malicious domains using machine learning.",
+        "type": "dropdown",
+        "default_value": {"0.9": "Minimal", "0.7": "Standard", "0.5": "Aggressive"},
+        "info_url": "https://docs.controld.com/docs/ai-malware-filter",
+    },
+    {
+        "PK": "safesearch",
+        "title": "Safe Search",
+        "description": "Prevent search engines from showing mature content.",
+        "type": "toggle",
+        "default_value": 0,
+        "info_url": "https://docs.controld.com/docs/safe-search",
+    },
+    {
+        "PK": "b_resp",
+        "title": "Block Response",
+        "description": "Choose how to respond to blocked queries.",
+        "type": "dropdown",
+        "default_value": {
+            "0": "0.0.0.0 / ::",
+            "3": "NXDOMAIN",
+        },
+        "info_url": "https://docs.controld.com/docs/blocked-query-response",
+    },
+    {
+        "PK": "ttl_blck",
+        "title": "Block TTL",
+        "description": "DNS record TTL (in seconds) when blocking.",
+        "type": "field",
+        "default_value": 10,
+        "info_url": "https://docs.controld.com/docs/ttl-overrides",
+    },
 )
 
 
@@ -142,8 +181,15 @@ def test_integration_manager_preserves_filter_fallback_and_service_modes() -> No
                         "action": {"do": 0, "status": 1},
                     },
                 ),
+                options=(
+                    {"PK": "safesearch", "value": 1},
+                    {"PK": "ai_malware", "value": 0.9},
+                    {"PK": "ttl_blck", "value": 11},
+                ),
+                default_rule={"do": 1, "status": 1},
             )
         },
+        option_catalog=OPTION_CATALOG,
         service_categories=({"PK": "social", "name": "Social", "count": 1},),
         service_catalog=(
             {"PK": "truthsocial", "name": "Truth Social", "category": "social"},
@@ -172,9 +218,152 @@ def test_integration_manager_preserves_filter_fallback_and_service_modes() -> No
 
     filter_row = registry.filters_by_profile["profile-1"]["porn"]
     service_row = registry.services_by_profile["profile-1"]["truthsocial"]
+    default_rule_row = registry.default_rules_by_profile["profile-1"]
+    option_row = registry.options_by_profile["profile-1"]["ai_malware"]
+    toggle_row = registry.options_by_profile["profile-1"]["safesearch"]
+    ttl_row = registry.options_by_profile["profile-1"]["ttl_blck"]
     assert filter_row.effective_level_slug == "porn"
     assert filter_row.effective_level_title == "Relaxed"
     assert service_row.current_mode == "Blocked"
+    assert default_rule_row.current_mode == "Bypassing"
+    assert option_row.current_select_option == "Minimal"
+    assert toggle_row.is_enabled is True
+    assert ttl_row.entity_kind == "toggle"
+    assert ttl_row.default_value_key == "10"
+    assert ttl_row.is_enabled is True
+
+
+async def test_profile_option_write_payload_matches_browser_contract() -> None:
+    """Profile option writes should match the browser-verified option contract."""
+    async with ClientSession() as session:
+        client = ControlDAPIClient("token-value", session)
+
+        with patch.object(client, "_async_request", new=AsyncMock()) as async_request:
+            await client.async_set_profile_option(
+                "profile-1",
+                "ai_malware",
+                enabled=True,
+                value="0.7",
+            )
+
+    async_request.assert_awaited_once_with(
+        "PUT",
+        "/profiles/profile-1/options/ai_malware",
+        {"status": 1, "value": "0.7"},
+    )
+
+
+async def test_profile_default_rule_write_payload_matches_browser_contract() -> None:
+    """Default-rule writes should match the browser-verified contract."""
+    async with ClientSession() as session:
+        client = ControlDAPIClient("token-value", session)
+
+        with patch.object(client, "_async_request", new=AsyncMock()) as async_request:
+            await client.async_set_profile_default_rule(
+                "profile-1",
+                action_do=3,
+                via="LOCAL",
+            )
+
+    async_request.assert_awaited_once_with(
+        "PUT",
+        "/profiles/profile-1/default",
+        {"do": 3, "status": 1, "via": "LOCAL"},
+    )
+
+
+async def test_profile_group_write_payload_matches_browser_contract() -> None:
+    """Folder-rule writes should match the browser-verified group contract."""
+    async with ClientSession() as session:
+        client = ControlDAPIClient("token-value", session)
+
+        with patch.object(client, "_async_request", new=AsyncMock()) as async_request:
+            await client.async_set_profile_group(
+                "profile-1",
+                "3",
+                name="test folder - single allow rule",
+                enabled=True,
+                action_do=1,
+            )
+
+    async_request.assert_awaited_once_with(
+        "PUT",
+        "/profiles/profile-1/groups/3",
+        {
+            "name": "test folder - single allow rule",
+            "status": 1,
+            "do": 1,
+            "via": "-1",
+            "via_v6": "-1",
+        },
+    )
+
+
+async def test_profile_group_off_write_payload_matches_browser_contract() -> None:
+    """Folder-rule off writes should preserve enabled status and send do=-1."""
+    async with ClientSession() as session:
+        client = ControlDAPIClient("token-value", session)
+
+        with patch.object(client, "_async_request", new=AsyncMock()) as async_request:
+            await client.async_set_profile_group(
+                "profile-1",
+                "1",
+                name="test folder",
+                enabled=True,
+                action_do=-1,
+            )
+
+    async_request.assert_awaited_once_with(
+        "PUT",
+        "/profiles/profile-1/groups/1",
+        {
+            "name": "test folder",
+            "status": 1,
+            "do": -1,
+            "via": "-1",
+            "via_v6": "-1",
+        },
+    )
+
+
+async def test_ttl_option_toggle_restore_uses_catalog_default() -> None:
+    """TTL toggles should restore the catalog default value when re-enabled."""
+
+    def _consume_task(coro: Any) -> None:
+        coro.close()
+
+    profile_manager = ProfileManager()
+    runtime = cast(
+        Any,
+        SimpleNamespace(
+            client=SimpleNamespace(async_set_profile_option=AsyncMock()),
+            registry=SimpleNamespace(
+                options_by_profile={
+                    "profile-1": {
+                        "ttl_blck": IntegrationManager._normalize_profile_options(
+                            OPTION_CATALOG,
+                            ({"PK": "ttl_blck", "value": 11},),
+                        )["ttl_blck"]
+                    }
+                }
+            ),
+            active_coordinator=SimpleNamespace(
+                async_update_listeners=lambda: None,
+                hass=SimpleNamespace(async_create_task=_consume_task),
+                async_refresh=AsyncMock(),
+            ),
+        ),
+    )
+    profile_manager.attach_runtime(runtime)
+
+    await profile_manager.async_set_profile_option_toggle("profile-1", "ttl_blck", True)
+
+    runtime.client.async_set_profile_option.assert_awaited_once_with(
+        "profile-1",
+        "ttl_blck",
+        enabled=True,
+        value="10",
+    )
 
 
 async def test_filter_write_payload_matches_browser_contract() -> None:
@@ -215,6 +404,10 @@ async def test_setup_entry_creates_entry_scoped_runtime(hass) -> None:
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
             new=AsyncMock(return_value=ControlDProfileDetailPayload()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=[]),
         ),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -259,14 +452,19 @@ async def test_options_flow_saves_typed_profile_policy(hass) -> None:
         ),
         patch(
             "custom_components.controld_manager.config_flow.ControlDAPIClient.async_get_profile_groups",
-            new=AsyncMock(return_value=[{"PK": 1, "group": "Allow folder"}]),
+            new=AsyncMock(
+                return_value=[
+                    {"PK": 1, "group": "Allow folder", "action": {"do": 1}},
+                    {"PK": 2, "group": "Block folder", "action": {"do": 0}},
+                ]
+            ),
         ),
         patch(
             "custom_components.controld_manager.config_flow.ControlDAPIClient.async_get_profile_rules",
             new=AsyncMock(
                 return_value=[
-                    {"PK": "example.com", "group": 0},
-                    {"PK": "example2.com", "group": 1},
+                    {"PK": "example.com", "group": 0, "action": {"do": 0}},
+                    {"PK": "example2.com", "group": 1, "action": {"do": 1}},
                 ]
             ),
         ),
@@ -289,6 +487,7 @@ async def test_options_flow_saves_typed_profile_policy(hass) -> None:
             flow_id,
             {
                 "managed_in_home_assistant": True,
+                "advanced_profile_options": True,
                 "endpoint_sensors_enabled": True,
                 "endpoint_inactivity_threshold_minutes": 20,
                 "allowed_service_categories": ["audio"],
@@ -318,6 +517,7 @@ async def test_options_flow_saves_typed_profile_policy(hass) -> None:
     assert entry.options["endpoint_analytics_interval_minutes"] == 7
     assert entry.options["profile_policies"]["profile-1"] == {
         "managed_in_home_assistant": True,
+        "advanced_profile_options": True,
         "endpoint_sensors_enabled": True,
         "endpoint_inactivity_threshold_minutes": 20,
         "allowed_service_categories": ["audio"],
@@ -326,6 +526,48 @@ async def test_options_flow_saves_typed_profile_policy(hass) -> None:
     }
 
     assert entry.options["profile_policies"].get("profile-2") is None
+
+
+async def test_options_flow_rule_choice_labels_include_scope_and_action(hass) -> None:
+    """Rule selectors should show folder context and action labels."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    flow = ControlDManagerOptionsFlow(entry)
+    flow.hass = hass
+
+    with (
+        patch(
+            "custom_components.controld_manager.config_flow.ControlDAPIClient.async_get_profile_groups",
+            new=AsyncMock(
+                return_value=[
+                    {"PK": 1, "group": "Allow folder", "action": {"do": 1}},
+                    {"PK": 2, "group": "Block folder", "action": {"do": 0}},
+                ]
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.config_flow.ControlDAPIClient.async_get_profile_rules",
+            new=AsyncMock(
+                return_value=[
+                    {"PK": "example.com", "group": 0, "action": {"do": 0}},
+                    {"PK": "example2.com", "group": 1, "action": {"do": 1}},
+                ]
+            ),
+        ),
+    ):
+        choices = await flow._async_get_rule_target_choices("profile-1")
+
+    assert choices["group:1"] == "📁✅ Allow folder (Bypass)"
+    assert choices["group:2"] == "📁⛔ Block folder (Block)"
+    assert choices["rule:root|example.com"] == "⛔ example.com (Block)"
+    assert (
+        choices["rule:group:1|example2.com"]
+        == "📁 Allow folder / ↳ ✅ example2.com (Bypass)"
+    )
 
 
 async def test_entity_manager_skips_remove_for_unattached_entity() -> None:
