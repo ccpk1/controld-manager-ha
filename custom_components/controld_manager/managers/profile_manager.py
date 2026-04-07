@@ -93,16 +93,21 @@ class ProfileManager(BaseManager):
         self, profile_pk: str, filter_pk: str, enabled: bool
     ) -> None:
         """Enable or disable one profile filter."""
-        await self.async_set_filters_enabled({profile_pk: filter_pk}, enabled)
+        await self.async_set_filters_enabled(
+            {profile_pk: frozenset({filter_pk})}, enabled
+        )
 
     async def async_set_filters_enabled(
-        self, profile_filters: dict[str, str], enabled: bool
+        self, profile_filters: dict[str, frozenset[str]], enabled: bool
     ) -> None:
-        """Enable or disable one filter across one or more targeted profiles."""
+        """Enable or disable one or more filters across targeted profiles."""
         updated_filters: list[tuple[str, str, ControlDFilter]] = []
-        for profile_pk, filter_pk in profile_filters.items():
-            filter_row = self.runtime.registry.filters_by_profile[profile_pk][filter_pk]
-            updated_filters.append((profile_pk, filter_pk, filter_row))
+        for profile_pk, filter_pks in profile_filters.items():
+            for filter_pk in filter_pks:
+                filter_row = self.runtime.registry.filters_by_profile[profile_pk][
+                    filter_pk
+                ]
+                updated_filters.append((profile_pk, filter_pk, filter_row))
 
         await asyncio.gather(
             *(

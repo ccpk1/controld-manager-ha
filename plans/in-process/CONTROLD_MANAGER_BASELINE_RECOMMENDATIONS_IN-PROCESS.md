@@ -228,6 +228,12 @@ Current Phase 6 service posture:
 	account device as a profile target
 - the shared profile-target helper path is now the expected reuse base for any
 	future profile-scoped bulk service
+- `set_filter_state` now follows the same explicit profile-target contract and
+	adds explicit `filter_id` and `filter_name` selectors, with ID precedence for
+	both profile and filter selection paths
+- `get_catalog` now provides one read-only response service for `filters`,
+	`services`, `rules`, and `profile_options`, with required `catalog_type`
+	selection and optional entry or profile scoping
 
 Phase 5 required research closeouts before code for that specific surface starts:
 

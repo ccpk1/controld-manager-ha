@@ -209,13 +209,13 @@ class IntegrationManager(BaseManager):
             category_pk = IntegrationManager._require_string(payload, "category")
             if category_pk not in enabled_categories:
                 continue
-            service_pk = IntegrationManager._require_string(payload, "PK")
+            service_pk = IntegrationManager._require_text(payload, "PK")
             live_payload = live_services.get(service_pk, {})
             action = IntegrationManager._mapping_or_empty(live_payload.get("action"))
             category_name = service_categories.get(category_pk)
             services[service_pk] = ControlDService(
                 service_pk=service_pk,
-                name=IntegrationManager._require_string(payload, "name"),
+                name=IntegrationManager._require_text(payload, "name"),
                 category_pk=category_pk,
                 category_name=(
                     category_name.name
@@ -395,6 +395,18 @@ class IntegrationManager(BaseManager):
         if not isinstance(value, str) or not value:
             raise ValueError(f"Payload is missing required string field {key!r}")
         return value
+
+    @staticmethod
+    def _require_text(payload: dict[str, Any], key: str) -> str:
+        """Return a required payload field as text, allowing numeric IDs."""
+        value = payload.get(key)
+        if isinstance(value, bool) or value is None:
+            raise ValueError(f"Payload is missing required string field {key!r}")
+        if isinstance(value, int | float):
+            return format(value, "g")
+        if isinstance(value, str) and value:
+            return value
+        raise ValueError(f"Payload is missing required string field {key!r}")
 
     @staticmethod
     def _optional_string(value: Any) -> str | None:

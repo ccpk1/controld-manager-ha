@@ -9,7 +9,7 @@ import pytest
 import voluptuous as vol
 from homeassistant.components.select import ATTR_OPTION
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
+from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -21,11 +21,14 @@ from custom_components.controld_manager.const import (
     DOMAIN,
     SERVICE_DISABLE_PROFILE,
     SERVICE_ENABLE_PROFILE,
+    SERVICE_FIELD_CATALOG_TYPE,
     SERVICE_FIELD_ENABLED,
+    SERVICE_FIELD_FILTER_ID,
     SERVICE_FIELD_FILTER_NAME,
     SERVICE_FIELD_MINUTES,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
+    SERVICE_GET_CATALOG,
     SERVICE_SET_FILTER_STATE,
 )
 from custom_components.controld_manager.diagnostics import (
@@ -1726,8 +1729,8 @@ async def test_set_filter_state_supports_raw_filter_key(hass) -> None:
         DOMAIN,
         SERVICE_SET_FILTER_STATE,
         {
-            "config_entry_name": "Control D Home",
-            SERVICE_FIELD_FILTER_NAME: "ads",
+            SERVICE_FIELD_PROFILE_NAME: ["Primary", "Secondary"],
+            SERVICE_FIELD_FILTER_ID: "ads",
             SERVICE_FIELD_ENABLED: False,
         },
         blocking=True,
@@ -1740,8 +1743,8 @@ async def test_set_filter_state_supports_raw_filter_key(hass) -> None:
     )
 
 
-async def test_set_filter_state_supports_user_facing_name(hass) -> None:
-    """The filter service should resolve a user-facing filter name."""
+async def test_set_filter_state_supports_user_facing_names(hass) -> None:
+    """The filter service should resolve one or more user-facing names."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
@@ -1763,8 +1766,40 @@ async def test_set_filter_state_supports_user_facing_name(hass) -> None:
         DOMAIN,
         SERVICE_SET_FILTER_STATE,
         {
-            ATTR_DEVICE_ID: [profile_device.id],
-            SERVICE_FIELD_FILTER_NAME: "ads & trackers",
+            SERVICE_FIELD_PROFILE_ID: [profile_device.id],
+            SERVICE_FIELD_FILTER_NAME: ["ads & trackers", "Community List"],
+            SERVICE_FIELD_ENABLED: True,
+        },
+        blocking=True,
+    )
+
+    assert runtime.client.async_set_profile_filter.await_count == 2
+    assert {
+        call.args[1] for call in runtime.client.async_set_profile_filter.await_args_list
+    } == {"ads", "x-community"}
+
+
+async def test_set_filter_state_prefers_filter_ids_over_names(hass) -> None:
+    """The filter service should use raw filter IDs before names."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_filter = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_FILTER_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_FILTER_ID: ["ads"],
+            SERVICE_FIELD_FILTER_NAME: ["Community List"],
             SERVICE_FIELD_ENABLED: True,
         },
         blocking=True,
@@ -1772,6 +1807,78 @@ async def test_set_filter_state_supports_user_facing_name(hass) -> None:
 
     runtime.client.async_set_profile_filter.assert_awaited_once()
     assert runtime.client.async_set_profile_filter.await_args.args[1] == "ads"
+
+
+async def test_set_filter_state_prefers_config_entry_id_over_name(hass) -> None:
+    """The filter service should use Integration ID before Integration name."""
+    entry_one = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-one", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry_two = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-two", "entry_name": "Control D Cabin"},
+        unique_id="user-456",
+        title="Control D Cabin",
+    )
+    entry_one.add_to_hass(hass)
+    entry_two.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(
+                side_effect=[
+                    _inventory("user-123", "profile-1"),
+                    _inventory("user-456", "profile-1"),
+                ]
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry_one.entry_id)
+        await hass.async_block_till_done()
+        if entry_two.state is ConfigEntryState.NOT_LOADED:
+            assert await hass.config_entries.async_setup(entry_two.entry_id)
+            await hass.async_block_till_done()
+
+    entry_one.runtime_data.client.async_set_profile_filter = AsyncMock()
+    entry_one.runtime_data.coordinator.async_refresh = AsyncMock()
+    entry_two.runtime_data.client.async_set_profile_filter = AsyncMock()
+    entry_two.runtime_data.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_FILTER_STATE,
+        {
+            "config_entry_id": entry_one.entry_id,
+            "config_entry_name": "Control D Cabin",
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_FILTER_ID: ["ads"],
+            SERVICE_FIELD_ENABLED: False,
+        },
+        blocking=True,
+    )
+
+    entry_one.runtime_data.client.async_set_profile_filter.assert_awaited_once()
+    entry_two.runtime_data.client.async_set_profile_filter.assert_not_awaited()
 
 
 async def test_set_filter_state_rejects_unknown_filter_name(hass) -> None:
@@ -1789,7 +1896,7 @@ async def test_set_filter_state_rejects_unknown_filter_name(hass) -> None:
             DOMAIN,
             SERVICE_SET_FILTER_STATE,
             {
-                "config_entry_name": "Control D Home",
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
                 SERVICE_FIELD_FILTER_NAME: "not-a-real-filter",
                 SERVICE_FIELD_ENABLED: True,
             },
@@ -1823,18 +1930,328 @@ async def test_set_filter_state_supports_external_filter_without_entity(hass) ->
         DOMAIN,
         SERVICE_SET_FILTER_STATE,
         {
-            "config_entry_name": "Control D Home",
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
             SERVICE_FIELD_FILTER_NAME: "Community List",
             SERVICE_FIELD_ENABLED: True,
         },
         blocking=True,
     )
 
-    assert runtime.client.async_set_profile_filter.await_count == 2
-    assert all(
-        call.args[1] == "x-community"
-        for call in runtime.client.async_set_profile_filter.await_args_list
+    runtime.client.async_set_profile_filter.assert_awaited_once()
+    assert runtime.client.async_set_profile_filter.await_args.args[1] == "x-community"
+
+
+async def test_set_filter_state_requires_profile_selector(hass) -> None:
+    """The filter service should require a profile ID or profile name."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
     )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_FILTER_STATE,
+            {SERVICE_FIELD_FILTER_ID: ["ads"], SERVICE_FIELD_ENABLED: True},
+            blocking=True,
+        )
+
+
+async def test_set_filter_state_requires_filter_selector(hass) -> None:
+    """The filter service should require a filter ID or filter name."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_FILTER_STATE,
+            {SERVICE_FIELD_PROFILE_NAME: "Primary", SERVICE_FIELD_ENABLED: True},
+            blocking=True,
+        )
+
+
+async def test_set_filter_state_rejects_entity_targets(hass) -> None:
+    """The filter service should not accept generic entity targets."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    filter_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::filter::ads"
+    )
+
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_FILTER_STATE,
+            {
+                ATTR_ENTITY_ID: [filter_entity_id],
+                SERVICE_FIELD_FILTER_ID: ["ads"],
+                SERVICE_FIELD_ENABLED: False,
+            },
+            blocking=True,
+        )
+
+
+async def test_get_catalog_returns_filters(hass) -> None:
+    """The catalog service should return native filters before 3rd-party filters."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_GET_CATALOG,
+        {SERVICE_FIELD_CATALOG_TYPE: "filters", SERVICE_FIELD_PROFILE_NAME: "Primary"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert response["catalog_type"] == "filters"
+    items = response["items"]
+    assert items[0]["filter_id"] == "ads"
+    assert items[0]["external"] is False
+    assert items[-1]["filter_id"] == "x-community"
+    assert items[-1]["external"] is True
+    assert "ads, Ads & Trackers" in response["text"]
+    assert "x-community, Community List" in response["text"]
+
+
+async def test_get_catalog_returns_services(hass) -> None:
+    """The catalog service should return service rows for the selected scope."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_services",
+            new=AsyncMock(
+                side_effect=lambda profile_pk: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=True,
+                        include_rules=False,
+                    ).services
+                )
+            ),
+        ),
+    ):
+        response = await hass.services.async_call(
+            DOMAIN,
+            SERVICE_GET_CATALOG,
+            {
+                SERVICE_FIELD_CATALOG_TYPE: "services",
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+            },
+            blocking=True,
+            return_response=True,
+        )
+
+    assert response["catalog_type"] == "services"
+    assert response["items"][0]["service_id"] == "amazonmusic"
+    assert response["items"][0]["category_name"] == "Audio"
+    assert "amazonmusic, Amazon Music, Audio" in response["text"]
+
+
+async def test_get_catalog_returns_rules(hass) -> None:
+    """The catalog service should return both groups and rules."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_groups",
+            new=AsyncMock(
+                side_effect=lambda profile_pk: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=False,
+                        include_rules=True,
+                    ).groups
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_rules",
+            new=AsyncMock(
+                side_effect=lambda profile_pk: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=False,
+                        include_rules=True,
+                    ).rules
+                )
+            ),
+        ),
+    ):
+        response = await hass.services.async_call(
+            DOMAIN,
+            SERVICE_GET_CATALOG,
+            {
+                SERVICE_FIELD_CATALOG_TYPE: "rules",
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+            },
+            blocking=True,
+            return_response=True,
+        )
+
+    assert response["catalog_type"] == "rules"
+    assert any(item["item_type"] == "group" for item in response["items"])
+    assert any(item["item_type"] == "rule" for item in response["items"])
+
+
+async def test_get_catalog_returns_profile_options(hass) -> None:
+    """The catalog service should return normalized profile options."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_GET_CATALOG,
+        {
+            SERVICE_FIELD_CATALOG_TYPE: "profile_options",
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+        },
+        blocking=True,
+        return_response=True,
+    )
+
+    assert response["catalog_type"] == "profile_options"
+    assert any(item["option_id"] == "ai_malware" for item in response["items"])
+    assert any(
+        "ai_malware, AI Malware Filter" in line
+        for line in response["text"].splitlines()
+    )
+
+
+async def test_get_catalog_defaults_to_all_profiles_in_single_entry(hass) -> None:
+    """The catalog service should return all managed profiles for one entry."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_GET_CATALOG,
+        {SERVICE_FIELD_CATALOG_TYPE: "filters"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert len(response["profiles"]) == 2
+
+
+async def test_get_catalog_requires_explicit_entry_when_multiple_loaded(hass) -> None:
+    """The catalog service should require entry disambiguation when needed."""
+    entry_one = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-one", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry_two = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-two", "entry_name": "Control D Cabin"},
+        unique_id="user-456",
+        title="Control D Cabin",
+    )
+    entry_one.add_to_hass(hass)
+    entry_two.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(
+                side_effect=[
+                    _inventory("user-123", "profile-1"),
+                    _inventory("user-456", "profile-1"),
+                ]
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry_one.entry_id)
+        await hass.async_block_till_done()
+        if entry_two.state is ConfigEntryState.NOT_LOADED:
+            assert await hass.config_entries.async_setup(entry_two.entry_id)
+            await hass.async_block_till_done()
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_GET_CATALOG,
+            {SERVICE_FIELD_CATALOG_TYPE: "filters"},
+            blocking=True,
+            return_response=True,
+        )
 
 
 async def test_external_filter_entities_are_disabled_by_default_when_exposed(

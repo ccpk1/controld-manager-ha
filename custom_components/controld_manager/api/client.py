@@ -162,7 +162,57 @@ class ControlDAPIClient:
     async def async_get_service_catalog(self) -> list[dict[str, Any]]:
         """Fetch the full service catalog."""
         payload = await self._async_get_json("/services/categories/all")
-        return self._extract_body_list(payload, "services")
+        body = self._extract_body_mapping(payload)
+
+        services_or_categories = body.get("services")
+        if isinstance(services_or_categories, list):
+            return self._normalize_service_catalog_rows(services_or_categories)
+
+        categories = body.get("categories")
+        if isinstance(categories, list):
+            return self._normalize_service_catalog_rows(categories)
+
+        raise ControlDApiResponseError(
+            "Control D response body is missing the expected 'services' or "
+            "'categories' list"
+        )
+
+    def _normalize_service_catalog_rows(
+        self, rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Normalize mixed flat and category-grouped service catalogs."""
+        services: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ControlDApiResponseError(
+                    "Control D response service catalog must contain only mappings"
+                )
+
+            nested_services = row.get("services")
+            if isinstance(nested_services, list):
+                category_pk = self._optional_string(row.get("PK"))
+                if category_pk is None:
+                    category_pk = self._optional_string(row.get("category"))
+                if category_pk is None:
+                    raise ControlDApiResponseError(
+                        "Control D category payload is missing the expected "
+                        "category identifier"
+                    )
+
+                for service in nested_services:
+                    if not isinstance(service, dict):
+                        raise ControlDApiResponseError(
+                            "Control D category service rows must contain only mappings"
+                        )
+
+                    normalized_service = dict(service)
+                    normalized_service.setdefault("category", category_pk)
+                    services.append(normalized_service)
+                continue
+
+            services.append(dict(row))
+
+        return services
 
     async def async_get_user(self) -> dict[str, Any]:
         """Fetch the authenticated Control D user payload."""

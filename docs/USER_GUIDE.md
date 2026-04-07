@@ -237,6 +237,7 @@ The integration currently registers these Home Assistant services:
 - `controld_manager.disable_profile`
 - `controld_manager.enable_profile`
 - `controld_manager.set_filter_state`
+- `controld_manager.get_catalog`
 
 ### Enable and disable profile services
 
@@ -263,9 +264,64 @@ Manual examples:
 - enable one profile by device-based profile selection:
 	`profile_id: ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0"]`
 
-`controld_manager.set_filter_state` accepts either the raw filter key or the
-user-facing filter name. It also works for 3rd-party filters even when their
-entities are not exposed in Home Assistant.
+### Filter state service
+
+`controld_manager.set_filter_state` now uses the same profile-targeting rules as
+the enable and disable profile services.
+
+- select profiles with `profile_id` or `profile_name`
+- `profile_id` wins if both profile selectors are provided
+- select filters with `filter_id` or `filter_name`
+- `filter_id` wins if both filter selectors are provided
+- `config_entry_id` and `config_entry_name` remain optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+
+This service does not accept generic entity targets, and it continues to work
+for 3rd-party filters even when their entities are not exposed in Home
+Assistant.
+
+Manual examples:
+
+- disable two filters by raw IDs for two profiles:
+	`profile_name: ["Primary", "Kids"]`
+	`filter_id: ["ads", "x-community"]`
+	`enabled: false`
+- enable one filter by user-facing name:
+	`profile_id: ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0"]`
+	`filter_name: ["Ads & Trackers"]`
+	`enabled: true`
+
+### Catalog service
+
+`controld_manager.get_catalog` is a read-only response service that returns a
+copyable catalog for one of these Control D data families:
+
+- `filters`
+- `services`
+- `rules`
+- `profile_options`
+
+Targeting rules:
+
+- `catalog_type` is required
+- `profile_id` and `profile_name` are optional
+- if both profile selectors are provided, `profile_id` wins
+- leave both profile selectors empty to return all managed profiles in the
+	selected config entry scope
+- `config_entry_id` and `config_entry_name` remain optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+
+The service response includes:
+
+- `profiles` for the selected scope
+- typed `items` for the requested catalog family
+- a plain-text `text` block that is easy to copy into service calls or notes
+
+Manual example:
+
+- return the available service catalog for one managed profile:
+	`catalog_type: services`
+	`profile_name: ["Primary"]`
 
 ## Runtime behavior
 

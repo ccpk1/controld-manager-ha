@@ -85,13 +85,16 @@
       "message": "The selected Control D config entry is not currently loaded."
     },
     "multiple_entries_loaded": {
-      "message": "More than one Control D config entry is loaded. Select a specific config entry or target a profile switch entity."
+      "message": "More than one Control D config entry is loaded. Select a specific config entry or select profiles by ID or name."
     },
     "wrong_integration_entry": {
       "message": "The selected config entry does not belong to Control D Manager."
     },
     "profile_target_required": {
-      "message": "Select a Control D entity, device, config entry ID, or config entry name."
+      "message": "Select at least one Control D profile by ID or name."
+    },
+    "filter_target_required": {
+      "message": "Select at least one Control D filter by ID or name."
     },
     "profile_target_not_found": {
       "message": "The selected Control D profile target could not be resolved."
@@ -100,10 +103,10 @@
       "message": "The selected Control D profile target is ambiguous or belongs to a different config entry."
     },
     "filter_name_not_found": {
-      "message": "The selected Control D filter name could not be resolved for one or more targeted profiles."
+      "message": "The selected Control D filter target could not be resolved for one or more targeted profiles."
     },
     "filter_name_ambiguous": {
-      "message": "The selected Control D filter name matches more than one filter. Use a more specific raw filter key."
+      "message": "The selected Control D filter target matches more than one filter. Use raw filter IDs when names are ambiguous."
     }
   },
   "services": {
@@ -117,7 +120,7 @@
         },
         "profile_name": {
           "name": "Profile names",
-          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names. When entering values manually, use a quoted list such as [\"Primary\", \"Kids\"]."
+          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids."
         },
         "minutes": {
           "name": "Minutes",
@@ -143,7 +146,7 @@
         },
         "profile_name": {
           "name": "Profile names",
-          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names. When entering values manually, use a quoted list such as [\"Primary\", \"Kids\"]."
+          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids."
         },
         "config_entry_id": {
           "name": "Configuration Entry ID",
@@ -157,19 +160,53 @@
     },
     "set_filter_state": {
       "name": "Set filter state",
-      "description": "Enable or disable one Control D filter by raw key or user-facing name across the targeted profiles.",
+      "description": "Enable or disable one or more Control D filters by raw key or user-facing name across the selected profiles.",
       "fields": {
-        "device_id": {
-          "name": "Profiles",
-          "description": "Optional. Select one or more managed Control D profiles. The Control D account device is not a valid target for this service."
+        "profile_id": {
+          "name": "Select a profile",
+          "description": "Required unless you provide Profile names. Select one or more managed Control D profiles by ID. If Profile IDs and Profile names are both provided, Profile IDs take precedence."
+        },
+        "profile_name": {
+          "name": "Profile names",
+          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids."
+        },
+        "filter_id": {
+          "name": "Filter IDs",
+          "description": "Required unless you provide Filter names. Enter one or more raw Control D filter IDs, such as ads,x-community. If Filter IDs and Filter names are both provided, Filter IDs take precedence."
         },
         "filter_name": {
-          "name": "Filter name",
-          "description": "Use either the raw Control D filter key, such as ads, or the user-facing filter name, such as Ads & Trackers."
+          "name": "Filter names",
+          "description": "Required unless you provide Filter IDs. Enter one or more user-facing Control D filter names, separated by commas, such as Ads & Trackers,Community List."
         },
         "enabled": {
           "name": "Enabled",
-          "description": "Turn the selected filter on or off for the targeted profiles."
+          "description": "Turn the selected filters on or off for the targeted profiles."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "get_catalog": {
+      "name": "Get catalog",
+      "description": "Return a copyable catalog of filters, services, rules, or profile options for the selected Control D scope.",
+      "fields": {
+        "catalog_type": {
+          "name": "Catalog type",
+          "description": "Select which Control D catalog to return."
+        },
+        "profile_id": {
+          "name": "Select a profile",
+          "description": "Optional. Select one or more managed Control D profiles by ID. If Profile IDs and Profile names are both provided, Profile IDs take precedence. Leave both profile selectors empty to return all managed profiles in the selected config entry scope."
+        },
+        "profile_name": {
+          "name": "Profile names",
+          "description": "Optional. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids. Leave both profile selectors empty to return all managed profiles in the selected config entry scope."
         },
         "config_entry_id": {
           "name": "Configuration Entry ID",

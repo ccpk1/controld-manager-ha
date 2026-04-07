@@ -27,3 +27,115 @@ async def test_client_normalizes_documented_envelopes() -> None:
     )
     with patch.object(client, "_async_get_json", devices_request):
         assert await client.async_get_devices() == [{"device_id": "device-1"}]
+
+
+async def test_client_flattens_nested_service_catalog() -> None:
+    """Normalize nested category catalogs into flat service rows."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    service_catalog_request = AsyncMock(
+        return_value={
+            "body": {
+                "categories": [
+                    {
+                        "PK": "audio",
+                        "name": "Audio",
+                        "services": [
+                            {
+                                "PK": "amazonmusic",
+                                "name": "Amazon Music",
+                                "unlock_location": "JFK",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+    with patch.object(client, "_async_get_json", service_catalog_request):
+        assert await client.async_get_service_catalog() == [
+            {
+                "PK": "amazonmusic",
+                "name": "Amazon Music",
+                "unlock_location": "JFK",
+                "category": "audio",
+            }
+        ]
+
+
+async def test_client_flattens_nested_service_catalog_under_services_key() -> None:
+    """Normalize nested category groups even when they are stored under services."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    service_catalog_request = AsyncMock(
+        return_value={
+            "body": {
+                "services": [
+                    {
+                        "category": "audio",
+                        "name": "Audio",
+                        "services": [
+                            {
+                                "PK": "amazonmusic",
+                                "name": "Amazon Music",
+                                "unlock_location": "JFK",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+    with patch.object(client, "_async_get_json", service_catalog_request):
+        assert await client.async_get_service_catalog() == [
+            {
+                "PK": "amazonmusic",
+                "name": "Amazon Music",
+                "unlock_location": "JFK",
+                "category": "audio",
+            }
+        ]
+
+
+async def test_client_preserves_mixed_flat_and_nested_service_rows() -> None:
+    """Normalize service catalogs that mix flat rows with nested category groups."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    service_catalog_request = AsyncMock(
+        return_value={
+            "body": {
+                "services": [
+                    {
+                        "PK": "amazonmusic",
+                        "name": "Amazon Music",
+                        "category": "audio",
+                    },
+                    {
+                        "category": "shop",
+                        "name": "Shop",
+                        "services": [
+                            {
+                                "PK": 1688,
+                                "name": 1688,
+                                "unlock_location": "JFK",
+                            }
+                        ],
+                    },
+                ]
+            }
+        }
+    )
+    with patch.object(client, "_async_get_json", service_catalog_request):
+        assert await client.async_get_service_catalog() == [
+            {
+                "PK": "amazonmusic",
+                "name": "Amazon Music",
+                "category": "audio",
+            },
+            {
+                "PK": 1688,
+                "name": 1688,
+                "unlock_location": "JFK",
+                "category": "shop",
+            },
+        ]

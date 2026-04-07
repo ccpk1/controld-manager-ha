@@ -5,25 +5,35 @@
 
 # Control D Manager
 
-> Cloud-first Home Assistant integration scaffold for the Control D DNS service.
+> Cloud-first Home Assistant custom integration for the Control D DNS service.
 
-Control D Manager is a repository-first baseline for a future Home Assistant integration targeting Control D. This repository intentionally focuses on structure, documentation, planning, validation, and collaboration surfaces before implementation begins.
+Control D Manager is a standalone Home Assistant custom integration for managing
+one Control D account per config entry. The repository still carries planning
+and architecture artifacts, but it now includes a working runtime, config flow,
+entity surfaces, service layer, and validation coverage.
 
 ## Why this repository exists
 
-The goal is to start from a high-quality custom integration baseline rather than from an empty folder.
+The goal is to keep Control D support in a focused standalone repository with a
+high-quality Home Assistant integration baseline.
 
-This repository carries forward the working repository standards from Firewalla Local while aiming the eventual integration architecture toward Control D's cloud DNS model. The future runtime direction is expected to resemble the Home Assistant NextDNS integration most closely, with selective ideas borrowed from AdGuard Home and Pi-hole where they improve service ergonomics or user control.
+This repository carries forward the working repository standards from
+Firewalla Local while adapting the runtime and service model to Control D's
+cloud DNS API.
 
 ## Current status
 
-This is an implementation scaffold, not a finished integration.
+This is an implemented custom integration with active runtime behavior.
 
-- repository structure is in place
-- Home Assistant custom component package is scaffolded
-- standards and architecture documents are adapted for Control D
-- planning artifacts capture the recommended product direction
-- implementation of the actual Control D API client, config flow, entities, and services is intentionally deferred
+- one config entry represents one authenticated Control D instance
+- one Home Assistant device is created for the account and one per managed
+	profile
+- filters, services, rules, profile options, and endpoint status surfaces are
+	available according to profile policy
+- Home Assistant services support profile enable or disable, filter mutation,
+	and read-only catalog discovery
+- planning and standards documents remain in the repository as implementation
+	guardrails and future work tracking
 
 ## Naming contract
 
@@ -44,6 +54,17 @@ The intended product direction is:
 - coordinator-backed split refresh groups for analytics, configuration, and connection/runtime data
 - manager-based runtime orchestration with a base manager, integration manager, device manager, entity manager, profile manager, and endpoint manager
 - strong translation, diagnostics, typing, and quality-scale discipline from the first real implementation phase
+
+## Current service surface
+
+The integration currently exposes these shared Home Assistant services:
+
+- `controld_manager.disable_profile`
+- `controld_manager.enable_profile`
+- `controld_manager.set_filter_state`
+- `controld_manager.get_catalog`
+
+See `docs/USER_GUIDE.md` for concrete examples and service field behavior.
 
 ## Documentation index
 
