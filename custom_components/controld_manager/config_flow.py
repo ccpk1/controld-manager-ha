@@ -282,21 +282,6 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                         default=profile_policy.advanced_profile_options,
                     ): selector.BooleanSelector(),
                     vol.Required(
-                        CONF_ENDPOINT_SENSORS_ENABLED,
-                        default=profile_policy.endpoint_sensors_enabled,
-                    ): selector.BooleanSelector(),
-                    vol.Required(
-                        CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
-                        default=profile_policy.endpoint_inactivity_threshold_minutes,
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=MIN_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
-                            max=MAX_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
-                            mode=selector.NumberSelectorMode.BOX,
-                            step=1,
-                        )
-                    ),
-                    vol.Required(
                         CONF_ALLOWED_SERVICE_CATEGORIES,
                         default=sorted(profile_policy.allowed_service_categories),
                     ): selector.SelectSelector(
@@ -325,6 +310,21 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                             mode=selector.SelectSelectorMode.DROPDOWN,
                         )
                     ),
+                    vol.Required(
+                        CONF_ENDPOINT_SENSORS_ENABLED,
+                        default=profile_policy.endpoint_sensors_enabled,
+                    ): selector.BooleanSelector(),
+                    vol.Required(
+                        CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
+                        default=profile_policy.endpoint_inactivity_threshold_minutes,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=MIN_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
+                            max=MAX_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
+                            mode=selector.NumberSelectorMode.BOX,
+                            step=1,
+                        )
+                    ),
                 }
             ),
             errors=errors,
@@ -338,6 +338,7 @@ class ControlDManagerOptionsFlow(OptionsFlow):
     async def async_step_integration_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Edit integration-wide polling settings."""
         if user_input is not None:
             self._options = replace(
                 self._options,

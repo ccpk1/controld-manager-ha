@@ -135,6 +135,12 @@ Current status update:
 	- per-profile service-category selection
 	- explicit custom-rule and folder selection
 	- endpoint-status opt-in controls
+- the profile edit form has been polished so high-cardinality service exposure
+	and custom-rule choices stay grouped ahead of the endpoint controls, while the
+	endpoint controls now remain at the bottom of the form
+- the profile-edit wording now explicitly reflects that category-created
+	service entities are created disabled by default because some categories can
+	create a large number of entities
 - the first approved always-on profile-option slice is now implemented for each
 	included profile:
 	- Default Rule select
@@ -172,6 +178,10 @@ Remaining follow-on scope after the current slice:
 - [x] Implement the first endpoint status surface as an opt-in endpoint entity with attributes, using a per-profile activity-threshold option bounded to 5 to 60 minutes and defaulting to 15 minutes if no stronger upstream status contract is proven.
 - [x] Add focused tests for menu navigation, persisted per-profile policy, profile inclusion or exclusion behavior, service-category defaults, grouped-rule persistence, and endpoint-threshold behavior.
 - [x] Close the dynamic entity lifecycle gap so removed rules, removed rule folders, and other no-longer-desired dynamic entities are removed from the Home Assistant entity registry by stable unique ID during reconciliation.
+- [x] Polish the profile-edit options form so `Expose endpoint sensors` and the
+	endpoint inactivity threshold remain the last two fields, and clarify that
+	service-category-created entities default to disabled state because category
+	counts can be high.
 
 ### Phase 6: Add a shared mutation-service layer and align profile terminology
 

@@ -147,4 +147,6 @@ async def test_options_flow_edit_profile_exposes_external_filters_and_hides_auto
     field_names = [marker.schema for marker in schema.schema]
     assert field_names[0] == "managed_in_home_assistant"
     assert field_names[1] == "expose_external_filters"
+    assert field_names[-2] == "endpoint_sensors_enabled"
+    assert field_names[-1] == "endpoint_inactivity_threshold_minutes"
     assert "auto_enable_service_switches" not in field_names

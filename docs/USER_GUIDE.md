@@ -54,7 +54,9 @@ Each profile can be configured with these controls:
 	are added in Home Assistant but stay off by default until you enable the ones
 	you want.
 - Allowed service categories
-	Limits which Control D service categories are exposed as service controls.
+	Selects which Control D service categories are created in Home Assistant.
+	New entities from these categories are created disabled by default because
+	some categories can create a large number of entities.
 - Expose custom rules
 	Lets you expose selected rule folders or individual custom rules as Home
 	Assistant controls.
@@ -63,6 +65,10 @@ Each profile can be configured with these controls:
 - Endpoint inactivity threshold (minutes)
 	Controls how long an endpoint can remain inactive before its endpoint status
 	entity reports inactive.
+
+The endpoint controls are intentionally kept at the bottom of the profile form
+so the service-category and custom-rule exposure decisions stay grouped
+together.
 
 
 ### Integration settings
