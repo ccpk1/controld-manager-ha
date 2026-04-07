@@ -29,6 +29,8 @@ from .const import (
     SERVICE_FIELD_ENABLED,
     SERVICE_FIELD_FILTER_NAME,
     SERVICE_FIELD_MINUTES,
+    SERVICE_FIELD_PROFILE_ID,
+    SERVICE_FIELD_PROFILE_NAME,
     SERVICE_SET_FILTER_STATE,
     TRANS_KEY_CONFIG_ENTRY_NAME_AMBIGUOUS,
     TRANS_KEY_CONFIG_ENTRY_NAME_NOT_FOUND,
@@ -39,35 +41,55 @@ from .const import (
     TRANS_KEY_MULTIPLE_ENTRIES_LOADED,
     TRANS_KEY_PROFILE_TARGET_AMBIGUOUS,
     TRANS_KEY_PROFILE_TARGET_NOT_FOUND,
+    TRANS_KEY_PROFILE_TARGET_REQUIRED,
     TRANS_KEY_WRONG_INTEGRATION_ENTRY,
 )
 from .models import ControlDManagerRuntime
 
 ControlDManagerConfigEntry = ConfigEntry[ControlDManagerRuntime]
 
-_PROFILE_SERVICE_TARGET_FIELDS: dict[vol.Marker, object] = {
+_PROFILE_SERVICE_CORE_TARGET_FIELDS: dict[vol.Marker, object] = {
     vol.Optional(ATTR_ENTITY_ID): cv.entity_ids,
     vol.Optional(ATTR_DEVICE_ID): vol.Any(cv.string, [cv.string]),
+}
+
+_PROFILE_SERVICE_DEVICE_TARGET_FIELDS: dict[vol.Marker, object] = {
+    vol.Optional(ATTR_DEVICE_ID): vol.Any(cv.string, [cv.string]),
+}
+
+_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
+    vol.Optional(SERVICE_FIELD_PROFILE_ID): vol.Any(cv.string, [cv.string]),
+    vol.Optional(SERVICE_FIELD_PROFILE_NAME): vol.Any(cv.string, [cv.string]),
+}
+
+_PROFILE_SERVICE_ENTRY_TARGET_FIELDS: dict[vol.Marker, object] = {
     vol.Optional(SERVICE_FIELD_CONFIG_ENTRY_ID): vol.Any(cv.string, [cv.string]),
     vol.Optional(SERVICE_FIELD_CONFIG_ENTRY_NAME): cv.string,
 }
 
 DISABLE_PROFILE_SERVICE_SCHEMA = vol.Schema(
     {
-        **_PROFILE_SERVICE_TARGET_FIELDS,
+        **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Optional(
             SERVICE_FIELD_MINUTES, default=DEFAULT_DISABLE_MINUTES
         ): cv.positive_int,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
 
-ENABLE_PROFILE_SERVICE_SCHEMA = vol.Schema(_PROFILE_SERVICE_TARGET_FIELDS)
+ENABLE_PROFILE_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
 
 SET_FILTER_STATE_SERVICE_SCHEMA = vol.Schema(
     {
-        **_PROFILE_SERVICE_TARGET_FIELDS,
+        **_PROFILE_SERVICE_CORE_TARGET_FIELDS,
         vol.Required(SERVICE_FIELD_FILTER_NAME): cv.string,
         vol.Required(SERVICE_FIELD_ENABLED): cv.boolean,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
 
@@ -93,11 +115,20 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def async_handle_disable_profile(call: ServiceCall) -> None:
         """Disable targeted profiles for the requested duration."""
-        resolved_target = _resolve_profile_service_target(hass, call)
+        resolved_target = _resolve_profile_service_target(
+            hass,
+            call,
+            allow_entity_ids=False,
+            allow_profile_names=True,
+            profile_device_field=SERVICE_FIELD_PROFILE_ID,
+            require_profile_selector=True,
+        )
         try:
-            await resolved_target.entry.runtime_data.managers.profile.async_disable_profiles(
-                set(resolved_target.profile_pks),
-                call.data[SERVICE_FIELD_MINUTES],
+            await (
+                resolved_target.entry.runtime_data.managers.profile.async_disable_profiles(
+                    set(resolved_target.profile_pks),
+                    call.data[SERVICE_FIELD_MINUTES],
+                )
             )
         except (
             ControlDApiAuthError,
@@ -110,10 +141,19 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def async_handle_enable_profile(call: ServiceCall) -> None:
         """Enable targeted profiles immediately."""
-        resolved_target = _resolve_profile_service_target(hass, call)
+        resolved_target = _resolve_profile_service_target(
+            hass,
+            call,
+            allow_entity_ids=False,
+            allow_profile_names=True,
+            profile_device_field=SERVICE_FIELD_PROFILE_ID,
+            require_profile_selector=True,
+        )
         try:
-            await resolved_target.entry.runtime_data.managers.profile.async_enable_profiles(
-                set(resolved_target.profile_pks)
+            await (
+                resolved_target.entry.runtime_data.managers.profile.async_enable_profiles(
+                    set(resolved_target.profile_pks)
+                )
             )
         except (
             ControlDApiAuthError,
@@ -128,9 +168,11 @@ async def async_register_services(hass: HomeAssistant) -> None:
         """Enable or disable one named filter across targeted profiles."""
         resolved_target = _resolve_filter_service_target(hass, call)
         try:
-            await resolved_target.entry.runtime_data.managers.profile.async_set_filters_enabled(
-                resolved_target.profile_filters,
-                call.data[SERVICE_FIELD_ENABLED],
+            await (
+                resolved_target.entry.runtime_data.managers.profile.async_set_filters_enabled(
+                    resolved_target.profile_filters,
+                    call.data[SERVICE_FIELD_ENABLED],
+                )
             )
         except (
             ControlDApiAuthError,
@@ -186,13 +228,27 @@ def _resolve_filter_service_target(
 
 
 def _resolve_profile_service_target(
-    hass: HomeAssistant, call: ServiceCall
+    hass: HomeAssistant,
+    call: ServiceCall,
+    *,
+    allow_entity_ids: bool = True,
+    allow_profile_names: bool = False,
+    profile_device_field: str = ATTR_DEVICE_ID,
+    require_profile_selector: bool = False,
 ) -> ResolvedProfileServiceTarget:
     """Resolve service inputs into one config entry and one or more profiles."""
     entity_ids = set(_ensure_list(call.data.get(ATTR_ENTITY_ID)))
-    device_ids = set(_ensure_list(call.data.get(ATTR_DEVICE_ID)))
+    device_ids = set(_ensure_list(call.data.get(profile_device_field)))
     explicit_entry_ids = set(_ensure_list(call.data.get(SERVICE_FIELD_CONFIG_ENTRY_ID)))
     config_entry_name = call.data.get(SERVICE_FIELD_CONFIG_ENTRY_NAME)
+    requested_profile_names = _ensure_name_list(
+        call.data.get(SERVICE_FIELD_PROFILE_NAME)
+    )
+
+    if not allow_entity_ids:
+        entity_ids.clear()
+    if not allow_profile_names:
+        requested_profile_names = []
 
     loaded_entries = {
         entry.entry_id: entry
@@ -209,18 +265,20 @@ def _resolve_profile_service_target(
         device_ids=device_ids,
     )
 
-    targeted_profiles: set[str] = set()
-    if entity_ids:
-        targeted_profiles.update(
-            _resolve_profiles_from_entity_ids(
-                hass, entry, entity_ids, loaded_entries=loaded_entries
-            )
-        )
-    if device_ids:
-        targeted_profiles.update(
-            _resolve_profiles_from_device_ids(
-                hass, entry, device_ids, loaded_entries=loaded_entries
-            )
+    targeted_profiles = _resolve_selected_profile_pks(
+        hass,
+        entry,
+        entity_ids=entity_ids,
+        device_ids=device_ids,
+        requested_profile_names=requested_profile_names,
+        loaded_entries=loaded_entries,
+    )
+
+    if require_profile_selector and not targeted_profiles:
+        raise ServiceValidationError(
+            "Select at least one Control D profile by ID or name",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_PROFILE_TARGET_REQUIRED,
         )
 
     if not targeted_profiles and (
@@ -551,6 +609,83 @@ def _ensure_list(value: str | list[str] | None) -> list[str]:
     if isinstance(value, str) and value:
         return [value]
     return []
+
+
+def _ensure_name_list(value: str | list[str] | None) -> list[str]:
+    """Normalize a name field into a list of non-empty values."""
+    if isinstance(value, list):
+        return [
+            item.strip() for item in value if isinstance(item, str) and item.strip()
+        ]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
+def _resolve_selected_profile_pks(
+    hass: HomeAssistant,
+    entry: ControlDManagerConfigEntry,
+    *,
+    entity_ids: set[str],
+    device_ids: set[str],
+    requested_profile_names: list[str],
+    loaded_entries: dict[str, ControlDManagerConfigEntry],
+) -> set[str]:
+    """Resolve explicit profile selectors using a stable precedence order.
+
+    Selection precedence is:
+    1. `entity_id`
+    2. `device_id`
+    3. `profile_name`
+    """
+    if entity_ids:
+        return _resolve_profiles_from_entity_ids(
+            hass, entry, entity_ids, loaded_entries=loaded_entries
+        )
+    if device_ids:
+        return _resolve_profiles_from_device_ids(
+            hass, entry, device_ids, loaded_entries=loaded_entries
+        )
+    if requested_profile_names:
+        return _resolve_profiles_from_names(entry, requested_profile_names)
+    return set()
+
+
+def _resolve_profiles_from_names(
+    entry: ControlDManagerConfigEntry,
+    requested_profile_names: list[str],
+) -> set[str]:
+    """Resolve one or more profile identifiers from profile names."""
+    managed_profiles = {
+        profile_pk: profile
+        for profile_pk, profile in entry.runtime_data.registry.profiles.items()
+        if profile_pk in entry.runtime_data.managers.device.managed_profile_pks
+    }
+    targeted_profiles: set[str] = set()
+
+    for requested_name in requested_profile_names:
+        normalized_requested_name = _normalize_name(requested_name)
+        matches = [
+            profile_pk
+            for profile_pk, profile in managed_profiles.items()
+            if _normalize_name(profile.name) == normalized_requested_name
+        ]
+        if len(matches) == 1:
+            targeted_profiles.add(matches[0])
+            continue
+        if len(matches) > 1:
+            raise ServiceValidationError(
+                "The selected Control D profile target is ambiguous",
+                translation_domain=DOMAIN,
+                translation_key=TRANS_KEY_PROFILE_TARGET_AMBIGUOUS,
+            )
+        raise ServiceValidationError(
+            "The selected Control D profile target could not be resolved",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_PROFILE_TARGET_NOT_FOUND,
+        )
+
+    return targeted_profiles
 
 
 def _resolve_filter_names(

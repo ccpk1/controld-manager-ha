@@ -41,7 +41,7 @@
           "managed_in_home_assistant": "Enable management in Home Assistant",
           "expose_external_filters": "Expose 3rd-party filters",
           "advanced_profile_options": "Expose advanced profile options",
-          "endpoint_sensors_enabled": "Generate endpoint sensors",
+          "endpoint_sensors_enabled": "Expose endpoint sensors",
           "endpoint_inactivity_threshold_minutes": "Endpoint inactivity threshold (minutes)",
           "allowed_service_categories": "Allowed service categories",
           "exposed_custom_rules": "Expose custom rules"
@@ -52,7 +52,7 @@
           "advanced_profile_options": "Create the remaining profile option entities for this profile in disabled-by-default state.",
           "endpoint_sensors_enabled": "Create telemetry entities for devices under this profile.",
           "endpoint_inactivity_threshold_minutes": "How long before an endpoint is marked as inactive.",
-          "allowed_service_categories": "Select which categories to expose as service controls.",
+          "allowed_service_categories": "Select which service categories to create in Home Assistant. New entities from these categories are created disabled by default due to high count in some categories.",
           "exposed_custom_rules": "Select specific custom rule folders or domains to expose as switches."
         }
       },
@@ -111,21 +111,25 @@
       "name": "Disable profile",
       "description": "Temporarily disable all filters, services and rules for one or more Control D profiles.",
       "fields": {
-        "config_entry_id": {
-          "name": "Integration ID",
-          "description": "Target one loaded Control D config entry explicitly."
+        "profile_id": {
+          "name": "Select a profile",
+          "description": "Required unless you provide Profile names. Select one or more managed Control D profiles by ID. If Profile IDs and Profile names are both provided, Profile IDs take precedence."
         },
-        "config_entry_name": {
-          "name": "Integration name",
-          "description": "Target one loaded Control D config entry by its Home Assistant title."
-        },
-        "device_id": {
-          "name": "Device",
-          "description": "Target the Control D account device or one managed profile device."
+        "profile_name": {
+          "name": "Profile names",
+          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names. When entering values manually, use a quoted list such as [\"Primary\", \"Kids\"]."
         },
         "minutes": {
           "name": "Minutes",
           "description": "How long to keep the selected profiles disabled."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
         }
       }
     },
@@ -133,17 +137,21 @@
       "name": "Enable profile",
       "description": "Re-enable one or more previously disabled Control D profiles immediately.",
       "fields": {
+        "profile_id": {
+          "name": "Select a profile",
+          "description": "Required unless you provide Profile Names. Select one or more managed Control D profiles by ID. If Profile IDs and Profile Names are both provided, Profile IDs take precedence."
+        },
+        "profile_name": {
+          "name": "Profile names",
+          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names. When entering values manually, use a quoted list such as [\"Primary\", \"Kids\"]."
+        },
         "config_entry_id": {
-          "name": "Integration ID",
-          "description": "Target one loaded Control D config entry explicitly."
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
         },
         "config_entry_name": {
-          "name": "Integration name",
-          "description": "Target one loaded Control D config entry by its Home Assistant title."
-        },
-        "device_id": {
-          "name": "Device",
-          "description": "Target the Control D account device or one managed profile device."
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
         }
       }
     },
@@ -151,17 +159,9 @@
       "name": "Set filter state",
       "description": "Enable or disable one Control D filter by raw key or user-facing name across the targeted profiles.",
       "fields": {
-        "config_entry_id": {
-          "name": "Integration ID",
-          "description": "Target one loaded Control D config entry explicitly."
-        },
-        "config_entry_name": {
-          "name": "Integration name",
-          "description": "Target one loaded Control D config entry by its Home Assistant title."
-        },
         "device_id": {
-          "name": "Device",
-          "description": "Target the Control D account device or one managed profile device."
+          "name": "Profiles",
+          "description": "Optional. Select one or more managed Control D profiles. The Control D account device is not a valid target for this service."
         },
         "filter_name": {
           "name": "Filter name",
@@ -170,6 +170,14 @@
         "enabled": {
           "name": "Enabled",
           "description": "Turn the selected filter on or off for the targeted profiles."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
         }
       }
     }

@@ -128,8 +128,9 @@ class DeviceManager(BaseManager):
                 raise ValueError(f"Unknown device_id {device_id}")
             identifiers = set(device_entry.identifiers)
             if self.instance_identifier in identifiers:
-                targeted_profiles.update(self.managed_profile_pks)
-                continue
+                raise ValueError(
+                    "The Control D account device cannot be used as a profile target"
+                )
 
             matched_profile = next(
                 (

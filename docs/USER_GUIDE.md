@@ -53,16 +53,17 @@ Each profile can be configured with these controls:
 	Turns on the larger profile option set for that profile. These extra controls
 	are added in Home Assistant but stay off by default until you enable the ones
 	you want.
-- Generate endpoint sensors
-	Creates endpoint activity entities for devices that belong to that profile.
-- Endpoint inactivity threshold (minutes)
-	Controls how long an endpoint can remain inactive before its endpoint status
-	entity reports inactive.
 - Allowed service categories
 	Limits which Control D service categories are exposed as service controls.
 - Expose custom rules
 	Lets you expose selected rule folders or individual custom rules as Home
 	Assistant controls.
+- Expose endpoint sensors
+	Creates endpoint activity entities for devices that belong to that profile.
+- Endpoint inactivity threshold (minutes)
+	Controls how long an endpoint can remain inactive before its endpoint status
+	entity reports inactive.
+
 
 ### Integration settings
 
@@ -231,8 +232,30 @@ The integration currently registers these Home Assistant services:
 - `controld_manager.enable_profile`
 - `controld_manager.set_filter_state`
 
-These services can target profiles by entity, device, config entry ID, or
-config entry name.
+### Enable and disable profile services
+
+`controld_manager.disable_profile` and `controld_manager.enable_profile` share
+the same targeting rules.
+
+- both services require you to select at least one profile
+- use `profile_id` to select one or more profile devices directly
+- use `profile_name` to select one or more managed profile names
+- if both `profile_id` and `profile_name` are provided, `profile_id` wins
+- if more than one Control D integration is loaded, you can add
+	`config_entry_id` or `config_entry_name` to disambiguate the owning entry
+- if both `config_entry_id` and `config_entry_name` are provided,
+	`config_entry_id` wins
+
+These services do not accept generic entity targets, and the Account device is
+not a valid profile target.
+
+Manual examples:
+
+- disable two profiles by name for one hour:
+	`profile_name: ["Primary", "Kids"]`
+	`minutes: 60`
+- enable one profile by device-based profile selection:
+	`profile_id: ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0"]`
 
 `controld_manager.set_filter_state` accepts either the raw filter key or the
 user-facing filter name. It also works for 3rd-party filters even when their

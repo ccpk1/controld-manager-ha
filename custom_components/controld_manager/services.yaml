@@ -1,23 +1,21 @@
 disable_profile:
   name: Disable profile
   description: Temporarily disable all filters, services and rules for one or more Control D profiles.
-  target:
-    entity:
-      integration: controld_manager
   fields:
-    device_id:
+    profile_id:
       required: false
+      example: |
+        ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0", "9f2a6c4e1b7d43a8a0c5e2f1d9b6c3a7"]
       selector:
         device:
           multiple: true
-          integration: controld_manager
-    config_entry_id:
+          filter:
+            - integration: controld_manager
+              model: Profile
+    profile_name:
       required: false
-      selector:
-        config_entry:
-          integration: controld_manager
-    config_entry_name:
-      required: false
+      example: |
+        ["Primary", "Kids"]
       selector:
         text:
     minutes:
@@ -28,20 +26,6 @@ disable_profile:
           min: 1
           max: 1440
           mode: box
-
-enable_profile:
-  name: Enable profile
-  description: Re-enable one or more previously disabled Control D profiles immediately.
-  target:
-    entity:
-      integration: controld_manager
-  fields:
-    device_id:
-      required: false
-      selector:
-        device:
-          multiple: true
-          integration: controld_manager
     config_entry_id:
       required: false
       selector:
@@ -49,6 +33,38 @@ enable_profile:
           integration: controld_manager
     config_entry_name:
       required: false
+      selector:
+        text:
+
+enable_profile:
+  name: Enable profile
+  description: Re-enable one or more previously disabled Control D profiles immediately.
+  fields:
+    profile_id:
+      required: false
+      example: |
+        ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0", "9f2a6c4e1b7d43a8a0c5e2f1d9b6c3a7"]
+      selector:
+        device:
+          multiple: true
+          filter:
+            - integration: controld_manager
+              model: Profile
+    profile_name:
+      required: false
+      example: |
+        ["Primary", "Kids"]
+      selector:
+        text:
+    config_entry_id:
+      required: false
+      example: "a1b2c3d4e5f6g7h8i9j0"
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      example: "Control D Home"
       selector:
         text:
 
@@ -64,7 +80,17 @@ set_filter_state:
       selector:
         device:
           multiple: true
-          integration: controld_manager
+          filter:
+            - integration: controld_manager
+              model: Profile
+    filter_name:
+      required: true
+      selector:
+        text:
+    enabled:
+      required: true
+      selector:
+        boolean:
     config_entry_id:
       required: false
       selector:
@@ -74,11 +100,3 @@ set_filter_state:
       required: false
       selector:
         text:
-    filter_name:
-      required: true
-      selector:
-        text:
-    enabled:
-      required: true
-      selector:
-        boolean:

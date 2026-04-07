@@ -204,6 +204,21 @@ Remaining follow-on scope after the current slice:
 	per-profile `Expose 3rd-party filters` option with disabled-by-default
 	entity-registry posture.
 
+Current Phase 6 service posture:
+
+- `enable_profile` and `disable_profile` now share the same explicit profile
+	targeting contract
+- both services require at least one explicit profile selector rather than
+	falling back to all profiles in a single loaded entry
+- both services accept `profile_id` and `profile_name`, with `profile_id`
+	taking precedence when both are supplied
+- both services keep `config_entry_id` and `config_entry_name` as optional
+	multi-entry disambiguators, with `config_entry_id` taking precedence
+- both services reject generic `entity_id` targets and reject the Control D
+	account device as a profile target
+- the shared profile-target helper path is now the expected reuse base for any
+	future profile-scoped bulk service
+
 Phase 5 required research closeouts before code for that specific surface starts:
 
 - prove the best persisted typed identity for grouped rules
