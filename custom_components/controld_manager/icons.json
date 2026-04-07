@@ -1,0 +1,109 @@
+{
+  "entity": {
+    "button": {
+      "sync": {
+        "default": "mdi:refresh"
+      }
+    },
+    "binary_sensor": {
+      "endpoint_status": {
+        "default": "mdi:lan-connect",
+        "state": {
+          "off": "mdi:lan-disconnect"
+        }
+      }
+    },
+    "sensor": {
+      "status": {
+        "default": "mdi:shield-check",
+        "state": {
+          "degraded": "mdi:shield-alert",
+          "problem": "mdi:shield-off"
+        }
+      },
+      "profile_count": {
+        "default": "mdi:account-multiple"
+      },
+      "endpoint_count": {
+        "default": "mdi:devices"
+      }
+    },
+    "select": {
+      "profile_filter_mode": {
+        "default": "mdi:filter-cog"
+      },
+      "profile_service": {
+        "default": "mdi:application-cog",
+        "state": {
+          "Off": "mdi:application-off-outline",
+          "Blocked": "mdi:application-remove-outline",
+          "Bypassed": "mdi:application-check-outline",
+          "Redirected": "mdi:transit-connection-variant"
+        }
+      },
+      "profile_default_rule": {
+        "default": "mdi:shield-cog",
+        "state": {
+          "Blocking": "mdi:shield-remove",
+          "Bypassing": "mdi:shield-check",
+          "Redirecting": "mdi:transit-connection-variant"
+        }
+      },
+      "profile_rule_group": {
+        "default": "mdi:folder-cog",
+        "state": {
+          "off": "mdi:folder-off-outline",
+          "block": "mdi:folder-remove-outline",
+          "bypass": "mdi:folder-check-outline",
+          "redirect": "mdi:folder-move-outline"
+        }
+      },
+      "profile_option": {
+        "default": "mdi:tune-variant"
+      }
+    },
+    "switch": {
+      "paused": {
+        "default": "mdi:pause-circle",
+        "state": {
+          "off": "mdi:play-circle"
+        }
+      },
+      "profile_filter": {
+        "default": "mdi:filter-check",
+        "state": {
+          "off": "mdi:filter-off"
+        }
+      },
+      "profile_option": {
+        "default": "mdi:tune-variant",
+        "state": {
+          "off": "mdi:tune"
+        }
+      },
+      "profile_rule": {
+        "default": "mdi:shield-check",
+        "state": {
+          "off": "mdi:shield-off-outline"
+        }
+      }
+    }
+  },
+  "services": {
+    "disable_profile": {
+      "service": "mdi:pause-circle"
+    },
+    "enable_profile": {
+      "service": "mdi:play-circle"
+    },
+    "set_filter_state": {
+      "service": "mdi:filter-cog"
+    },
+    "set_service_state": {
+      "service": "mdi:application-cog"
+    },
+    "get_catalog": {
+      "service": "mdi:format-list-bulleted"
+    }
+  }
+}

@@ -35,24 +35,45 @@ from .const import (
     SERVICE_FIELD_FILTER_ID,
     SERVICE_FIELD_FILTER_NAME,
     SERVICE_FIELD_MINUTES,
+    SERVICE_FIELD_MODE,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
+    SERVICE_FIELD_SERVICE_ID,
+    SERVICE_FIELD_SERVICE_NAME,
     SERVICE_GET_CATALOG,
     SERVICE_SET_FILTER_STATE,
+    SERVICE_SET_SERVICE_STATE,
     TRANS_KEY_CONFIG_ENTRY_NAME_AMBIGUOUS,
     TRANS_KEY_CONFIG_ENTRY_NAME_NOT_FOUND,
     TRANS_KEY_CONFIG_ENTRY_NOT_FOUND,
     TRANS_KEY_CONFIG_ENTRY_NOT_LOADED,
+    TRANS_KEY_DISABLE_PROFILES_FAILED,
+    TRANS_KEY_ENABLE_PROFILES_FAILED,
     TRANS_KEY_MULTIPLE_ENTRIES_LOADED,
     TRANS_KEY_PROFILE_TARGET_AMBIGUOUS,
     TRANS_KEY_PROFILE_TARGET_NOT_FOUND,
     TRANS_KEY_PROFILE_TARGET_REQUIRED,
+    TRANS_KEY_SERVICE_MODE_REJECTED,
+    TRANS_KEY_SET_FILTERS_FAILED,
+    TRANS_KEY_SET_SERVICES_FAILED,
     TRANS_KEY_WRONG_INTEGRATION_ENTRY,
 )
-from .models import ControlDManagerRuntime
-from .service_selectors import _normalize_name, _resolve_selected_filter_pks
+from .models import ControlDManagerRuntime, ControlDService, service_mode_options
+from .service_selectors import (
+    _normalize_name,
+    _resolve_selected_filter_pks,
+    _resolve_selected_service_pks,
+)
 
 ControlDManagerConfigEntry = ConfigEntry[ControlDManagerRuntime]
+
+
+def _ha_error(translation_key: str) -> HomeAssistantError:
+    """Build one translated Home Assistant error."""
+    return HomeAssistantError(
+        translation_domain=DOMAIN,
+        translation_key=translation_key,
+    )
 
 CATALOG_TYPES: tuple[str, ...] = (
     "filters",
@@ -69,6 +90,11 @@ _PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
 _FILTER_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
     vol.Optional(SERVICE_FIELD_FILTER_ID): vol.Any(cv.string, [cv.string]),
     vol.Optional(SERVICE_FIELD_FILTER_NAME): vol.Any(cv.string, [cv.string]),
+}
+
+_SERVICE_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
+    vol.Optional(SERVICE_FIELD_SERVICE_ID): vol.Any(cv.string, [cv.string]),
+    vol.Optional(SERVICE_FIELD_SERVICE_NAME): vol.Any(cv.string, [cv.string]),
 }
 
 _PROFILE_SERVICE_ENTRY_TARGET_FIELDS: dict[vol.Marker, object] = {
@@ -98,6 +124,15 @@ SET_FILTER_STATE_SERVICE_SCHEMA = vol.Schema(
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         **_FILTER_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Required(SERVICE_FIELD_ENABLED): cv.boolean,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+SET_SERVICE_STATE_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        **_SERVICE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        vol.Required(SERVICE_FIELD_MODE): vol.In(service_mode_options()),
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
@@ -136,6 +171,15 @@ class ResolvedCatalogServiceTarget:
     catalog_type: str
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedServiceServiceTarget:
+    """Resolved service target for a profile-service mutation."""
+
+    entry: ControlDManagerConfigEntry
+    profile_services: dict[str, frozenset[str]]
+    service_rows_by_profile: dict[str, dict[str, ControlDService]] | None = None
+
+
 async def async_register_services(hass: HomeAssistant) -> None:
     """Register shared Control D services."""
 
@@ -161,9 +205,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError(
-                "Unable to disable the targeted Control D profiles"
-            ) from err
+            raise _ha_error(TRANS_KEY_DISABLE_PROFILES_FAILED) from err
 
     async def async_handle_enable_profile(call: ServiceCall) -> None:
         """Enable targeted profiles immediately."""
@@ -186,9 +228,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError(
-                "Unable to enable the targeted Control D profiles"
-            ) from err
+            raise _ha_error(TRANS_KEY_ENABLE_PROFILES_FAILED) from err
 
     async def async_handle_set_filter_state(call: ServiceCall) -> None:
         """Enable or disable one named filter across targeted profiles."""
@@ -205,9 +245,26 @@ async def async_register_services(hass: HomeAssistant) -> None:
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError(
-                "Unable to update the targeted Control D filters"
-            ) from err
+            raise _ha_error(TRANS_KEY_SET_FILTERS_FAILED) from err
+
+    async def async_handle_set_service_state(call: ServiceCall) -> None:
+        """Set one or more targeted Control D services to the requested mode."""
+        resolved_target = await _resolve_service_service_target(hass, call)
+        try:
+            await (
+                resolved_target.entry.runtime_data.managers.profile.async_set_services_mode(
+                    resolved_target.profile_services,
+                    call.data[SERVICE_FIELD_MODE],
+                    service_rows_by_profile=resolved_target.service_rows_by_profile,
+                )
+            )
+        except ControlDApiResponseError as err:
+            raise _ha_error(TRANS_KEY_SERVICE_MODE_REJECTED) from err
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_SET_SERVICES_FAILED) from err
 
     async def async_handle_get_catalog(call: ServiceCall) -> ServiceResponse:
         """Return a typed catalog response for one config entry scope."""
@@ -243,6 +300,13 @@ async def async_register_services(hass: HomeAssistant) -> None:
             SERVICE_SET_FILTER_STATE,
             async_handle_set_filter_state,
             schema=SET_FILTER_STATE_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_SERVICE_STATE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_SERVICE_STATE,
+            async_handle_set_service_state,
+            schema=SET_SERVICE_STATE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_GET_CATALOG):
         hass.services.async_register(
@@ -298,6 +362,139 @@ def _resolve_catalog_service_target(
         profile_pks=resolved_profiles.profile_pks,
         catalog_type=catalog_type,
     )
+
+
+async def _resolve_service_service_target(
+    hass: HomeAssistant, call: ServiceCall
+) -> ResolvedServiceServiceTarget:
+    """Resolve a service-mode mutation target across one or more profiles."""
+    resolved_profiles = _resolve_profile_service_target(
+        hass,
+        call,
+        allow_entity_ids=False,
+        allow_profile_names=True,
+        profile_device_field=SERVICE_FIELD_PROFILE_ID,
+        require_profile_selector=True,
+    )
+    requested_service_ids = _ensure_name_list(call.data.get(SERVICE_FIELD_SERVICE_ID))
+    requested_service_names = _ensure_name_list(
+        call.data.get(SERVICE_FIELD_SERVICE_NAME)
+    )
+    if not requested_service_ids and not requested_service_names:
+        profile_services = _resolve_selected_service_pks(
+            resolved_profiles.entry,
+            resolved_profiles.profile_pks,
+            requested_service_ids=requested_service_ids,
+            requested_service_names=requested_service_names,
+        )
+        return ResolvedServiceServiceTarget(
+            entry=resolved_profiles.entry,
+            profile_services=profile_services,
+        )
+    try:
+        profile_services = _resolve_selected_service_pks(
+            resolved_profiles.entry,
+            resolved_profiles.profile_pks,
+            requested_service_ids=requested_service_ids,
+            requested_service_names=requested_service_names,
+        )
+        return ResolvedServiceServiceTarget(
+            entry=resolved_profiles.entry,
+            profile_services=profile_services,
+        )
+    except ServiceValidationError as err:
+        live_services_by_profile = await _async_load_services_for_resolution(
+            resolved_profiles.entry,
+            resolved_profiles.profile_pks,
+        )
+        try:
+            profile_services = _resolve_selected_service_pks_from_rows(
+                live_services_by_profile,
+                resolved_profiles.profile_pks,
+                requested_service_ids=requested_service_ids,
+                requested_service_names=requested_service_names,
+            )
+        except ServiceValidationError as live_err:
+            raise err from live_err
+        return ResolvedServiceServiceTarget(
+            entry=resolved_profiles.entry,
+            profile_services=profile_services,
+            service_rows_by_profile=live_services_by_profile,
+        )
+
+
+async def _async_load_services_for_resolution(
+    entry: ControlDManagerConfigEntry,
+    profile_pks: frozenset[str],
+) -> dict[str, dict[str, ControlDService]]:
+    """Load service rows for targeted profiles without changing entity policy."""
+    integration_manager = entry.runtime_data.managers.integration
+    service_categories_payload = tuple(
+        await entry.runtime_data.client.async_get_service_categories()
+    )
+    service_catalog_payload = tuple(
+        await entry.runtime_data.client.async_get_service_catalog()
+    )
+    profile_services: dict[str, dict[str, ControlDService]] = {}
+    for profile_pk in profile_pks:
+        services_payload = tuple(
+            await entry.runtime_data.client.async_get_profile_services(profile_pk)
+        )
+        profile_services[profile_pk] = integration_manager.build_live_service_rows(
+            services_payload,
+            service_categories_payload,
+            service_catalog_payload,
+        )
+    return profile_services
+
+
+def _resolve_selected_service_pks_from_rows(
+    services_by_profile: dict[str, dict[str, ControlDService]],
+    profile_pks: frozenset[str],
+    *,
+    requested_service_ids: list[str],
+    requested_service_names: list[str],
+) -> dict[str, frozenset[str]]:
+    """Resolve service selectors from explicitly supplied normalized rows."""
+    profile_services: dict[str, frozenset[str]] = {}
+
+    if requested_service_ids:
+        requested_values = requested_service_ids
+
+        def value_getter(service_row: ControlDService) -> str:
+            return service_row.service_pk
+
+    else:
+        requested_values = requested_service_names
+
+        def value_getter(service_row: ControlDService) -> str:
+            return service_row.name
+
+    for profile_pk in profile_pks:
+        resolved_service_ids: set[str] = set()
+        services = tuple(services_by_profile.get(profile_pk, {}).values())
+        for requested_value in requested_values:
+            normalized_requested_value = _normalize_name(requested_value)
+            matches = [
+                service_row.service_pk
+                for service_row in services
+                if _normalize_name(value_getter(service_row))
+                == normalized_requested_value
+            ]
+            if len(matches) == 1:
+                resolved_service_ids.add(matches[0])
+                continue
+            if len(matches) > 1:
+                raise ServiceValidationError(
+                    "The selected Control D service target is ambiguous"
+                )
+            raise ServiceValidationError(
+                "The selected Control D service target could not be resolved "
+                "for one or more targeted profiles"
+            )
+        profile_services[profile_pk] = frozenset(resolved_service_ids)
+
+    return profile_services
 
 
 def _resolve_profile_service_target(

@@ -10,7 +10,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import PURPOSE_INSTANCE_ACTION
+from .const import DOMAIN, PURPOSE_INSTANCE_ACTION, TRANS_KEY_MANUAL_SYNC_FAILED
 from .entity import ControlDManagerInstanceEntity
 from .models import ControlDManagerRuntime
 
@@ -18,6 +18,17 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 PARALLEL_UPDATES = 0
+
+
+def _ha_error(
+    translation_key: str, *, placeholders: dict[str, str] | None = None
+) -> HomeAssistantError:
+    """Build one translated Home Assistant error."""
+    return HomeAssistantError(
+        translation_domain=DOMAIN,
+        translation_key=translation_key,
+        translation_placeholders=placeholders,
+    )
 
 
 async def async_setup_entry(
@@ -72,4 +83,7 @@ class ControlDManagerSyncButton(ControlDManagerInstanceEntity, ButtonEntity):
         """Run a one-shot refresh for the current account state."""
         await self.runtime.active_coordinator.async_run_manual_refresh()
         if self.runtime.sync_status.last_refresh_error is not None:
-            raise HomeAssistantError(self.runtime.sync_status.last_refresh_error)
+            raise _ha_error(
+                TRANS_KEY_MANUAL_SYNC_FAILED,
+                placeholders={"error": self.runtime.sync_status.last_refresh_error},
+            )

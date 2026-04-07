@@ -147,6 +147,24 @@ class IntegrationManager(BaseManager):
             "text": text,
         }
 
+    def build_live_service_rows(
+        self,
+        services_payload: tuple[dict[str, Any], ...],
+        service_categories_payload: tuple[dict[str, Any], ...],
+        service_catalog_payload: tuple[dict[str, Any], ...],
+    ) -> dict[str, ControlDService]:
+        """Normalize a full live service payload for write-time resolution."""
+        service_categories = self._normalize_service_categories(
+            service_categories_payload
+        )
+        enabled_categories = frozenset(service_categories)
+        return self._normalize_services(
+            services_payload,
+            service_categories,
+            enabled_categories,
+            service_catalog_payload,
+        )
+
     def _build_filter_catalog(
         self, profile_pks: frozenset[str]
     ) -> tuple[list[JsonValueType], str]:

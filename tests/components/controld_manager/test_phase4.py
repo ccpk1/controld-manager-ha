@@ -10,12 +10,15 @@ import voluptuous as vol
 from homeassistant.components.select import ATTR_OPTION
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.controld_manager.api import ControlDApiConnectionError
+from custom_components.controld_manager.api import (
+    ControlDApiConnectionError,
+    ControlDApiResponseError,
+)
 from custom_components.controld_manager.const import (
     CONF_API_TOKEN,
     DOMAIN,
@@ -26,10 +29,14 @@ from custom_components.controld_manager.const import (
     SERVICE_FIELD_FILTER_ID,
     SERVICE_FIELD_FILTER_NAME,
     SERVICE_FIELD_MINUTES,
+    SERVICE_FIELD_MODE,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
+    SERVICE_FIELD_SERVICE_ID,
+    SERVICE_FIELD_SERVICE_NAME,
     SERVICE_GET_CATALOG,
     SERVICE_SET_FILTER_STATE,
+    SERVICE_SET_SERVICE_STATE,
 )
 from custom_components.controld_manager.diagnostics import (
     async_get_config_entry_diagnostics,
@@ -2008,6 +2015,548 @@ async def test_set_filter_state_rejects_entity_targets(hass) -> None:
                 ATTR_ENTITY_ID: [filter_entity_id],
                 SERVICE_FIELD_FILTER_ID: ["ads"],
                 SERVICE_FIELD_ENABLED: False,
+            },
+            blocking=True,
+        )
+
+
+async def test_set_service_state_supports_raw_service_key(hass) -> None:
+    """The service-mode service should resolve a raw Control D service key."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_service = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SERVICE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_SERVICE_ID: "amazonmusic",
+            SERVICE_FIELD_MODE: "Blocked",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_service.assert_awaited_once_with(
+        "profile-1",
+        "amazonmusic",
+        enabled=True,
+        action_do=0,
+    )
+
+
+async def test_set_service_state_supports_live_lookup_without_enabled_categories(
+    hass,
+) -> None:
+    """The service-mode service should still resolve live services.
+
+    This should work even when no service categories are enabled for entities.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    assert runtime.registry.services_by_profile.get("profile-1", {}) == {}
+
+    runtime.client.async_get_service_categories = AsyncMock(
+        return_value=SERVICE_CATEGORIES
+    )
+    runtime.client.async_get_service_catalog = AsyncMock(return_value=SERVICE_CATALOG)
+    runtime.client.async_get_profile_services = AsyncMock(
+        return_value=[
+            {
+                "PK": "amazonmusic",
+                "name": "Amazon Music",
+                "category": "audio",
+                "warning": "",
+                "unlock_location": "JFK",
+                "action": {"do": 1, "status": 1},
+            }
+        ]
+    )
+    runtime.client.async_set_profile_service = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SERVICE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_SERVICE_NAME: "Amazon Music",
+            SERVICE_FIELD_MODE: "Blocked",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_service.assert_awaited_once_with(
+        "profile-1",
+        "amazonmusic",
+        enabled=True,
+        action_do=0,
+    )
+
+
+async def test_set_service_state_supports_live_lookup_for_missing_loaded_category(
+    hass,
+) -> None:
+    """The service-mode service should live-resolve filtered-out services."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    assert runtime.registry.services_by_profile.get("profile-1", {})
+    assert "facebook" not in runtime.registry.services_by_profile["profile-1"]
+
+    runtime.client.async_get_service_categories = AsyncMock(
+        return_value=[
+            {"PK": "audio", "name": "Audio", "count": 18},
+            {"PK": "social", "name": "Social", "count": 10},
+        ]
+    )
+    runtime.client.async_get_service_catalog = AsyncMock(
+        return_value=[
+            {
+                "PK": "amazonmusic",
+                "name": "Amazon Music",
+                "category": "audio",
+                "warning": "",
+                "unlock_location": "JFK",
+            },
+            {
+                "PK": "facebook",
+                "name": "Facebook",
+                "category": "social",
+                "warning": "",
+                "unlock_location": None,
+            },
+        ]
+    )
+    runtime.client.async_get_profile_services = AsyncMock(
+        return_value=[
+            {
+                "PK": "amazonmusic",
+                "name": "Amazon Music",
+                "category": "audio",
+                "warning": "",
+                "unlock_location": "JFK",
+                "action": {"do": 1, "status": 1},
+            },
+            {
+                "PK": "facebook",
+                "name": "Facebook",
+                "category": "social",
+                "warning": "",
+                "unlock_location": None,
+                "action": {"do": 1, "status": 1},
+            },
+        ]
+    )
+    runtime.client.async_set_profile_service = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SERVICE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_SERVICE_ID: "facebook",
+            SERVICE_FIELD_MODE: "Blocked",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_service.assert_awaited_once_with(
+        "profile-1",
+        "facebook",
+        enabled=True,
+        action_do=0,
+    )
+
+
+async def test_set_service_state_supports_user_facing_names(hass) -> None:
+    """The service-mode service should resolve one or more user-facing names."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    profile_device = dr.async_get(hass).async_get_device(
+        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    )
+    assert profile_device is not None
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_service = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SERVICE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_ID: [profile_device.id],
+            SERVICE_FIELD_SERVICE_NAME: ["amazon music"],
+            SERVICE_FIELD_MODE: "Redirected",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_service.assert_awaited_once_with(
+        "profile-1",
+        "amazonmusic",
+        enabled=True,
+        action_do=2,
+    )
+
+
+async def test_set_service_state_prefers_service_ids_over_names(hass) -> None:
+    """The service-mode service should use raw service IDs before names."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_service = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SERVICE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_SERVICE_ID: ["amazonmusic"],
+            SERVICE_FIELD_SERVICE_NAME: ["not-a-real-service"],
+            SERVICE_FIELD_MODE: "Off",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_service.assert_awaited_once_with(
+        "profile-1",
+        "amazonmusic",
+        enabled=False,
+        action_do=1,
+    )
+
+
+async def test_set_service_state_prefers_config_entry_id_over_name(hass) -> None:
+    """The service-mode service should use Integration ID before name."""
+    entry_one = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-one", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry_two = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-two", "entry_name": "Control D Cabin"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-456",
+        title="Control D Cabin",
+    )
+    entry_one.add_to_hass(hass)
+    entry_two.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(
+                side_effect=[
+                    _inventory("user-123", "profile-1"),
+                    _inventory("user-456", "profile-1"),
+                ]
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry_one.entry_id)
+        await hass.async_block_till_done()
+        if entry_two.state is ConfigEntryState.NOT_LOADED:
+            assert await hass.config_entries.async_setup(entry_two.entry_id)
+            await hass.async_block_till_done()
+
+    entry_one.runtime_data.client.async_set_profile_service = AsyncMock()
+    entry_one.runtime_data.coordinator.async_refresh = AsyncMock()
+    entry_two.runtime_data.client.async_set_profile_service = AsyncMock()
+    entry_two.runtime_data.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SERVICE_STATE,
+        {
+            "config_entry_id": entry_one.entry_id,
+            "config_entry_name": "Control D Cabin",
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_SERVICE_ID: ["amazonmusic"],
+            SERVICE_FIELD_MODE: "Bypassed",
+        },
+        blocking=True,
+    )
+
+    entry_one.runtime_data.client.async_set_profile_service.assert_awaited_once()
+    entry_two.runtime_data.client.async_set_profile_service.assert_not_awaited()
+
+
+async def test_set_service_state_rejects_unknown_service_name(hass) -> None:
+    """The service-mode service should reject an unknown service name."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_get_service_categories = AsyncMock(
+        return_value=SERVICE_CATEGORIES
+    )
+    runtime.client.async_get_service_catalog = AsyncMock(return_value=SERVICE_CATALOG)
+    runtime.client.async_get_profile_services = AsyncMock(
+        return_value=[
+            {
+                "PK": "amazonmusic",
+                "name": "Amazon Music",
+                "category": "audio",
+                "warning": "",
+                "unlock_location": "JFK",
+                "action": {"do": 1, "status": 1},
+            }
+        ]
+    )
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SERVICE_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_SERVICE_NAME: "not-a-real-service",
+                SERVICE_FIELD_MODE: "Blocked",
+            },
+            blocking=True,
+        )
+
+
+async def test_set_service_state_surfaces_rejected_redirects_gracefully(hass) -> None:
+    """The service-mode service should surface upstream mode rejections cleanly."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_service = AsyncMock(
+        side_effect=ControlDApiResponseError("redirect not permitted")
+    )
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SERVICE_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_SERVICE_ID: "amazonmusic",
+                SERVICE_FIELD_MODE: "Redirected",
+            },
+            blocking=True,
+        )
+
+
+async def test_set_service_state_requires_profile_selector(hass) -> None:
+    """The service-mode service should require a profile ID or profile name."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SERVICE_STATE,
+            {
+                SERVICE_FIELD_SERVICE_ID: ["amazonmusic"],
+                SERVICE_FIELD_MODE: "Blocked",
+            },
+            blocking=True,
+        )
+
+
+async def test_set_service_state_requires_service_selector(hass) -> None:
+    """The service-mode service should require a service ID or service name."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SERVICE_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_MODE: "Blocked",
+            },
+            blocking=True,
+        )
+
+
+async def test_set_service_state_rejects_entity_targets(hass) -> None:
+    """The service-mode service should not accept generic entity targets."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    service_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SERVICE_STATE,
+            {
+                ATTR_ENTITY_ID: [service_entity_id],
+                SERVICE_FIELD_SERVICE_ID: ["amazonmusic"],
+                SERVICE_FIELD_MODE: "Blocked",
             },
             blocking=True,
         )

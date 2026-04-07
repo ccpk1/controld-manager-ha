@@ -107,6 +107,129 @@
     },
     "filter_name_ambiguous": {
       "message": "The selected Control D filter target matches more than one filter. Use raw filter IDs when names are ambiguous."
+    },
+    "service_target_required": {
+      "message": "Select at least one Control D service by ID or name."
+    },
+    "service_name_not_found": {
+      "message": "The selected Control D service target could not be resolved for one or more targeted profiles."
+    },
+    "service_name_ambiguous": {
+      "message": "The selected Control D service target matches more than one service. Use raw service IDs when names are ambiguous."
+    },
+    "rule_group_target_required": {
+      "message": "Select at least one Control D rule group by ID or name."
+    },
+    "rule_group_name_not_found": {
+      "message": "The selected Control D rule-group target could not be resolved for one or more targeted profiles."
+    },
+    "rule_group_name_ambiguous": {
+      "message": "The selected Control D rule-group target matches more than one folder. Use raw rule-group IDs when names are ambiguous."
+    },
+    "rule_target_required": {
+      "message": "Select at least one Control D rule by identity or comment."
+    },
+    "rule_name_not_found": {
+      "message": "The selected Control D rule target could not be resolved for one or more targeted profiles."
+    },
+    "rule_name_ambiguous": {
+      "message": "The selected Control D rule target matches more than one rule. Use raw rule identities when comments are ambiguous."
+    },
+    "option_target_required": {
+      "message": "Select at least one Control D profile option by ID or title."
+    },
+    "option_name_not_found": {
+      "message": "The selected Control D profile-option target could not be resolved for one or more targeted profiles."
+    },
+    "option_name_ambiguous": {
+      "message": "The selected Control D profile-option target matches more than one option. Use raw option IDs when titles are ambiguous."
+    },
+    "disable_profiles_failed": {
+      "message": "Unable to disable the targeted Control D profiles."
+    },
+    "enable_profiles_failed": {
+      "message": "Unable to enable the targeted Control D profiles."
+    },
+    "set_filters_failed": {
+      "message": "Unable to update the targeted Control D filters."
+    },
+    "set_services_failed": {
+      "message": "Unable to update the targeted Control D services."
+    },
+    "service_mode_rejected": {
+      "message": "Control D rejected the requested service mode for one or more targeted services."
+    },
+    "manual_sync_failed": {
+      "message": "The manual sync failed: {error}"
+    },
+    "filter_not_found": {
+      "message": "Unable to find the selected Control D filter."
+    },
+    "filter_mode_unsupported": {
+      "message": "Unsupported Control D filter mode."
+    },
+    "filter_mode_update_failed": {
+      "message": "Unable to update the Control D filter mode."
+    },
+    "service_not_found": {
+      "message": "Unable to find the selected Control D service."
+    },
+    "service_mode_unsupported": {
+      "message": "Unsupported Control D service mode."
+    },
+    "service_update_failed": {
+      "message": "Unable to update the Control D service."
+    },
+    "default_rule_mode_unsupported": {
+      "message": "Unsupported Control D default rule mode."
+    },
+    "default_rule_not_found": {
+      "message": "Unable to find the selected Control D default rule."
+    },
+    "default_rule_update_failed": {
+      "message": "Unable to update the Control D default rule."
+    },
+    "rule_group_mode_unsupported": {
+      "message": "Unsupported Control D folder rule mode."
+    },
+    "rule_group_not_found": {
+      "message": "Unable to find the selected Control D folder."
+    },
+    "rule_group_update_failed": {
+      "message": "Unable to update the Control D folder rule."
+    },
+    "option_not_found": {
+      "message": "Unable to find the selected Control D option."
+    },
+    "option_value_unsupported": {
+      "message": "Unsupported Control D option value."
+    },
+    "option_update_failed": {
+      "message": "Unable to update the Control D option."
+    },
+    "disable_profile_failed": {
+      "message": "Unable to disable the Control D profile."
+    },
+    "enable_profile_failed": {
+      "message": "Unable to enable the Control D profile."
+    },
+    "enable_filter_failed": {
+      "message": "Unable to enable the Control D filter."
+    },
+    "disable_filter_failed": {
+      "message": "Unable to disable the Control D filter."
+    },
+    "enable_rule_failed": {
+      "message": "Unable to enable the Control D rule."
+    },
+    "disable_rule_failed": {
+      "message": "Unable to disable the Control D rule."
+    },
+    "enable_option_failed": {
+      "message": "Unable to enable the Control D option."
+    },
+    "disable_option_failed": {
+      "message": "Unable to disable the Control D option."
     }
   },
   "services": {
@@ -181,6 +304,40 @@
         "enabled": {
           "name": "Enabled",
           "description": "Turn the selected filters on or off for the targeted profiles."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "set_service_state": {
+      "name": "Set service state",
+      "description": "Set one or more Control D services to Off, Blocked, Bypassed, or Redirected across the selected profiles.",
+      "fields": {
+        "profile_id": {
+          "name": "Select a profile",
+          "description": "Required unless you provide Profile names. Select one or more managed Control D profiles by ID. If Profile IDs and Profile names are both provided, Profile IDs take precedence."
+        },
+        "profile_name": {
+          "name": "Profile names",
+          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids."
+        },
+        "service_id": {
+          "name": "Service IDs",
+          "description": "Required unless you provide Service names. Enter one or more raw Control D service IDs, such as amazonmusic. If Service IDs and Service names are both provided, Service IDs take precedence."
+        },
+        "service_name": {
+          "name": "Service names",
+          "description": "Required unless you provide Service IDs. Enter one or more user-facing Control D service names, separated by commas, such as Amazon Music."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Set the selected services to Off, Blocked, Bypassed, or Redirected."
         },
         "config_entry_id": {
           "name": "Configuration Entry ID",

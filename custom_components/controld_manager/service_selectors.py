@@ -13,6 +13,18 @@ from .const import (
     TRANS_KEY_FILTER_NAME_AMBIGUOUS,
     TRANS_KEY_FILTER_NAME_NOT_FOUND,
     TRANS_KEY_FILTER_TARGET_REQUIRED,
+    TRANS_KEY_OPTION_NAME_AMBIGUOUS,
+    TRANS_KEY_OPTION_NAME_NOT_FOUND,
+    TRANS_KEY_OPTION_TARGET_REQUIRED,
+    TRANS_KEY_RULE_GROUP_NAME_AMBIGUOUS,
+    TRANS_KEY_RULE_GROUP_NAME_NOT_FOUND,
+    TRANS_KEY_RULE_GROUP_TARGET_REQUIRED,
+    TRANS_KEY_RULE_NAME_AMBIGUOUS,
+    TRANS_KEY_RULE_NAME_NOT_FOUND,
+    TRANS_KEY_RULE_TARGET_REQUIRED,
+    TRANS_KEY_SERVICE_NAME_AMBIGUOUS,
+    TRANS_KEY_SERVICE_NAME_NOT_FOUND,
+    TRANS_KEY_SERVICE_TARGET_REQUIRED,
 )
 from .models import (
     ControlDFilter,
@@ -77,11 +89,14 @@ def _resolve_selected_service_pks(
         item_id=lambda service_row: service_row.service_pk,
         item_name=lambda service_row: service_row.name,
         required_message="Select at least one Control D service by ID or name",
+        required_translation_key=TRANS_KEY_SERVICE_TARGET_REQUIRED,
         not_found_message=(
             "The selected Control D service target could not be resolved for one "
             "or more targeted profiles"
         ),
+        not_found_translation_key=TRANS_KEY_SERVICE_NAME_NOT_FOUND,
         ambiguous_message="The selected Control D service target is ambiguous",
+        ambiguous_translation_key=TRANS_KEY_SERVICE_NAME_AMBIGUOUS,
     )
 
 
@@ -104,11 +119,14 @@ def _resolve_selected_rule_group_pks(
         item_id=lambda group_row: group_row.group_pk,
         item_name=lambda group_row: group_row.name,
         required_message="Select at least one Control D rule group by ID or name",
+        required_translation_key=TRANS_KEY_RULE_GROUP_TARGET_REQUIRED,
         not_found_message=(
             "The selected Control D rule-group target could not be resolved for "
             "one or more targeted profiles"
         ),
+        not_found_translation_key=TRANS_KEY_RULE_GROUP_NAME_NOT_FOUND,
         ambiguous_message="The selected Control D rule-group target is ambiguous",
+        ambiguous_translation_key=TRANS_KEY_RULE_GROUP_NAME_AMBIGUOUS,
     )
 
 
@@ -128,11 +146,14 @@ def _resolve_selected_rule_identities(
         item_id=lambda rule_row: rule_row.identity,
         item_name=lambda rule_row: rule_row.comment or None,
         required_message="Select at least one Control D rule by identity or comment",
+        required_translation_key=TRANS_KEY_RULE_TARGET_REQUIRED,
         not_found_message=(
             "The selected Control D rule target could not be resolved for one or "
             "more targeted profiles"
         ),
+        not_found_translation_key=TRANS_KEY_RULE_NAME_NOT_FOUND,
         ambiguous_message="The selected Control D rule target is ambiguous",
+        ambiguous_translation_key=TRANS_KEY_RULE_NAME_AMBIGUOUS,
     )
 
 
@@ -152,11 +173,14 @@ def _resolve_selected_option_pks(
         item_id=lambda option_row: option_row.option_pk,
         item_name=lambda option_row: option_row.title,
         required_message="Select at least one Control D profile option by ID or title",
+        required_translation_key=TRANS_KEY_OPTION_TARGET_REQUIRED,
         not_found_message=(
             "The selected Control D profile-option target could not be resolved "
             "for one or more targeted profiles"
         ),
+        not_found_translation_key=TRANS_KEY_OPTION_NAME_NOT_FOUND,
         ambiguous_message="The selected Control D profile-option target is ambiguous",
+        ambiguous_translation_key=TRANS_KEY_OPTION_NAME_AMBIGUOUS,
     )
 
 

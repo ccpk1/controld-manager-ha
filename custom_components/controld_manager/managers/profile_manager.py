@@ -359,6 +359,53 @@ class ProfileManager(BaseManager):
         )
         self._schedule_runtime_refresh()
 
+    async def async_set_services_mode(
+        self,
+        profile_services: dict[str, frozenset[str]],
+        mode: str,
+        *,
+        service_rows_by_profile: dict[str, dict[str, ControlDService]] | None = None,
+    ) -> None:
+        """Set the selected mode for one or more services across profiles."""
+        updated_services: list[tuple[str, str, ControlDService, bool, int]] = []
+
+        for profile_pk, service_pks in profile_services.items():
+            for service_pk in service_pks:
+                if (
+                    service_rows_by_profile
+                    and service_pk in service_rows_by_profile.get(profile_pk, {})
+                ):
+                    service_row = service_rows_by_profile[profile_pk][service_pk]
+                else:
+                    service_row = self._service_row(profile_pk, service_pk)
+                enabled, action_do = self._service_write_payload(mode, service_row)
+                updated_services.append(
+                    (profile_pk, service_pk, service_row, enabled, action_do)
+                )
+
+        await asyncio.gather(
+            *(
+                self.runtime.client.async_set_profile_service(
+                    profile_pk,
+                    service_pk,
+                    enabled=enabled,
+                    action_do=action_do,
+                )
+                for profile_pk, service_pk, _, enabled, action_do in updated_services
+            )
+        )
+
+        for profile_pk, service_pk, service_row, enabled, action_do in updated_services:
+            self._update_cached_service(
+                profile_pk,
+                service_pk,
+                service_row,
+                enabled=enabled,
+                action_do=action_do,
+            )
+
+        self._schedule_runtime_refresh()
+
     async def async_set_profile_option_toggle(
         self, profile_pk: str, option_pk: str, enabled: bool
     ) -> None:

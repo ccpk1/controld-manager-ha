@@ -16,11 +16,27 @@ from .api import (
 )
 from .const import (
     DEFAULT_ENABLED_FILTERS,
+    DOMAIN,
     PURPOSE_PROFILE_DEFAULT_RULE,
     PURPOSE_PROFILE_FILTER_MODE,
     PURPOSE_PROFILE_OPTION,
     PURPOSE_PROFILE_RULE_GROUP,
     PURPOSE_PROFILE_SERVICE,
+    TRANS_KEY_DEFAULT_RULE_MODE_UNSUPPORTED,
+    TRANS_KEY_DEFAULT_RULE_NOT_FOUND,
+    TRANS_KEY_DEFAULT_RULE_UPDATE_FAILED,
+    TRANS_KEY_FILTER_MODE_UNSUPPORTED,
+    TRANS_KEY_FILTER_MODE_UPDATE_FAILED,
+    TRANS_KEY_FILTER_NOT_FOUND,
+    TRANS_KEY_OPTION_NOT_FOUND,
+    TRANS_KEY_OPTION_UPDATE_FAILED,
+    TRANS_KEY_OPTION_VALUE_UNSUPPORTED,
+    TRANS_KEY_RULE_GROUP_MODE_UNSUPPORTED,
+    TRANS_KEY_RULE_GROUP_NOT_FOUND,
+    TRANS_KEY_RULE_GROUP_UPDATE_FAILED,
+    TRANS_KEY_SERVICE_MODE_UNSUPPORTED,
+    TRANS_KEY_SERVICE_NOT_FOUND,
+    TRANS_KEY_SERVICE_UPDATE_FAILED,
 )
 from .entity import ControlDManagerProfileEntity
 from .models import (
@@ -39,6 +55,14 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 PARALLEL_UPDATES = 0
+
+
+def _ha_error(translation_key: str) -> HomeAssistantError:
+    """Build one translated Home Assistant error."""
+    return HomeAssistantError(
+        translation_domain=DOMAIN,
+        translation_key=translation_key,
+    )
 
 
 async def async_setup_entry(
@@ -158,13 +182,13 @@ class ControlDManagerProfileFilterModeSelect(
         """Select a new mode for the filter."""
         filter_row = self.filter_row
         if filter_row is None:
-            raise HomeAssistantError("Unable to find the selected Control D filter")
+            raise _ha_error(TRANS_KEY_FILTER_NOT_FOUND)
         selected_level = next(
             (level for level in filter_row.levels if level.title == option),
             None,
         )
         if selected_level is None:
-            raise HomeAssistantError("Unsupported Control D filter mode")
+            raise _ha_error(TRANS_KEY_FILTER_MODE_UNSUPPORTED)
         try:
             await self.runtime.managers.profile.async_set_filter_mode(
                 self._profile_pk, self._filter_pk, selected_level.slug
@@ -174,9 +198,7 @@ class ControlDManagerProfileFilterModeSelect(
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError(
-                "Unable to update the Control D filter mode"
-            ) from err
+            raise _ha_error(TRANS_KEY_FILTER_MODE_UPDATE_FAILED) from err
 
 
 class ControlDManagerProfileServiceModeSelect(
@@ -239,9 +261,9 @@ class ControlDManagerProfileServiceModeSelect(
         """Set a new mode for the service."""
         service_row = self.service_row
         if service_row is None:
-            raise HomeAssistantError("Unable to find the selected Control D service")
+            raise _ha_error(TRANS_KEY_SERVICE_NOT_FOUND)
         if option not in service_mode_options():
-            raise HomeAssistantError("Unsupported Control D service mode")
+            raise _ha_error(TRANS_KEY_SERVICE_MODE_UNSUPPORTED)
         try:
             await self.runtime.managers.profile.async_set_service_mode(
                 self._profile_pk, self._service_pk, option
@@ -251,7 +273,7 @@ class ControlDManagerProfileServiceModeSelect(
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError("Unable to update the Control D service") from err
+            raise _ha_error(TRANS_KEY_SERVICE_UPDATE_FAILED) from err
 
 
 class ControlDManagerProfileDefaultRuleSelect(
@@ -302,11 +324,9 @@ class ControlDManagerProfileDefaultRuleSelect(
     async def async_select_option(self, option: str) -> None:
         """Set a new default-rule mode for the profile."""
         if option not in default_rule_mode_options():
-            raise HomeAssistantError("Unsupported Control D default rule mode")
+            raise _ha_error(TRANS_KEY_DEFAULT_RULE_MODE_UNSUPPORTED)
         if self.default_rule_row is None:
-            raise HomeAssistantError(
-                "Unable to find the selected Control D default rule"
-            )
+            raise _ha_error(TRANS_KEY_DEFAULT_RULE_NOT_FOUND)
         try:
             await self.runtime.managers.profile.async_set_default_rule_mode(
                 self._profile_pk, option
@@ -316,9 +336,7 @@ class ControlDManagerProfileDefaultRuleSelect(
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError(
-                "Unable to update the Control D default rule"
-            ) from err
+            raise _ha_error(TRANS_KEY_DEFAULT_RULE_UPDATE_FAILED) from err
 
 
 class ControlDManagerProfileRuleGroupSelect(ControlDManagerProfileEntity, SelectEntity):
@@ -376,9 +394,9 @@ class ControlDManagerProfileRuleGroupSelect(ControlDManagerProfileEntity, Select
     async def async_select_option(self, option: str) -> None:
         """Set a new folder-rule mode for the profile."""
         if option not in rule_group_mode_options():
-            raise HomeAssistantError("Unsupported Control D folder rule mode")
+            raise _ha_error(TRANS_KEY_RULE_GROUP_MODE_UNSUPPORTED)
         if self.group_row is None:
-            raise HomeAssistantError("Unable to find the selected Control D folder")
+            raise _ha_error(TRANS_KEY_RULE_GROUP_NOT_FOUND)
         try:
             await self.runtime.managers.profile.async_set_rule_group_mode(
                 self._profile_pk, self._group_pk, option
@@ -388,9 +406,7 @@ class ControlDManagerProfileRuleGroupSelect(ControlDManagerProfileEntity, Select
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError(
-                "Unable to update the Control D folder rule"
-            ) from err
+            raise _ha_error(TRANS_KEY_RULE_GROUP_UPDATE_FAILED) from err
 
 
 class ControlDManagerProfileOptionSelect(ControlDManagerProfileEntity, SelectEntity):
@@ -457,9 +473,9 @@ class ControlDManagerProfileOptionSelect(ControlDManagerProfileEntity, SelectEnt
         """Set a new value for the profile option."""
         option_row = self.option_row
         if option_row is None:
-            raise HomeAssistantError("Unable to find the selected Control D option")
+            raise _ha_error(TRANS_KEY_OPTION_NOT_FOUND)
         if option not in option_row.select_options:
-            raise HomeAssistantError("Unsupported Control D option value")
+            raise _ha_error(TRANS_KEY_OPTION_VALUE_UNSUPPORTED)
         try:
             await self.runtime.managers.profile.async_set_profile_option_select(
                 self._profile_pk, self._option_pk, option
@@ -469,4 +485,4 @@ class ControlDManagerProfileOptionSelect(ControlDManagerProfileEntity, SelectEnt
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError("Unable to update the Control D option") from err
+            raise _ha_error(TRANS_KEY_OPTION_UPDATE_FAILED) from err

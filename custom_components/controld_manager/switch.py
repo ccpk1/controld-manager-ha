@@ -24,10 +24,19 @@ from .const import (
     ATTR_RULE_IDENTITY,
     DEFAULT_DISABLE_MINUTES,
     DEFAULT_ENABLED_FILTERS,
+    DOMAIN,
     PURPOSE_PROFILE_FILTER,
     PURPOSE_PROFILE_OPTION,
     PURPOSE_PROFILE_PAUSE,
     PURPOSE_PROFILE_RULE,
+    TRANS_KEY_DISABLE_FILTER_FAILED,
+    TRANS_KEY_DISABLE_OPTION_FAILED,
+    TRANS_KEY_DISABLE_PROFILE_FAILED,
+    TRANS_KEY_DISABLE_RULE_FAILED,
+    TRANS_KEY_ENABLE_FILTER_FAILED,
+    TRANS_KEY_ENABLE_OPTION_FAILED,
+    TRANS_KEY_ENABLE_PROFILE_FAILED,
+    TRANS_KEY_ENABLE_RULE_FAILED,
 )
 from .entity import ControlDManagerProfileEntity
 from .models import (
@@ -41,6 +50,14 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 PARALLEL_UPDATES = 0
+
+
+def _ha_error(translation_key: str) -> HomeAssistantError:
+    """Build one translated Home Assistant error."""
+    return HomeAssistantError(
+        translation_domain=DOMAIN,
+        translation_key=translation_key,
+    )
 
 
 async def async_setup_entry(
@@ -135,7 +152,7 @@ class ControlDManagerProfilePausedSwitch(ControlDManagerProfileEntity, SwitchEnt
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError("Unable to disable the Control D profile") from err
+            raise _ha_error(TRANS_KEY_DISABLE_PROFILE_FAILED) from err
 
     async def async_turn_off(self, **kwargs: object) -> None:
         """Enable the profile immediately."""
@@ -149,7 +166,7 @@ class ControlDManagerProfilePausedSwitch(ControlDManagerProfileEntity, SwitchEnt
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError("Unable to enable the Control D profile") from err
+            raise _ha_error(TRANS_KEY_ENABLE_PROFILE_FAILED) from err
 
 
 class ControlDManagerProfileFilterSwitch(ControlDManagerProfileEntity, SwitchEntity):
@@ -217,7 +234,7 @@ class ControlDManagerProfileFilterSwitch(ControlDManagerProfileEntity, SwitchEnt
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError("Unable to enable the Control D filter") from err
+            raise _ha_error(TRANS_KEY_ENABLE_FILTER_FAILED) from err
 
     async def async_turn_off(self, **kwargs: object) -> None:
         """Disable the filter."""
@@ -231,7 +248,7 @@ class ControlDManagerProfileFilterSwitch(ControlDManagerProfileEntity, SwitchEnt
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError("Unable to disable the Control D filter") from err
+            raise _ha_error(TRANS_KEY_DISABLE_FILTER_FAILED) from err
 
 
 class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntity):
@@ -308,7 +325,7 @@ class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntit
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError("Unable to enable the Control D rule") from err
+            raise _ha_error(TRANS_KEY_ENABLE_RULE_FAILED) from err
 
     async def async_turn_off(self, **kwargs: object) -> None:
         """Disable the selected rule."""
@@ -322,7 +339,7 @@ class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntit
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError("Unable to disable the Control D rule") from err
+            raise _ha_error(TRANS_KEY_DISABLE_RULE_FAILED) from err
 
 
 class ControlDManagerProfileOptionSwitch(ControlDManagerProfileEntity, SwitchEntity):
@@ -394,7 +411,7 @@ class ControlDManagerProfileOptionSwitch(ControlDManagerProfileEntity, SwitchEnt
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError("Unable to enable the Control D option") from err
+            raise _ha_error(TRANS_KEY_ENABLE_OPTION_FAILED) from err
 
     async def async_turn_off(self, **kwargs: object) -> None:
         """Disable the profile option."""
@@ -408,4 +425,4 @@ class ControlDManagerProfileOptionSwitch(ControlDManagerProfileEntity, SwitchEnt
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError("Unable to disable the Control D option") from err
+            raise _ha_error(TRANS_KEY_DISABLE_OPTION_FAILED) from err

@@ -209,6 +209,9 @@ Remaining follow-on scope after the current slice:
 - [x] Add the capability-style filter mutation service `set_filter_state`, and
 	resolve filters by raw key or user-facing name across the selected profile
 	targets.
+- [x] Add the capability-style service mutation service `set_service_state`,
+	and resolve services by raw key or user-facing name across the selected
+	profile targets.
 - [x] Keep external or 3rd-party filters loaded in runtime for service writes
 	even when their entities stay hidden, and expose them only through a
 	per-profile `Expose 3rd-party filters` option with disabled-by-default
@@ -231,9 +234,17 @@ Current Phase 6 service posture:
 - `set_filter_state` now follows the same explicit profile-target contract and
 	adds explicit `filter_id` and `filter_name` selectors, with ID precedence for
 	both profile and filter selection paths
+- `set_service_state` now follows the same explicit profile-target contract and
+	adds explicit `service_id` and `service_name` selectors plus required
+	service-mode validation, with ID precedence for both profile and service
+	selection paths
 - `get_catalog` now provides one read-only response service for `filters`,
 	`services`, `rules`, and `profile_options`, with required `catalog_type`
 	selection and optional entry or profile scoping
+- custom-integration translation assets now follow Home Assistant expectations:
+	user-facing language remains in `translations/en.json`, `icons.json` now
+	defines entity and service icons, and runtime/service exception paths now use
+	translation-backed `HomeAssistantError` and `ServiceValidationError` keys
 - manager-owned mutation paths are now aligned across filters, services,
 	rules, rule groups, default rules, and profile options so future Home
 	Assistant services can reuse one consistent write contract
@@ -241,9 +252,9 @@ Current Phase 6 service posture:
 	services, rule groups, rules, and profile options, so future service
 	registration can add new actions without re-implementing per-item lookup
 	semantics
-	- Home Assistant and HACS brand assets are now present in the integration via
-		root `icon.png` and `logo.png` plus the complete
-		`custom_components/controld_manager/brand/` bundle for light, dark, and `@2x`
+- Home Assistant and HACS brand assets are now present in the integration via
+	root `icon.png` and `logo.png` plus the complete
+	`custom_components/controld_manager/brand/` bundle for light, dark, and `@2x`
 		variants
 
 Phase 5 required research closeouts before code for that specific surface starts:
