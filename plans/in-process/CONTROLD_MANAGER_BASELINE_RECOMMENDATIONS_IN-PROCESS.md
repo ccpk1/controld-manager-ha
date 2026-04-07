@@ -234,6 +234,17 @@ Current Phase 6 service posture:
 - `get_catalog` now provides one read-only response service for `filters`,
 	`services`, `rules`, and `profile_options`, with required `catalog_type`
 	selection and optional entry or profile scoping
+- manager-owned mutation paths are now aligned across filters, services,
+	rules, rule groups, default rules, and profile options so future Home
+	Assistant services can reuse one consistent write contract
+- the service layer now has a generic selector-resolution base for filters,
+	services, rule groups, rules, and profile options, so future service
+	registration can add new actions without re-implementing per-item lookup
+	semantics
+	- Home Assistant and HACS brand assets are now present in the integration via
+		root `icon.png` and `logo.png` plus the complete
+		`custom_components/controld_manager/brand/` bundle for light, dark, and `@2x`
+		variants
 
 Phase 5 required research closeouts before code for that specific surface starts:
 

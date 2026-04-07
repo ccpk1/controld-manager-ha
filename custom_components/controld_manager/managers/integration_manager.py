@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import re
 from typing import Any
+
+from homeassistant.util.json import JsonValueType
 
 from ..models import (
     ControlDDefaultRule,
@@ -108,6 +112,232 @@ class IntegrationManager(BaseManager):
         self._device_manager.sync_registry(registry)
         self._entity_manager.sync_registry(registry)
         return registry
+
+    async def async_build_catalog_response(
+        self,
+        *,
+        config_entry_id: str,
+        catalog_type: str,
+        profile_pks: frozenset[str],
+    ) -> dict[str, JsonValueType]:
+        """Build one service response payload for a catalog request."""
+        profile_rows: list[JsonValueType] = [
+            {
+                "profile_id": profile_pk,
+                "profile_name": self.runtime.registry.profiles[profile_pk].name,
+            }
+            for profile_pk in self._sorted_profile_pks(profile_pks)
+            if profile_pk in self.runtime.registry.profiles
+        ]
+
+        if catalog_type == "filters":
+            items, text = self._build_filter_catalog(profile_pks)
+        elif catalog_type == "services":
+            items, text = await self._async_build_service_catalog(profile_pks)
+        elif catalog_type == "rules":
+            items, text = await self._async_build_rule_catalog(profile_pks)
+        else:
+            items, text = self._build_profile_option_catalog(profile_pks)
+
+        return {
+            "catalog_type": catalog_type,
+            "config_entry_id": config_entry_id,
+            "profiles": profile_rows,
+            "items": items,
+            "text": text,
+        }
+
+    def _build_filter_catalog(
+        self, profile_pks: frozenset[str]
+    ) -> tuple[list[JsonValueType], str]:
+        """Build filter catalog items and copyable text."""
+        items: list[JsonValueType] = []
+        text_lines: list[str] = []
+        for profile_pk in self._sorted_profile_pks(profile_pks):
+            profile = self.runtime.registry.profiles[profile_pk]
+            text_lines.append(f"[{profile.name}]")
+            for filter_row in self._sorted_profile_filters(profile_pk):
+                items.append(
+                    {
+                        "profile_id": profile_pk,
+                        "profile_name": profile.name,
+                        "filter_id": filter_row.filter_pk,
+                        "name": filter_row.name,
+                        "external": filter_row.external,
+                        "enabled": filter_row.enabled,
+                        "supports_modes": filter_row.supports_modes,
+                        "current_mode": filter_row.effective_level_title,
+                    }
+                )
+                text_lines.append(f"{filter_row.filter_pk}, {filter_row.name}")
+        return items, "\n".join(text_lines)
+
+    async def _async_build_service_catalog(
+        self, profile_pks: frozenset[str]
+    ) -> tuple[list[JsonValueType], str]:
+        """Build service catalog items and copyable text."""
+        service_categories_payload = tuple(
+            await self.runtime.client.async_get_service_categories()
+        )
+        service_catalog_payload = tuple(
+            await self.runtime.client.async_get_service_catalog()
+        )
+        service_categories = self._normalize_service_categories(
+            service_categories_payload
+        )
+
+        items: list[JsonValueType] = []
+        text_lines: list[str] = []
+        for profile_pk in self._sorted_profile_pks(profile_pks):
+            profile = self.runtime.registry.profiles[profile_pk]
+            services_payload = tuple(
+                await self.runtime.client.async_get_profile_services(profile_pk)
+            )
+            services = sorted(
+                self._normalize_services(
+                    services_payload,
+                    service_categories,
+                    frozenset(service_categories),
+                    service_catalog_payload,
+                ).values(),
+                key=lambda service_row: (
+                    self._normalize_name(service_row.category_name),
+                    self._normalize_name(service_row.name),
+                    self._normalize_name(service_row.service_pk),
+                ),
+            )
+            text_lines.append(f"[{profile.name}]")
+            for service_row in services:
+                items.append(
+                    {
+                        "profile_id": profile_pk,
+                        "profile_name": profile.name,
+                        "service_id": service_row.service_pk,
+                        "name": service_row.name,
+                        "category_id": service_row.category_pk,
+                        "category_name": service_row.category_name,
+                        "current_mode": service_row.current_mode,
+                    }
+                )
+                text_lines.append(
+                    f"{service_row.service_pk}, {service_row.name}, "
+                    f"{service_row.category_name}"
+                )
+        return items, "\n".join(text_lines)
+
+    async def _async_build_rule_catalog(
+        self, profile_pks: frozenset[str]
+    ) -> tuple[list[JsonValueType], str]:
+        """Build rule and rule-group catalog items and copyable text."""
+        items: list[JsonValueType] = []
+        text_lines: list[str] = []
+        for profile_pk in self._sorted_profile_pks(profile_pks):
+            profile = self.runtime.registry.profiles[profile_pk]
+            groups_payload, rules_payload = await asyncio.gather(
+                self.runtime.client.async_get_profile_groups(profile_pk),
+                self.runtime.client.async_get_profile_rules(profile_pk),
+            )
+            rule_groups = sorted(
+                self._normalize_rule_groups(tuple(groups_payload)).values(),
+                key=lambda group_row: self._normalize_name(group_row.name),
+            )
+            rules = sorted(
+                self._normalize_rules(
+                    tuple(groups_payload),
+                    tuple(rules_payload),
+                ).values(),
+                key=lambda rule_row: (
+                    self._normalize_name(rule_row.group_name or ""),
+                    rule_row.order,
+                    self._normalize_name(rule_row.rule_pk),
+                ),
+            )
+            text_lines.append(f"[{profile.name}]")
+            for group_row in rule_groups:
+                items.append(
+                    {
+                        "profile_id": profile_pk,
+                        "profile_name": profile.name,
+                        "item_type": "group",
+                        "group_id": group_row.group_pk,
+                        "name": group_row.name,
+                        "current_mode": group_row.current_mode,
+                    }
+                )
+                text_lines.append(f"group:{group_row.group_pk}, {group_row.name}")
+
+            for rule_row in rules:
+                items.append(
+                    {
+                        "profile_id": profile_pk,
+                        "profile_name": profile.name,
+                        "item_type": "rule",
+                        "rule_identity": rule_row.identity,
+                        "rule_id": rule_row.rule_pk,
+                        "group_id": rule_row.group_pk,
+                        "group_name": rule_row.group_name,
+                        "action": rule_row.action_key,
+                        "enabled": rule_row.enabled,
+                        "comment": rule_row.comment,
+                    }
+                )
+                text_lines.append(f"{rule_row.identity}, {rule_row.rule_pk}")
+        return items, "\n".join(text_lines)
+
+    def _build_profile_option_catalog(
+        self, profile_pks: frozenset[str]
+    ) -> tuple[list[JsonValueType], str]:
+        """Build profile option catalog items and copyable text."""
+        items: list[JsonValueType] = []
+        text_lines: list[str] = []
+        for profile_pk in self._sorted_profile_pks(profile_pks):
+            profile = self.runtime.registry.profiles[profile_pk]
+            text_lines.append(f"[{profile.name}]")
+            options = sorted(
+                self.runtime.registry.options_by_profile.get(profile_pk, {}).values(),
+                key=lambda option_row: (
+                    self._normalize_name(option_row.title),
+                    self._normalize_name(option_row.option_pk),
+                ),
+            )
+            for option_row in options:
+                items.append(
+                    {
+                        "profile_id": profile_pk,
+                        "profile_name": profile.name,
+                        "option_id": option_row.option_pk,
+                        "title": option_row.title,
+                        "description": option_row.description,
+                        "option_type": option_row.option_type,
+                        "entity_kind": option_row.entity_kind,
+                        "current_value": option_row.current_select_option,
+                    }
+                )
+                text_lines.append(f"{option_row.option_pk}, {option_row.title}")
+        return items, "\n".join(text_lines)
+
+    def _sorted_profile_pks(self, profile_pks: frozenset[str]) -> list[str]:
+        """Return profile IDs in stable name order."""
+        return sorted(
+            profile_pks,
+            key=lambda profile_pk: self._normalize_name(
+                self.runtime.registry.profiles[profile_pk].name
+            ),
+        )
+
+    def _sorted_profile_filters(self, profile_pk: str) -> tuple[ControlDFilter, ...]:
+        """Return one profile's filters with native rows ahead of 3rd-party rows."""
+        filters = self.runtime.registry.filters_by_profile.get(profile_pk, {}).values()
+        return tuple(
+            sorted(
+                filters,
+                key=lambda filter_row: (
+                    filter_row.external,
+                    self._normalize_name(filter_row.name),
+                    self._normalize_name(filter_row.filter_pk),
+                ),
+            )
+        )
 
     @staticmethod
     def _normalize_service_categories(
@@ -417,3 +647,8 @@ class IntegrationManager(BaseManager):
     def _mapping_or_empty(value: Any) -> dict[str, Any]:
         """Return a mapping value or an empty mapping."""
         return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _normalize_name(value: str) -> str:
+        """Normalize a user-supplied name for case-insensitive ordering."""
+        return re.sub(r"\s+", " ", value).strip().casefold()

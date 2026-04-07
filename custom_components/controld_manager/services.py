@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import re
 from dataclasses import dataclass
 
 import voluptuous as vol
@@ -19,7 +17,6 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from homeassistant.util.json import JsonValueType
 
 from .api import (
     ControlDApiAuthError,
@@ -46,16 +43,14 @@ from .const import (
     TRANS_KEY_CONFIG_ENTRY_NAME_NOT_FOUND,
     TRANS_KEY_CONFIG_ENTRY_NOT_FOUND,
     TRANS_KEY_CONFIG_ENTRY_NOT_LOADED,
-    TRANS_KEY_FILTER_NAME_AMBIGUOUS,
-    TRANS_KEY_FILTER_NAME_NOT_FOUND,
-    TRANS_KEY_FILTER_TARGET_REQUIRED,
     TRANS_KEY_MULTIPLE_ENTRIES_LOADED,
     TRANS_KEY_PROFILE_TARGET_AMBIGUOUS,
     TRANS_KEY_PROFILE_TARGET_NOT_FOUND,
     TRANS_KEY_PROFILE_TARGET_REQUIRED,
     TRANS_KEY_WRONG_INTEGRATION_ENTRY,
 )
-from .models import ControlDFilter, ControlDManagerRuntime
+from .models import ControlDManagerRuntime
+from .service_selectors import _normalize_name, _resolve_selected_filter_pks
 
 ControlDManagerConfigEntry = ConfigEntry[ControlDManagerRuntime]
 
@@ -217,7 +212,12 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def async_handle_get_catalog(call: ServiceCall) -> ServiceResponse:
         """Return a typed catalog response for one config entry scope."""
         resolved_target = _resolve_catalog_service_target(hass, call)
-        return await _async_build_catalog_response(resolved_target)
+        integration_manager = resolved_target.entry.runtime_data.managers.integration
+        return await integration_manager.async_build_catalog_response(
+            config_entry_id=resolved_target.entry.entry_id,
+            catalog_type=resolved_target.catalog_type,
+            profile_pks=resolved_target.profile_pks,
+        )
 
     for legacy_service in ("pause_profile", "resume_profile", "set_filter_enabled"):
         if hass.services.has_service(DOMAIN, legacy_service):
@@ -298,241 +298,6 @@ def _resolve_catalog_service_target(
         profile_pks=resolved_profiles.profile_pks,
         catalog_type=catalog_type,
     )
-
-
-async def _async_build_catalog_response(
-    resolved_target: ResolvedCatalogServiceTarget,
-) -> ServiceResponse:
-    """Build one catalog response for the requested catalog type."""
-    entry = resolved_target.entry
-    profile_rows: list[JsonValueType] = [
-        {
-            "profile_id": profile_pk,
-            "profile_name": entry.runtime_data.registry.profiles[profile_pk].name,
-        }
-        for profile_pk in sorted(
-            resolved_target.profile_pks,
-            key=lambda profile_pk: _normalize_name(
-                entry.runtime_data.registry.profiles[profile_pk].name
-            ),
-        )
-        if profile_pk in entry.runtime_data.registry.profiles
-    ]
-
-    if resolved_target.catalog_type == "filters":
-        items, text = _build_filter_catalog(entry, resolved_target.profile_pks)
-    elif resolved_target.catalog_type == "services":
-        items, text = await _async_build_service_catalog(
-            entry, resolved_target.profile_pks
-        )
-    elif resolved_target.catalog_type == "rules":
-        items, text = await _async_build_rule_catalog(
-            entry, resolved_target.profile_pks
-        )
-    else:
-        items, text = _build_profile_option_catalog(entry, resolved_target.profile_pks)
-
-    return {
-        "catalog_type": resolved_target.catalog_type,
-        "config_entry_id": entry.entry_id,
-        "profiles": profile_rows,
-        "items": items,
-        "text": text,
-    }
-
-
-def _build_filter_catalog(
-    entry: ControlDManagerConfigEntry, profile_pks: frozenset[str]
-) -> tuple[list[JsonValueType], str]:
-    """Build filter catalog items and copyable text."""
-    items: list[JsonValueType] = []
-    text_lines: list[str] = []
-    for profile_pk in sorted(
-        profile_pks,
-        key=lambda item: _normalize_name(
-            entry.runtime_data.registry.profiles[item].name
-        ),
-    ):
-        profile = entry.runtime_data.registry.profiles[profile_pk]
-        text_lines.append(f"[{profile.name}]")
-        for filter_row in _sorted_profile_filters(entry, profile_pk):
-            items.append(
-                {
-                    "profile_id": profile_pk,
-                    "profile_name": profile.name,
-                    "filter_id": filter_row.filter_pk,
-                    "name": filter_row.name,
-                    "external": filter_row.external,
-                    "enabled": filter_row.enabled,
-                    "supports_modes": filter_row.supports_modes,
-                    "current_mode": filter_row.effective_level_title,
-                }
-            )
-            text_lines.append(f"{filter_row.filter_pk}, {filter_row.name}")
-    return items, "\n".join(text_lines)
-
-
-async def _async_build_service_catalog(
-    entry: ControlDManagerConfigEntry, profile_pks: frozenset[str]
-) -> tuple[list[JsonValueType], str]:
-    """Build service catalog items and copyable text."""
-    integration_manager = entry.runtime_data.managers.integration
-    service_categories_payload = tuple(
-        await entry.runtime_data.client.async_get_service_categories()
-    )
-    service_catalog_payload = tuple(
-        await entry.runtime_data.client.async_get_service_catalog()
-    )
-    service_categories = integration_manager._normalize_service_categories(
-        service_categories_payload
-    )
-
-    items: list[JsonValueType] = []
-    text_lines: list[str] = []
-    for profile_pk in sorted(
-        profile_pks,
-        key=lambda item: _normalize_name(
-            entry.runtime_data.registry.profiles[item].name
-        ),
-    ):
-        profile = entry.runtime_data.registry.profiles[profile_pk]
-        services_payload = tuple(
-            await entry.runtime_data.client.async_get_profile_services(profile_pk)
-        )
-        services = sorted(
-            integration_manager._normalize_services(
-                services_payload,
-                service_categories,
-                frozenset(service_categories),
-                service_catalog_payload,
-            ).values(),
-            key=lambda service_row: (
-                _normalize_name(service_row.category_name),
-                _normalize_name(service_row.name),
-                _normalize_name(service_row.service_pk),
-            ),
-        )
-        text_lines.append(f"[{profile.name}]")
-        for service_row in services:
-            items.append(
-                {
-                    "profile_id": profile_pk,
-                    "profile_name": profile.name,
-                    "service_id": service_row.service_pk,
-                    "name": service_row.name,
-                    "category_id": service_row.category_pk,
-                    "category_name": service_row.category_name,
-                    "current_mode": service_row.current_mode,
-                }
-            )
-            text_lines.append(
-                f"{service_row.service_pk}, {service_row.name}, "
-                f"{service_row.category_name}"
-            )
-    return items, "\n".join(text_lines)
-
-
-async def _async_build_rule_catalog(
-    entry: ControlDManagerConfigEntry, profile_pks: frozenset[str]
-) -> tuple[list[JsonValueType], str]:
-    """Build rule and rule-group catalog items and copyable text."""
-    integration_manager = entry.runtime_data.managers.integration
-    items: list[JsonValueType] = []
-    text_lines: list[str] = []
-    for profile_pk in sorted(
-        profile_pks,
-        key=lambda item: _normalize_name(
-            entry.runtime_data.registry.profiles[item].name
-        ),
-    ):
-        profile = entry.runtime_data.registry.profiles[profile_pk]
-        groups_payload, rules_payload = await asyncio.gather(
-            entry.runtime_data.client.async_get_profile_groups(profile_pk),
-            entry.runtime_data.client.async_get_profile_rules(profile_pk),
-        )
-        rule_groups = sorted(
-            integration_manager._normalize_rule_groups(tuple(groups_payload)).values(),
-            key=lambda group_row: _normalize_name(group_row.name),
-        )
-        rules = sorted(
-            integration_manager._normalize_rules(
-                tuple(groups_payload), tuple(rules_payload)
-            ).values(),
-            key=lambda rule_row: (
-                _normalize_name(rule_row.group_name or ""),
-                rule_row.order,
-                _normalize_name(rule_row.rule_pk),
-            ),
-        )
-        text_lines.append(f"[{profile.name}]")
-        for group_row in rule_groups:
-            items.append(
-                {
-                    "profile_id": profile_pk,
-                    "profile_name": profile.name,
-                    "item_type": "group",
-                    "group_id": group_row.group_pk,
-                    "name": group_row.name,
-                    "current_mode": group_row.current_mode,
-                }
-            )
-            text_lines.append(f"group:{group_row.group_pk}, {group_row.name}")
-
-        for rule_row in rules:
-            items.append(
-                {
-                    "profile_id": profile_pk,
-                    "profile_name": profile.name,
-                    "item_type": "rule",
-                    "rule_identity": rule_row.identity,
-                    "rule_id": rule_row.rule_pk,
-                    "group_id": rule_row.group_pk,
-                    "group_name": rule_row.group_name,
-                    "action": rule_row.action_key,
-                    "enabled": rule_row.enabled,
-                    "comment": rule_row.comment,
-                }
-            )
-            text_lines.append(f"{rule_row.identity}, {rule_row.rule_pk}")
-    return items, "\n".join(text_lines)
-
-
-def _build_profile_option_catalog(
-    entry: ControlDManagerConfigEntry, profile_pks: frozenset[str]
-) -> tuple[list[JsonValueType], str]:
-    """Build profile option catalog items and copyable text."""
-    items: list[JsonValueType] = []
-    text_lines: list[str] = []
-    for profile_pk in sorted(
-        profile_pks,
-        key=lambda item: _normalize_name(
-            entry.runtime_data.registry.profiles[item].name
-        ),
-    ):
-        profile = entry.runtime_data.registry.profiles[profile_pk]
-        text_lines.append(f"[{profile.name}]")
-        options = sorted(
-            entry.runtime_data.registry.options_by_profile.get(profile_pk, {}).values(),
-            key=lambda option_row: (
-                _normalize_name(option_row.title),
-                _normalize_name(option_row.option_pk),
-            ),
-        )
-        for option_row in options:
-            items.append(
-                {
-                    "profile_id": profile_pk,
-                    "profile_name": profile.name,
-                    "option_id": option_row.option_pk,
-                    "title": option_row.title,
-                    "description": option_row.description,
-                    "option_type": option_row.option_type,
-                    "entity_kind": option_row.entity_kind,
-                    "current_value": option_row.current_select_option,
-                }
-            )
-            text_lines.append(f"{option_row.option_pk}, {option_row.title}")
-    return items, "\n".join(text_lines)
 
 
 def _resolve_profile_service_target(
@@ -1002,128 +767,3 @@ def _entry_runtime(entry: ConfigEntry) -> ControlDManagerRuntime | None:
     if isinstance(runtime, ControlDManagerRuntime):
         return runtime
     return None
-
-
-def _resolve_selected_filter_pks(
-    entry: ControlDManagerConfigEntry,
-    profile_pks: frozenset[str],
-    *,
-    requested_filter_ids: list[str],
-    requested_filter_names: list[str],
-) -> dict[str, frozenset[str]]:
-    """Resolve explicit filter selectors using a stable precedence order.
-
-    Selection precedence is:
-    1. `filter_id`
-    2. `filter_name`
-    """
-    if requested_filter_ids:
-        return _resolve_filters_from_ids(entry, profile_pks, requested_filter_ids)
-    if requested_filter_names:
-        return _resolve_filters_from_names(entry, profile_pks, requested_filter_names)
-
-    raise ServiceValidationError(
-        "Select at least one Control D filter by ID or name",
-        translation_domain=DOMAIN,
-        translation_key=TRANS_KEY_FILTER_TARGET_REQUIRED,
-    )
-
-
-def _resolve_filters_from_ids(
-    entry: ControlDManagerConfigEntry,
-    profile_pks: frozenset[str],
-    requested_filter_ids: list[str],
-) -> dict[str, frozenset[str]]:
-    """Resolve one or more raw filter identifiers for targeted profiles."""
-    profile_filters: dict[str, frozenset[str]] = {}
-
-    for profile_pk in profile_pks:
-        filters = _sorted_profile_filters(entry, profile_pk)
-        resolved_filter_ids: set[str] = set()
-        for requested_filter_id in requested_filter_ids:
-            normalized_requested_id = _normalize_name(requested_filter_id)
-            matches = [
-                filter_row.filter_pk
-                for filter_row in filters
-                if _normalize_name(filter_row.filter_pk) == normalized_requested_id
-            ]
-            if len(matches) == 1:
-                resolved_filter_ids.add(matches[0])
-                continue
-            if len(matches) > 1:
-                raise ServiceValidationError(
-                    "The selected Control D filter target is ambiguous",
-                    translation_domain=DOMAIN,
-                    translation_key=TRANS_KEY_FILTER_NAME_AMBIGUOUS,
-                )
-            raise ServiceValidationError(
-                "The selected Control D filter target could not be resolved for one "
-                "or more targeted profiles",
-                translation_domain=DOMAIN,
-                translation_key=TRANS_KEY_FILTER_NAME_NOT_FOUND,
-            )
-        profile_filters[profile_pk] = frozenset(resolved_filter_ids)
-
-    return profile_filters
-
-
-def _resolve_filters_from_names(
-    entry: ControlDManagerConfigEntry,
-    profile_pks: frozenset[str],
-    requested_names: list[str],
-) -> dict[str, frozenset[str]]:
-    """Resolve one or more display names for each targeted profile."""
-    profile_filters: dict[str, frozenset[str]] = {}
-
-    for profile_pk in profile_pks:
-        filters = _sorted_profile_filters(entry, profile_pk)
-        resolved_filter_ids: set[str] = set()
-        for requested_name in requested_names:
-            normalized_requested_name = _normalize_name(requested_name)
-            named_matches = [
-                filter_row.filter_pk
-                for filter_row in filters
-                if _normalize_name(filter_row.name) == normalized_requested_name
-            ]
-            if len(named_matches) == 1:
-                resolved_filter_ids.add(named_matches[0])
-                continue
-            if len(named_matches) > 1:
-                raise ServiceValidationError(
-                    "The selected Control D filter target is ambiguous",
-                    translation_domain=DOMAIN,
-                    translation_key=TRANS_KEY_FILTER_NAME_AMBIGUOUS,
-                )
-            raise ServiceValidationError(
-                "The selected Control D filter target could not be resolved for one "
-                "or more targeted profiles",
-                translation_domain=DOMAIN,
-                translation_key=TRANS_KEY_FILTER_NAME_NOT_FOUND,
-            )
-        profile_filters[profile_pk] = frozenset(resolved_filter_ids)
-
-    return profile_filters
-
-
-def _sorted_profile_filters(
-    entry: ControlDManagerConfigEntry, profile_pk: str
-) -> tuple[ControlDFilter, ...]:
-    """Return one profile's filters with native rows ahead of 3rd-party rows."""
-    filters = entry.runtime_data.registry.filters_by_profile.get(
-        profile_pk, {}
-    ).values()
-    return tuple(
-        sorted(
-            filters,
-            key=lambda filter_row: (
-                filter_row.external,
-                _normalize_name(filter_row.name),
-                _normalize_name(filter_row.filter_pk),
-            ),
-        )
-    )
-
-
-def _normalize_name(value: str) -> str:
-    """Normalize a user-supplied name for case-insensitive lookup."""
-    return re.sub(r"\s+", " ", value).strip().casefold()

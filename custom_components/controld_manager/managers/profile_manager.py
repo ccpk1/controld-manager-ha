@@ -10,8 +10,13 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 from ..models import (
+    ControlDDefaultRule,
     ControlDFilter,
+    ControlDProfileOption,
     ControlDProfileSummary,
+    ControlDRule,
+    ControlDRuleGroup,
+    ControlDService,
     default_rule_action_from_mode,
     rule_group_action_from_mode,
 )
@@ -20,6 +25,197 @@ from .base_manager import BaseManager
 
 class ProfileManager(BaseManager):
     """Own profile normalization and profile-scoped business logic."""
+
+    def _filter_row(self, profile_pk: str, filter_pk: str) -> ControlDFilter:
+        """Return one cached filter row from the current registry."""
+        return self.runtime.registry.filters_by_profile[profile_pk][filter_pk]
+
+    def _service_row(self, profile_pk: str, service_pk: str) -> ControlDService:
+        """Return one cached service row from the current registry."""
+        return self.runtime.registry.services_by_profile[profile_pk][service_pk]
+
+    def _option_row(self, profile_pk: str, option_pk: str) -> ControlDProfileOption:
+        """Return one cached profile option row from the current registry."""
+        return self.runtime.registry.options_by_profile[profile_pk][option_pk]
+
+    def _default_rule_row(self, profile_pk: str) -> ControlDDefaultRule:
+        """Return one cached default-rule row from the current registry."""
+        return self.runtime.registry.default_rules_by_profile[profile_pk]
+
+    def _rule_group_row(self, profile_pk: str, group_pk: str) -> ControlDRuleGroup:
+        """Return one cached rule-group row from the current registry."""
+        return self.runtime.registry.rule_groups_by_profile[profile_pk][group_pk]
+
+    def _rule_row(self, profile_pk: str, rule_identity: str) -> ControlDRule:
+        """Return one cached rule row from the current registry."""
+        return self.runtime.registry.rules_by_profile[profile_pk][rule_identity]
+
+    def _updated_filter_rows(
+        self, profile_filters: dict[str, frozenset[str]]
+    ) -> list[tuple[str, str, ControlDFilter]]:
+        """Resolve the filter rows targeted by one bulk write request."""
+        updated_filters: list[tuple[str, str, ControlDFilter]] = []
+        for profile_pk, filter_pks in profile_filters.items():
+            for filter_pk in filter_pks:
+                updated_filters.append(
+                    (profile_pk, filter_pk, self._filter_row(profile_pk, filter_pk))
+                )
+        return updated_filters
+
+    def _update_cached_filter(
+        self,
+        profile_pk: str,
+        filter_pk: str,
+        filter_row: ControlDFilter,
+        *,
+        enabled: bool,
+        selected_level_slug: str | None,
+    ) -> None:
+        """Update one cached filter row after a successful upstream write."""
+        self.runtime.registry.filters_by_profile[profile_pk][filter_pk] = replace(
+            filter_row,
+            enabled=enabled,
+            selected_level_slug=selected_level_slug,
+        )
+
+    def _update_cached_service(
+        self,
+        profile_pk: str,
+        service_pk: str,
+        service_row: ControlDService,
+        *,
+        enabled: bool,
+        action_do: int,
+    ) -> None:
+        """Update one cached service row after a successful upstream write."""
+        self.runtime.registry.services_by_profile[profile_pk][service_pk] = replace(
+            service_row,
+            enabled=enabled,
+            action_do=action_do,
+        )
+
+    def _update_cached_option(
+        self,
+        profile_pk: str,
+        option_pk: str,
+        option_row: ControlDProfileOption,
+        *,
+        current_value_key: str | None,
+    ) -> None:
+        """Update one cached profile-option row after a successful write."""
+        self.runtime.registry.options_by_profile[profile_pk][option_pk] = replace(
+            option_row,
+            current_value_key=current_value_key,
+        )
+
+    def _update_cached_default_rule(
+        self,
+        profile_pk: str,
+        default_rule_row: ControlDDefaultRule,
+        *,
+        enabled: bool,
+        action_do: int,
+        via: str | None,
+    ) -> None:
+        """Update one cached default-rule row after a successful write."""
+        self.runtime.registry.default_rules_by_profile[profile_pk] = replace(
+            default_rule_row,
+            enabled=enabled,
+            action_do=action_do,
+            via=via,
+        )
+
+    def _update_cached_rule_group(
+        self,
+        profile_pk: str,
+        group_pk: str,
+        group_row: ControlDRuleGroup,
+        *,
+        enabled: bool,
+        action_do: int | None,
+    ) -> None:
+        """Update one cached rule-group row after a successful write."""
+        self.runtime.registry.rule_groups_by_profile[profile_pk][group_pk] = replace(
+            group_row,
+            enabled=enabled,
+            action_do=action_do,
+        )
+
+    def _update_cached_rule(
+        self,
+        profile_pk: str,
+        rule_identity: str,
+        rule_row: ControlDRule,
+        *,
+        enabled: bool,
+    ) -> None:
+        """Update one cached rule row after a successful write."""
+        self.runtime.registry.rules_by_profile[profile_pk][rule_identity] = replace(
+            rule_row,
+            enabled=enabled,
+        )
+
+    def _schedule_runtime_refresh(self) -> None:
+        """Push optimistic state to listeners and queue a background refresh."""
+        self.runtime.active_coordinator.async_update_listeners()
+        self.runtime.active_coordinator.hass.async_create_task(
+            self.runtime.active_coordinator.async_refresh()
+        )
+
+    @staticmethod
+    def _service_write_payload(
+        mode: str,
+        service_row: ControlDService,
+    ) -> tuple[bool, int]:
+        """Translate one Home Assistant service mode into upstream fields."""
+        enabled = mode != "Off"
+        action_do = service_row.action_do
+        if mode == "Blocked":
+            action_do = 0
+        elif mode == "Bypassed":
+            action_do = 1
+        elif mode == "Redirected":
+            action_do = 2
+        return enabled, action_do
+
+    @staticmethod
+    def _toggle_option_write_payload(
+        option_row: ControlDProfileOption, enabled: bool
+    ) -> tuple[str | None, str | None]:
+        """Translate a toggle request into payload and cached option values."""
+        payload_value: str | None = None
+        next_value_key = "1" if enabled else None
+        if option_row.option_type == "field":
+            payload_value = option_row.default_value_key if enabled else None
+            next_value_key = payload_value
+        return payload_value, next_value_key
+
+    async def _async_write_filter_state(
+        self,
+        profile_pk: str,
+        filter_pk: str,
+        *,
+        enabled: bool,
+        action_do: int,
+        level_slug: str | None,
+        selected_level_slug: str | None,
+    ) -> None:
+        """Write one filter change upstream and update the cached registry row."""
+        filter_row = self._filter_row(profile_pk, filter_pk)
+        await self.runtime.client.async_set_profile_filter(
+            profile_pk,
+            filter_pk,
+            enabled=enabled,
+            action_do=action_do,
+            level_slug=level_slug,
+        )
+        self._update_cached_filter(
+            profile_pk,
+            filter_pk,
+            filter_row,
+            enabled=enabled,
+            selected_level_slug=selected_level_slug,
+        )
 
     def normalize_profiles(
         self, profiles_payload: tuple[dict[str, Any], ...]
@@ -101,13 +297,7 @@ class ProfileManager(BaseManager):
         self, profile_filters: dict[str, frozenset[str]], enabled: bool
     ) -> None:
         """Enable or disable one or more filters across targeted profiles."""
-        updated_filters: list[tuple[str, str, ControlDFilter]] = []
-        for profile_pk, filter_pks in profile_filters.items():
-            for filter_pk in filter_pks:
-                filter_row = self.runtime.registry.filters_by_profile[profile_pk][
-                    filter_pk
-                ]
-                updated_filters.append((profile_pk, filter_pk, filter_row))
+        updated_filters = self._updated_filter_rows(profile_filters)
 
         await asyncio.gather(
             *(
@@ -123,98 +313,80 @@ class ProfileManager(BaseManager):
         )
 
         for profile_pk, filter_pk, filter_row in updated_filters:
-            self.runtime.registry.filters_by_profile[profile_pk][filter_pk] = replace(
+            self._update_cached_filter(
+                profile_pk,
+                filter_pk,
                 filter_row,
                 enabled=enabled,
                 selected_level_slug=filter_row.effective_level_slug,
             )
 
-        self.runtime.active_coordinator.async_update_listeners()
-        self.runtime.active_coordinator.hass.async_create_task(
-            self.runtime.active_coordinator.async_refresh()
-        )
+        self._schedule_runtime_refresh()
 
     async def async_set_filter_mode(
         self, profile_pk: str, filter_pk: str, level_slug: str
     ) -> None:
         """Set the selected mode for one filter."""
-        filter_row = self.runtime.registry.filters_by_profile[profile_pk][filter_pk]
-        await self.runtime.client.async_set_profile_filter(
+        filter_row = self._filter_row(profile_pk, filter_pk)
+        await self._async_write_filter_state(
             profile_pk,
             filter_pk,
             enabled=True,
             action_do=filter_row.action_do,
             level_slug=level_slug,
-        )
-        self.runtime.registry.filters_by_profile[profile_pk][filter_pk] = replace(
-            filter_row,
-            enabled=True,
             selected_level_slug=level_slug,
         )
-        self.runtime.active_coordinator.async_update_listeners()
-        self.runtime.active_coordinator.hass.async_create_task(
-            self.runtime.active_coordinator.async_refresh()
-        )
+        self._schedule_runtime_refresh()
 
     async def async_set_service_mode(
         self, profile_pk: str, service_pk: str, mode: str
     ) -> None:
         """Set the selected mode for one service rule."""
-        service_row = self.runtime.registry.services_by_profile[profile_pk][service_pk]
-        enabled = mode != "Off"
-        action_do = service_row.action_do
-        if mode == "Blocked":
-            action_do = 0
-        elif mode == "Bypassed":
-            action_do = 1
-        elif mode == "Redirected":
-            action_do = 2
+        service_row = self._service_row(profile_pk, service_pk)
+        enabled, action_do = self._service_write_payload(mode, service_row)
         await self.runtime.client.async_set_profile_service(
             profile_pk,
             service_pk,
             enabled=enabled,
             action_do=action_do,
         )
-        self.runtime.registry.services_by_profile[profile_pk][service_pk] = replace(
+        self._update_cached_service(
+            profile_pk,
+            service_pk,
             service_row,
             enabled=enabled,
             action_do=action_do,
         )
-        self.runtime.active_coordinator.async_update_listeners()
-        self.runtime.active_coordinator.hass.async_create_task(
-            self.runtime.active_coordinator.async_refresh()
-        )
+        self._schedule_runtime_refresh()
 
     async def async_set_profile_option_toggle(
         self, profile_pk: str, option_pk: str, enabled: bool
     ) -> None:
         """Enable or disable one toggle-style profile option."""
-        option_row = self.runtime.registry.options_by_profile[profile_pk][option_pk]
-        payload_value: str | None = None
-        next_value_key = "1" if enabled else None
-        if option_row.option_type == "field":
-            payload_value = option_row.default_value_key if enabled else None
-            next_value_key = payload_value
+        option_row = self._option_row(profile_pk, option_pk)
+        payload_value, next_value_key = self._toggle_option_write_payload(
+            option_row,
+            enabled,
+        )
         await self.runtime.client.async_set_profile_option(
             profile_pk,
             option_pk,
             enabled=enabled,
             value=payload_value,
         )
-        self.runtime.registry.options_by_profile[profile_pk][option_pk] = replace(
+        self._update_cached_option(
+            profile_pk,
+            option_pk,
             option_row,
             current_value_key=next_value_key,
         )
-        self.runtime.active_coordinator.async_update_listeners()
-        self.runtime.active_coordinator.hass.async_create_task(
-            self.runtime.active_coordinator.async_refresh()
-        )
+        self._schedule_runtime_refresh()
 
     async def async_set_profile_option_select(
         self, profile_pk: str, option_pk: str, option_label: str
     ) -> None:
         """Set one select-style profile option."""
-        option_row = self.runtime.registry.options_by_profile[profile_pk][option_pk]
+        option_row = self._option_row(profile_pk, option_pk)
         selected_value = option_row.choice_value_for_label(option_label)
         await self.runtime.client.async_set_profile_option(
             profile_pk,
@@ -222,40 +394,37 @@ class ProfileManager(BaseManager):
             enabled=selected_value is not None,
             value=selected_value,
         )
-        self.runtime.registry.options_by_profile[profile_pk][option_pk] = replace(
+        self._update_cached_option(
+            profile_pk,
+            option_pk,
             option_row,
             current_value_key=selected_value,
         )
-        self.runtime.active_coordinator.async_update_listeners()
-        self.runtime.active_coordinator.hass.async_create_task(
-            self.runtime.active_coordinator.async_refresh()
-        )
+        self._schedule_runtime_refresh()
 
     async def async_set_default_rule_mode(self, profile_pk: str, mode: str) -> None:
         """Set the current default-rule mode for one profile."""
-        default_rule_row = self.runtime.registry.default_rules_by_profile[profile_pk]
+        default_rule_row = self._default_rule_row(profile_pk)
         action_do, via = default_rule_action_from_mode(mode)
         await self.runtime.client.async_set_profile_default_rule(
             profile_pk,
             action_do=action_do,
             via=via,
         )
-        self.runtime.registry.default_rules_by_profile[profile_pk] = replace(
+        self._update_cached_default_rule(
+            profile_pk,
             default_rule_row,
             enabled=True,
             action_do=action_do,
             via=via,
         )
-        self.runtime.active_coordinator.async_update_listeners()
-        self.runtime.active_coordinator.hass.async_create_task(
-            self.runtime.active_coordinator.async_refresh()
-        )
+        self._schedule_runtime_refresh()
 
     async def async_set_rule_group_mode(
         self, profile_pk: str, group_pk: str, mode: str
     ) -> None:
         """Set the current folder-rule mode for one profile group."""
-        group_row = self.runtime.registry.rule_groups_by_profile[profile_pk][group_pk]
+        group_row = self._rule_group_row(profile_pk, group_pk)
         enabled, action_do = rule_group_action_from_mode(mode)
         await self.runtime.client.async_set_profile_group(
             profile_pk,
@@ -264,21 +433,20 @@ class ProfileManager(BaseManager):
             enabled=enabled,
             action_do=action_do,
         )
-        self.runtime.registry.rule_groups_by_profile[profile_pk][group_pk] = replace(
+        self._update_cached_rule_group(
+            profile_pk,
+            group_pk,
             group_row,
             enabled=enabled,
             action_do=action_do,
         )
-        self.runtime.active_coordinator.async_update_listeners()
-        self.runtime.active_coordinator.hass.async_create_task(
-            self.runtime.active_coordinator.async_refresh()
-        )
+        self._schedule_runtime_refresh()
 
     async def async_set_rule_enabled(
         self, profile_pk: str, rule_identity: str, enabled: bool
     ) -> None:
         """Enable or disable one selected rule."""
-        rule_row = self.runtime.registry.rules_by_profile[profile_pk][rule_identity]
+        rule_row = self._rule_row(profile_pk, rule_identity)
         await self.runtime.client.async_set_profile_rule(
             profile_pk,
             rule_row.rule_pk,
@@ -287,7 +455,13 @@ class ProfileManager(BaseManager):
             group_pk=rule_row.group_pk,
             ttl=rule_row.ttl,
         )
-        await self.runtime.active_coordinator.async_refresh()
+        self._update_cached_rule(
+            profile_pk,
+            rule_identity,
+            rule_row,
+            enabled=enabled,
+        )
+        self._schedule_runtime_refresh()
 
     @staticmethod
     def _require_string(profile_payload: dict[str, Any], key: str) -> str:

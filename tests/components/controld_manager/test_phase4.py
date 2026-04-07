@@ -40,6 +40,12 @@ from custom_components.controld_manager.models import (
     ControlDProfileDetailPayload,
     ControlDProfilePolicy,
 )
+from custom_components.controld_manager.service_selectors import (
+    _resolve_selected_option_pks,
+    _resolve_selected_rule_group_pks,
+    _resolve_selected_rule_identities,
+    _resolve_selected_service_pks,
+)
 
 SERVICE_CATEGORIES = [{"PK": "audio", "name": "Audio", "count": 18}]
 SERVICE_CATALOG = [
@@ -2005,6 +2011,130 @@ async def test_set_filter_state_rejects_entity_targets(hass) -> None:
             },
             blocking=True,
         )
+
+
+async def test_selector_layer_resolves_services_by_id_and_name(hass) -> None:
+    """The selector layer should resolve services by raw ID or display name."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    assert _resolve_selected_service_pks(
+        entry,
+        frozenset({"profile-1"}),
+        requested_service_ids=["amazonmusic"],
+        requested_service_names=["does not matter"],
+    ) == {"profile-1": frozenset({"amazonmusic"})}
+
+    assert _resolve_selected_service_pks(
+        entry,
+        frozenset({"profile-1"}),
+        requested_service_ids=[],
+        requested_service_names=["Amazon Music"],
+    ) == {"profile-1": frozenset({"amazonmusic"})}
+
+
+async def test_selector_layer_resolves_rule_groups_by_name(hass) -> None:
+    """The selector layer should resolve rule groups by raw ID or display name."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    assert _resolve_selected_rule_group_pks(
+        entry,
+        frozenset({"profile-1"}),
+        requested_group_ids=[],
+        requested_group_names=["Allow folder"],
+    ) == {"profile-1": frozenset({"1"})}
+
+
+async def test_selector_layer_resolves_rules_by_identity_and_comment(hass) -> None:
+    """The selector layer should resolve rules by identity before comment."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    assert _resolve_selected_rule_identities(
+        entry,
+        frozenset({"profile-1"}),
+        requested_rule_identities=["group:1|example2.com"],
+        requested_rule_comments=["Here is my reason"],
+    ) == {"profile-1": frozenset({"group:1|example2.com"})}
+
+    assert _resolve_selected_rule_identities(
+        entry,
+        frozenset({"profile-1"}),
+        requested_rule_identities=[],
+        requested_rule_comments=["Here is my reason"],
+    ) == {"profile-1": frozenset({"group:1|example2.com"})}
+
+
+async def test_selector_layer_resolves_profile_options_by_id_and_title(hass) -> None:
+    """The selector layer should resolve profile options by ID or title."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    assert _resolve_selected_option_pks(
+        entry,
+        frozenset({"profile-1"}),
+        requested_option_ids=["ai_malware"],
+        requested_option_titles=["ignored"],
+    ) == {"profile-1": frozenset({"ai_malware"})}
+
+    assert _resolve_selected_option_pks(
+        entry,
+        frozenset({"profile-1"}),
+        requested_option_ids=[],
+        requested_option_titles=["AI Malware Filter"],
+    ) == {"profile-1": frozenset({"ai_malware"})}
 
 
 async def test_get_catalog_returns_filters(hass) -> None:

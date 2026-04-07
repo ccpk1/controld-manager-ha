@@ -146,15 +146,9 @@ class EntityManager(BaseManager):
                 f"profile::{profile_pk}::paused" for profile_pk in included_profiles
             }
             for profile_pk in included_profiles:
-                profile_policy = self.runtime.options.profile_policy(profile_pk)
-                profile_filters = self.runtime.registry.filters_by_profile.get(
-                    profile_pk, {}
-                )
                 desired_keys.update(
                     f"profile::{profile_pk}::filter::{filter_pk}"
-                    for filter_pk, filter_row in profile_filters.items()
-                    if filter_pk != "ai_malware"
-                    if not filter_row.external or profile_policy.expose_external_filters
+                    for filter_pk in self._exposed_filter_pks(profile_pk)
                 )
                 desired_keys.update(
                     f"profile::{profile_pk}::option::{option_pk}"
@@ -196,14 +190,12 @@ class EntityManager(BaseManager):
                         self.runtime.registry.rule_groups_by_profile.get(profile_pk, {})
                     )
                 )
-                profile_filters = self.runtime.registry.filters_by_profile.get(
-                    profile_pk, {}
-                )
                 select_keys.update(
                     f"profile::{profile_pk}::filter_mode::{filter_pk}"
-                    for filter_pk, filter_row in profile_filters.items()
-                    if filter_row.supports_modes and filter_pk != "ai_malware"
-                    if not filter_row.external or profile_policy.expose_external_filters
+                    for filter_pk in self._exposed_filter_pks(
+                        profile_pk,
+                        require_modes=True,
+                    )
                 )
                 select_keys.update(
                     f"profile::{profile_pk}::option::{option_pk}"
@@ -228,6 +220,23 @@ class EntityManager(BaseManager):
                 )
             return select_keys
         raise ValueError(f"Unsupported Control D platform {platform!r}")
+
+    def _exposed_filter_pks(
+        self,
+        profile_pk: str,
+        *,
+        require_modes: bool = False,
+    ) -> set[str]:
+        """Return filter IDs that should be exposed for one profile policy."""
+        profile_policy = self.runtime.options.profile_policy(profile_pk)
+        profile_filters = self.runtime.registry.filters_by_profile.get(profile_pk, {})
+        return {
+            filter_pk
+            for filter_pk, filter_row in profile_filters.items()
+            if filter_pk != "ai_malware"
+            if not require_modes or filter_row.supports_modes
+            if not filter_row.external or profile_policy.expose_external_filters
+        }
 
     async def _async_reconcile_endpoint_sensor_attachments(self) -> None:
         """Ensure endpoint entities remain attached to the owning profile device."""
