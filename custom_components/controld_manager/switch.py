@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from homeassistant.components.switch import SwitchEntity
@@ -19,6 +19,8 @@ from .api import (
 from .const import (
     ATTR_ACTION,
     ATTR_COMMENT,
+    ATTR_EXPIRED,
+    ATTR_EXPIRES_AT,
     ATTR_GROUP,
     ATTR_PAUSED_UNTIL,
     ATTR_RULE_IDENTITY,
@@ -290,7 +292,18 @@ class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntit
     def is_on(self) -> bool:
         """Return whether the rule is enabled."""
         rule_row = self.rule_row
-        return bool(rule_row is not None and rule_row.enabled)
+        return bool(
+            rule_row is not None
+            and rule_row.enabled
+            and not self._rule_is_expired(rule_row)
+        )
+
+    @staticmethod
+    def _rule_is_expired(rule_row: ControlDRule) -> bool:
+        """Return whether the rule expiration is in the past."""
+        if rule_row.ttl is None:
+            return False
+        return bool(datetime.fromtimestamp(rule_row.ttl, UTC) <= dt_util.utcnow())
 
     def turn_on(self, **kwargs: object) -> None:
         """Switch turn_on is handled asynchronously by Home Assistant."""
@@ -311,6 +324,10 @@ class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntit
                 attributes[ATTR_GROUP] = rule_row.group_name
             attributes[ATTR_COMMENT] = rule_row.comment
             attributes[ATTR_ACTION] = rule_row.action_key
+            if rule_row.ttl is not None:
+                expires_at = datetime.fromtimestamp(rule_row.ttl, UTC)
+                attributes[ATTR_EXPIRES_AT] = expires_at.isoformat()
+                attributes[ATTR_EXPIRED] = self._rule_is_expired(rule_row)
         return attributes
 
     async def async_turn_on(self, **kwargs: object) -> None:

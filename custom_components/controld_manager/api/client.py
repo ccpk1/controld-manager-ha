@@ -278,6 +278,7 @@ class ControlDAPIClient:
         action_do: int,
         group_pk: str | None,
         ttl: int | None,
+        comment: str | None = None,
     ) -> None:
         """Update one profile rule using the current action model."""
         payload: dict[str, Any] = {"do": action_do, "status": int(enabled)}
@@ -285,9 +286,36 @@ class ControlDAPIClient:
             payload["group"] = group_pk
         if ttl is not None:
             payload["ttl"] = ttl
+        if comment is not None:
+            payload["comment"] = comment
         await self._async_request(
             "PUT", f"/profiles/{profile_pk}/rules/{rule_pk}", payload
         )
+
+    async def async_update_profile_rule_rich(
+        self,
+        profile_pk: str,
+        rule_pk: str,
+        *,
+        enabled: bool,
+        action_do: int,
+        group_pk: str | None,
+        comment: str,
+        ttl: int | None,
+    ) -> None:
+        """Update one profile rule using the rich hostname-based contract."""
+        payload: dict[str, Any] = {
+            "do": action_do,
+            "status": int(enabled),
+            "via": "-1",
+            "via_v6": "-1",
+            "hostnames": [rule_pk],
+            "group": 0 if group_pk is None else int(group_pk),
+            "comment": comment,
+        }
+        if ttl is not None:
+            payload["ttl"] = ttl
+        await self._async_request("PUT", f"/profiles/{profile_pk}/rules", payload)
 
     async def async_set_profile_group(
         self,

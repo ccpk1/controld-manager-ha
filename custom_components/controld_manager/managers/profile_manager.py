@@ -18,6 +18,7 @@ from ..models import (
     ControlDRuleGroup,
     ControlDService,
     default_rule_action_from_mode,
+    rule_action_do_from_key,
     rule_group_action_from_mode,
 )
 from .base_manager import BaseManager
@@ -148,11 +149,17 @@ class ProfileManager(BaseManager):
         rule_row: ControlDRule,
         *,
         enabled: bool,
+        action_do: int | None = None,
+        ttl: int | None = None,
+        comment: str | None = None,
     ) -> None:
         """Update one cached rule row after a successful write."""
         self.runtime.registry.rules_by_profile[profile_pk][rule_identity] = replace(
             rule_row,
             enabled=enabled,
+            action_do=(rule_row.action_do if action_do is None else action_do),
+            ttl=(rule_row.ttl if ttl is None else ttl),
+            comment=(rule_row.comment if comment is None else comment),
         )
 
     def _schedule_runtime_refresh(self) -> None:
@@ -508,6 +515,156 @@ class ProfileManager(BaseManager):
             rule_row,
             enabled=enabled,
         )
+        self._schedule_runtime_refresh()
+
+    async def async_set_rules_enabled(
+        self, profile_rules: dict[str, frozenset[str]], enabled: bool
+    ) -> None:
+        """Enable or disable one or more selected rules across profiles."""
+        updated_rules: list[tuple[str, str, ControlDRule]] = []
+
+        for profile_pk, rule_identities in profile_rules.items():
+            for rule_identity in rule_identities:
+                updated_rules.append(
+                    (
+                        profile_pk,
+                        rule_identity,
+                        self._rule_row(profile_pk, rule_identity),
+                    )
+                )
+
+        await asyncio.gather(
+            *(
+                self.runtime.client.async_set_profile_rule(
+                    profile_pk,
+                    rule_row.rule_pk,
+                    enabled=enabled,
+                    action_do=rule_row.action_do,
+                    group_pk=rule_row.group_pk,
+                    ttl=rule_row.ttl,
+                )
+                for profile_pk, _, rule_row in updated_rules
+            )
+        )
+
+        for profile_pk, rule_identity, rule_row in updated_rules:
+            self._update_cached_rule(
+                profile_pk,
+                rule_identity,
+                rule_row,
+                enabled=enabled,
+            )
+
+        self._schedule_runtime_refresh()
+
+    async def async_set_rules_state(
+        self,
+        profile_rules: dict[str, frozenset[str]],
+        *,
+        enabled: bool | None,
+        mode: str | None,
+        ttl: int | None,
+        comment: str | None,
+    ) -> None:
+        """Update one or more selected rules across profiles."""
+        updated_rules: list[
+            tuple[
+                str,
+                str,
+                ControlDRule,
+                bool,
+                int,
+                str,
+                int | None,
+                int | None,
+                bool,
+            ]
+        ] = []
+
+        for profile_pk, rule_identities in profile_rules.items():
+            for rule_identity in rule_identities:
+                rule_row = self._rule_row(profile_pk, rule_identity)
+                next_enabled = rule_row.enabled if enabled is None else enabled
+                next_action_do = (
+                    rule_row.action_do
+                    if mode is None
+                    else rule_action_do_from_key(mode)
+                )
+                next_comment = rule_row.comment if comment is None else comment
+                payload_ttl = rule_row.ttl if ttl is None else ttl
+                uses_rich_update = comment is not None or ttl is not None
+                updated_rules.append(
+                    (
+                        profile_pk,
+                        rule_identity,
+                        rule_row,
+                        next_enabled,
+                        next_action_do,
+                        next_comment,
+                        payload_ttl,
+                        payload_ttl,
+                        uses_rich_update,
+                    )
+                )
+
+        await asyncio.gather(
+            *(
+                (
+                    self.runtime.client.async_update_profile_rule_rich(
+                        profile_pk,
+                        rule_row.rule_pk,
+                        enabled=next_enabled,
+                        action_do=next_action_do,
+                        group_pk=rule_row.group_pk,
+                        comment=next_comment,
+                        ttl=payload_ttl,
+                    )
+                    if uses_rich_update
+                    else self.runtime.client.async_set_profile_rule(
+                        profile_pk,
+                        rule_row.rule_pk,
+                        enabled=next_enabled,
+                        action_do=next_action_do,
+                        group_pk=rule_row.group_pk,
+                        ttl=payload_ttl,
+                        comment=next_comment,
+                    )
+                )
+                for (
+                    profile_pk,
+                    _,
+                    rule_row,
+                    next_enabled,
+                    next_action_do,
+                    next_comment,
+                    payload_ttl,
+                    _,
+                    uses_rich_update,
+                ) in updated_rules
+            )
+        )
+
+        for (
+            profile_pk,
+            rule_identity,
+            rule_row,
+            next_enabled,
+            next_action_do,
+            next_comment,
+            _,
+            cached_ttl,
+            _,
+        ) in updated_rules:
+            self._update_cached_rule(
+                profile_pk,
+                rule_identity,
+                rule_row,
+                enabled=next_enabled,
+                action_do=next_action_do,
+                ttl=cached_ttl,
+                comment=next_comment,
+            )
+
         self._schedule_runtime_refresh()
 
     @staticmethod

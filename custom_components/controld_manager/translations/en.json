@@ -127,13 +127,13 @@
       "message": "The selected Control D rule-group target matches more than one folder. Use raw rule-group IDs when names are ambiguous."
     },
     "rule_target_required": {
-      "message": "Select at least one Control D rule by identity or comment."
+      "message": "Select at least one Control D rule by identity or hostname."
     },
     "rule_name_not_found": {
-      "message": "The selected Control D rule target could not be resolved for one or more targeted profiles."
+      "message": "The selected Control D rule target could not be resolved for one or more targeted profiles. Use the full rule identity when a bare hostname is not unique."
     },
     "rule_name_ambiguous": {
-      "message": "The selected Control D rule target matches more than one rule. Use raw rule identities when comments are ambiguous."
+      "message": "The selected Control D rule target matches more than one rule. Use raw rule identities when a bare hostname is ambiguous."
     },
     "option_target_required": {
       "message": "Select at least one Control D profile option by ID or title."
@@ -152,6 +152,12 @@
     },
     "set_filters_failed": {
       "message": "Unable to update the targeted Control D filters."
+    },
+    "set_rules_failed": {
+      "message": "Unable to update the targeted Control D rules."
+    },
+    "rule_mutation_required": {
+      "message": "Provide at least one rule mutation field such as Enabled, Mode, Comment, Cancel expiration, Expiration duration, or Expire at."
     },
     "set_services_failed": {
       "message": "Unable to update the targeted Control D services."
@@ -304,6 +310,56 @@
         "enabled": {
           "name": "Enabled",
           "description": "Turn the selected filters on or off for the targeted profiles."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "set_rule_state": {
+      "name": "Set rule state",
+      "description": "Enable or disable one or more Control D custom rules by stable identity across the selected profiles, and optionally change their action mode, comment, or expiration. If Cancel expiration is set, it overrides Expiration duration and Expire at. Otherwise, Expire at takes precedence over Expiration duration.",
+      "fields": {
+        "profile_id": {
+          "name": "Select a profile",
+          "description": "Required unless you provide Profile names. Select one or more managed Control D profiles by ID. If Profile IDs and Profile names are both provided, Profile IDs take precedence."
+        },
+        "profile_name": {
+          "name": "Profile names",
+          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids."
+        },
+        "rule_identity": {
+          "name": "Rule identities",
+          "description": "Required. Enter one or more stable Control D rule identities, such as root|example.com or group:1|example2.com. You can also use a bare hostname such as example.com when it is unambiguous."
+        },
+        "enabled": {
+          "name": "Enabled",
+          "description": "Optional. Turn the selected rules on or off for the targeted profiles. If omitted, the current enabled state is preserved."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Optional. Change the selected rules to block, bypass, or redirect. If omitted, the current rule action is preserved."
+        },
+        "comment": {
+          "name": "Comment",
+          "description": "Optional. Replace the selected rule comment. Provide an empty string to clear it."
+        },
+        "cancel_expiration": {
+          "name": "Cancel expiration",
+          "description": "Optional. Cancel the current rule expiration. When set, this overrides Expiration duration and Expire at."
+        },
+        "expiration_duration": {
+          "name": "Expiration duration",
+          "description": "Optional. Set the selected rules to expire after a relative duration such as 30 minutes. Ignored when Cancel expiration is set or when Expire at is also provided."
+        },
+        "expire_at": {
+          "name": "Expire at",
+          "description": "Optional. Set the selected rules to expire at an absolute date and time in the Home Assistant local timezone. Ignored when Cancel expiration is set. When both Expiration duration and Expire at are provided, this field takes precedence. Past values are allowed."
         },
         "config_entry_id": {
           "name": "Configuration Entry ID",

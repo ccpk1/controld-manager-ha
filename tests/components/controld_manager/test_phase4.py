@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -20,22 +21,30 @@ from custom_components.controld_manager.api import (
     ControlDApiResponseError,
 )
 from custom_components.controld_manager.const import (
+    ATTR_EXPIRED,
+    ATTR_EXPIRES_AT,
     CONF_API_TOKEN,
     DOMAIN,
     SERVICE_DISABLE_PROFILE,
     SERVICE_ENABLE_PROFILE,
+    SERVICE_FIELD_CANCEL_EXPIRATION,
     SERVICE_FIELD_CATALOG_TYPE,
+    SERVICE_FIELD_COMMENT,
     SERVICE_FIELD_ENABLED,
+    SERVICE_FIELD_EXPIRATION_DURATION,
+    SERVICE_FIELD_EXPIRE_AT,
     SERVICE_FIELD_FILTER_ID,
     SERVICE_FIELD_FILTER_NAME,
     SERVICE_FIELD_MINUTES,
     SERVICE_FIELD_MODE,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
+    SERVICE_FIELD_RULE_IDENTITY,
     SERVICE_FIELD_SERVICE_ID,
     SERVICE_FIELD_SERVICE_NAME,
     SERVICE_GET_CATALOG,
     SERVICE_SET_FILTER_STATE,
+    SERVICE_SET_RULE_STATE,
     SERVICE_SET_SERVICE_STATE,
 )
 from custom_components.controld_manager.diagnostics import (
@@ -524,6 +533,8 @@ async def test_phase5_policy_enabled_entities_are_created_and_attached(hass) -> 
     )
     assert hass.states.get(rule_entity_id).attributes["action"] == "block"
     assert hass.states.get(rule_entity_id).attributes["comment"] == ""
+    assert ATTR_EXPIRED not in hass.states.get(rule_entity_id).attributes
+    assert ATTR_EXPIRES_AT not in hass.states.get(rule_entity_id).attributes
     assert hass.states.get(grouped_rule_entity_id).attributes["group"] == "Allow folder"
     assert hass.states.get(grouped_rule_entity_id).attributes["action"] == "bypass"
     assert (
@@ -2562,6 +2573,870 @@ async def test_set_service_state_rejects_entity_targets(hass) -> None:
         )
 
 
+async def test_set_rule_state_supports_raw_rule_identity(hass) -> None:
+    """The rule service should resolve and update one rule by raw identity."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_RULE_IDENTITY: ["group:1|example2.com"],
+            SERVICE_FIELD_ENABLED: False,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_rule.assert_awaited_once_with(
+        "profile-1",
+        "example2.com",
+        enabled=False,
+        action_do=1,
+        group_pk="1",
+        ttl=None,
+        comment="Here is my reason",
+    )
+
+
+async def test_set_rule_state_supports_mode_updates(hass) -> None:
+    """The rule service should allow mode updates without changing enabled state."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_RULE_IDENTITY: ["root|example.com"],
+            SERVICE_FIELD_MODE: "redirect",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_rule.assert_awaited_once_with(
+        "profile-1",
+        "example.com",
+        enabled=True,
+        action_do=2,
+        group_pk=None,
+        ttl=None,
+        comment="",
+    )
+
+
+async def test_set_rule_state_supports_bare_hostname(hass) -> None:
+    """The rule service should accept a bare hostname when it is unambiguous."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_RULE_IDENTITY: ["example.com"],
+            SERVICE_FIELD_ENABLED: False,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_rule.assert_awaited_once_with(
+        "profile-1",
+        "example.com",
+        enabled=False,
+        action_do=0,
+        group_pk=None,
+        ttl=None,
+        comment="",
+    )
+
+
+async def test_set_rule_state_supports_enabled_and_mode_together(hass) -> None:
+    """The rule service should allow toggling and mode changes in one call."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_RULE_IDENTITY: ["group:1|example2.com"],
+            SERVICE_FIELD_ENABLED: False,
+            SERVICE_FIELD_MODE: "block",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_rule.assert_awaited_once_with(
+        "profile-1",
+        "example2.com",
+        enabled=False,
+        action_do=0,
+        group_pk="1",
+        ttl=None,
+        comment="Here is my reason",
+    )
+
+
+async def test_set_rule_state_supports_comment_updates(hass) -> None:
+    """The rule service should allow comment-only updates without other mutations."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_update_profile_rule_rich = AsyncMock()
+    runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_RULE_IDENTITY: ["root|example.com"],
+            SERVICE_FIELD_COMMENT: "Temporary allowance",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_update_profile_rule_rich.assert_awaited_once_with(
+        "profile-1",
+        "example.com",
+        enabled=True,
+        action_do=0,
+        group_pk=None,
+        ttl=None,
+        comment="Temporary allowance",
+    )
+    runtime.client.async_set_profile_rule.assert_not_awaited()
+
+
+async def test_set_rule_state_supports_duration_updates(hass) -> None:
+    """The rule service should convert a duration into a future expiration."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_update_profile_rule_rich = AsyncMock()
+    runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    frozen_now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    with patch(
+        "custom_components.controld_manager.services.dt_util.utcnow",
+        return_value=frozen_now,
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_RULE_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_RULE_IDENTITY: ["root|example.com"],
+                SERVICE_FIELD_EXPIRATION_DURATION: timedelta(minutes=30),
+            },
+            blocking=True,
+        )
+
+    runtime.client.async_update_profile_rule_rich.assert_awaited_once_with(
+        "profile-1",
+        "example.com",
+        enabled=True,
+        action_do=0,
+        group_pk=None,
+        ttl=int((frozen_now + timedelta(minutes=30)).timestamp()),
+        comment="",
+    )
+    runtime.client.async_set_profile_rule.assert_not_awaited()
+
+
+async def test_set_rule_state_expire_at_overrides_duration(hass) -> None:
+    """The rule service should prefer expire_at over expiration_duration."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_update_profile_rule_rich = AsyncMock()
+    runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    frozen_now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    expire_at = datetime(2026, 4, 8, 9, 15, tzinfo=UTC)
+    with patch(
+        "custom_components.controld_manager.services.dt_util.utcnow",
+        return_value=frozen_now,
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_RULE_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_RULE_IDENTITY: ["root|example.com"],
+                SERVICE_FIELD_EXPIRATION_DURATION: timedelta(minutes=30),
+                SERVICE_FIELD_EXPIRE_AT: expire_at,
+            },
+            blocking=True,
+        )
+
+    runtime.client.async_update_profile_rule_rich.assert_awaited_once_with(
+        "profile-1",
+        "example.com",
+        enabled=True,
+        action_do=0,
+        group_pk=None,
+        ttl=int(expire_at.timestamp()),
+        comment="",
+    )
+    runtime.client.async_set_profile_rule.assert_not_awaited()
+
+
+async def test_set_rule_state_cancel_expiration_uses_rich_update(hass) -> None:
+    """The rule service should cancel expiration using the rich rule update."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_update_profile_rule_rich = AsyncMock()
+    runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_RULE_IDENTITY: ["root|example.com"],
+            SERVICE_FIELD_CANCEL_EXPIRATION: True,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_update_profile_rule_rich.assert_awaited_once_with(
+        "profile-1",
+        "example.com",
+        enabled=True,
+        action_do=0,
+        group_pk=None,
+        ttl=-1,
+        comment="",
+    )
+    runtime.client.async_set_profile_rule.assert_not_awaited()
+
+
+async def test_set_rule_state_cancel_expiration_overrides_expire_inputs(hass) -> None:
+    """The rule service should ignore expiration inputs when canceling."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_update_profile_rule_rich = AsyncMock()
+    runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_RULE_IDENTITY: ["root|example.com"],
+            SERVICE_FIELD_CANCEL_EXPIRATION: True,
+            SERVICE_FIELD_EXPIRATION_DURATION: timedelta(minutes=30),
+            SERVICE_FIELD_EXPIRE_AT: datetime(2026, 4, 8, 9, 15, tzinfo=UTC),
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_update_profile_rule_rich.assert_awaited_once_with(
+        "profile-1",
+        "example.com",
+        enabled=True,
+        action_do=0,
+        group_pk=None,
+        ttl=-1,
+        comment="",
+    )
+    runtime.client.async_set_profile_rule.assert_not_awaited()
+
+
+async def test_rule_entity_exposes_expiration_attributes(hass) -> None:
+    """Rule entities should expose the current expiration timestamp and state."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset({"rule:root|example.com"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry.add_to_hass(hass)
+
+    expired_ttl = int(datetime(2026, 4, 6, 12, 0, tzinfo=UTC).timestamp())
+
+    def _expired_detail(
+        profile_pk: str, *, include_services: bool, include_rules: bool
+    ) -> ControlDProfileDetailPayload:
+        del include_services
+        if not include_rules or profile_pk != "profile-1":
+            return _detail_payload(
+                profile_pk,
+                include_services=False,
+                include_rules=False,
+            )
+        return ControlDProfileDetailPayload(
+            filters=_detail_payload(
+                profile_pk, include_services=False, include_rules=False
+            ).filters,
+            external_filters=(
+                {
+                    "PK": "x-community",
+                    "name": "Community List",
+                    "action": {"do": 0, "status": 0},
+                    "status": 0,
+                },
+            ),
+            options=(
+                {"PK": "ai_malware", "value": 0.9},
+                {"PK": "safesearch", "value": 1},
+                {"PK": "block_rfc1918", "value": 1},
+                {"PK": "ttl_blck", "value": 11},
+            ),
+            default_rule={"do": 1, "status": 1},
+            services=(),
+            groups=(),
+            rules=(
+                {
+                    "PK": "example.com",
+                    "order": 1,
+                    "group": 0,
+                    "action": {"do": 0, "status": 0, "ttl": expired_ttl},
+                    "comment": "expired rule",
+                },
+            ),
+        )
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(side_effect=_expired_detail),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.switch.dt_util.utcnow",
+            return_value=datetime(2026, 4, 7, 12, 0, tzinfo=UTC),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entity_registry = er.async_get(hass)
+    rule_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::rule::root|example.com"
+    )
+    state = hass.states.get(rule_entity_id)
+    assert state is not None
+    assert state.state == "off"
+    assert state.attributes[ATTR_EXPIRED] is True
+    assert (
+        state.attributes[ATTR_EXPIRES_AT]
+        == datetime.fromtimestamp(expired_ttl, UTC).isoformat()
+    )
+
+
+async def test_set_rule_state_prefers_config_entry_id_over_name(hass) -> None:
+    """The rule service should use config_entry_id when both entry selectors exist."""
+    entry_one = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry_two = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "other-token", "entry_name": "Control D Cabin"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-456",
+        title="Control D Cabin",
+    )
+    entry_one.add_to_hass(hass)
+    entry_two.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(
+                side_effect=[
+                    _inventory("user-123", "profile-1"),
+                    _inventory("user-456", "profile-1"),
+                ]
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry_one.entry_id)
+        await hass.async_block_till_done()
+        if entry_two.state is ConfigEntryState.NOT_LOADED:
+            assert await hass.config_entries.async_setup(entry_two.entry_id)
+            await hass.async_block_till_done()
+
+    entry_one.runtime_data.client.async_set_profile_rule = AsyncMock()
+    entry_one.runtime_data.coordinator.async_refresh = AsyncMock()
+    entry_two.runtime_data.client.async_set_profile_rule = AsyncMock()
+    entry_two.runtime_data.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_RULE_STATE,
+        {
+            "config_entry_id": entry_one.entry_id,
+            "config_entry_name": "Control D Cabin",
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_RULE_IDENTITY: ["group:1|example2.com"],
+            SERVICE_FIELD_ENABLED: False,
+        },
+        blocking=True,
+    )
+
+    entry_one.runtime_data.client.async_set_profile_rule.assert_awaited_once()
+    entry_two.runtime_data.client.async_set_profile_rule.assert_not_awaited()
+
+
+async def test_set_rule_state_requires_mutation_field(hass) -> None:
+    """The rule service should require at least one mutation field."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_RULE_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_RULE_IDENTITY: "root|example.com",
+            },
+            blocking=True,
+        )
+
+
+async def test_set_rule_state_requires_profile_selector(hass) -> None:
+    """The rule service should require a profile ID or profile name."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_RULE_STATE,
+            {
+                SERVICE_FIELD_RULE_IDENTITY: ["group:1|example2.com"],
+                SERVICE_FIELD_ENABLED: False,
+            },
+            blocking=True,
+        )
+
+
+async def test_set_rule_state_requires_rule_selector(hass) -> None:
+    """The rule service should require a rule identity."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_RULE_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_ENABLED: False,
+            },
+            blocking=True,
+        )
+
+
+async def test_set_rule_state_rejects_entity_targets(hass) -> None:
+    """The rule service should not accept generic entity targets."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    rule_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::rule::group:1|example2.com"
+    )
+
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_RULE_STATE,
+            {
+                ATTR_ENTITY_ID: [rule_entity_id],
+                SERVICE_FIELD_RULE_IDENTITY: ["group:1|example2.com"],
+                SERVICE_FIELD_ENABLED: False,
+            },
+            blocking=True,
+        )
+
+
+async def test_set_rule_state_surfaces_upstream_failures(hass) -> None:
+    """The rule service should surface upstream write failures cleanly."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_rule = AsyncMock(
+        side_effect=ControlDApiResponseError("rule update rejected")
+    )
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_RULE_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_RULE_IDENTITY: "group:1|example2.com",
+                SERVICE_FIELD_ENABLED: False,
+            },
+            blocking=True,
+        )
+
+
 async def test_selector_layer_resolves_services_by_id_and_name(hass) -> None:
     """The selector layer should resolve services by raw ID or display name."""
     entry = MockConfigEntry(
@@ -2624,8 +3499,8 @@ async def test_selector_layer_resolves_rule_groups_by_name(hass) -> None:
     ) == {"profile-1": frozenset({"1"})}
 
 
-async def test_selector_layer_resolves_rules_by_identity_and_comment(hass) -> None:
-    """The selector layer should resolve rules by identity before comment."""
+async def test_selector_layer_resolves_rules_by_identity(hass) -> None:
+    """The selector layer should resolve rules by identity or bare hostname."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
@@ -2650,14 +3525,12 @@ async def test_selector_layer_resolves_rules_by_identity_and_comment(hass) -> No
         entry,
         frozenset({"profile-1"}),
         requested_rule_identities=["group:1|example2.com"],
-        requested_rule_comments=["Here is my reason"],
     ) == {"profile-1": frozenset({"group:1|example2.com"})}
 
     assert _resolve_selected_rule_identities(
         entry,
         frozenset({"profile-1"}),
-        requested_rule_identities=[],
-        requested_rule_comments=["Here is my reason"],
+        requested_rule_identities=["example2.com"],
     ) == {"profile-1": frozenset({"group:1|example2.com"})}
 
 

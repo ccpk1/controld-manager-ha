@@ -387,6 +387,38 @@ async def test_filter_write_payload_matches_browser_contract() -> None:
     )
 
 
+async def test_rule_rich_write_payload_matches_browser_contract() -> None:
+    """Rich rule writes should match the browser-verified rule API contract."""
+    async with ClientSession() as session:
+        client = ControlDAPIClient("token-value", session)
+
+        with patch.object(client, "_async_request", new=AsyncMock()) as async_request:
+            await client.async_update_profile_rule_rich(
+                "profile-1",
+                "example.com",
+                enabled=False,
+                action_do=0,
+                group_pk=None,
+                ttl=1775563200,
+                comment="new rule comment",
+            )
+
+    async_request.assert_awaited_once_with(
+        "PUT",
+        "/profiles/profile-1/rules",
+        {
+            "do": 0,
+            "status": 0,
+            "via": "-1",
+            "via_v6": "-1",
+            "ttl": 1775563200,
+            "hostnames": ["example.com"],
+            "group": 0,
+            "comment": "new rule comment",
+        },
+    )
+
+
 async def test_setup_entry_creates_entry_scoped_runtime(hass) -> None:
     """Setting up one entry should create one runtime with attached managers."""
     entry = MockConfigEntry(

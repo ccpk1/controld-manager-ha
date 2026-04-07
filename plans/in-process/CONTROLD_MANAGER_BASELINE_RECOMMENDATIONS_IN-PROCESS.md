@@ -13,6 +13,8 @@ The target direction solves four concrete problems:
 - one integration service surface should be able to target any supported Control D entity, device, profile, or the entire instance without duplicate entry setup
 - the implementation must avoid Home Assistant device-registry bloat by modeling physical clients as endpoint entities instead of Home Assistant devices
 
+Current Phase 6 additions now include explicit shared Home Assistant services for profile enable or disable, filter state, service mode, typed catalog export, and custom rule state by stable rule identity or unique bare hostname.
+
 Implementation standard:
 
 - all build work must target a platinum-quality Home Assistant integration posture, even where the repository honestly leaves `quality_scale.yaml` items as `todo` until behavior exists

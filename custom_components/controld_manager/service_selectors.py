@@ -135,26 +135,61 @@ def _resolve_selected_rule_identities(
     profile_pks: frozenset[str],
     *,
     requested_rule_identities: list[str],
-    requested_rule_comments: list[str],
 ) -> dict[str, frozenset[str]]:
-    """Resolve rule selectors across targeted profiles for future services."""
-    return _resolve_selected_profile_item_keys(
-        profile_pks,
-        requested_item_ids=requested_rule_identities,
-        requested_item_names=requested_rule_comments,
-        items_for_profile=lambda profile_pk: _sorted_profile_rules(entry, profile_pk),
-        item_id=lambda rule_row: rule_row.identity,
-        item_name=lambda rule_row: rule_row.comment or None,
-        required_message="Select at least one Control D rule by identity or comment",
-        required_translation_key=TRANS_KEY_RULE_TARGET_REQUIRED,
-        not_found_message=(
-            "The selected Control D rule target could not be resolved for one or "
-            "more targeted profiles"
-        ),
-        not_found_translation_key=TRANS_KEY_RULE_NAME_NOT_FOUND,
-        ambiguous_message="The selected Control D rule target is ambiguous",
-        ambiguous_translation_key=TRANS_KEY_RULE_NAME_AMBIGUOUS,
-    )
+    """Resolve rule selectors by full identity or bare hostname when unique."""
+    if not requested_rule_identities:
+        raise _service_validation_error(
+            "Select at least one Control D rule by identity or hostname",
+            translation_key=TRANS_KEY_RULE_TARGET_REQUIRED,
+        )
+
+    profile_rules: dict[str, frozenset[str]] = {}
+    for profile_pk in profile_pks:
+        rules = tuple(_sorted_profile_rules(entry, profile_pk))
+        resolved_rule_ids: set[str] = set()
+
+        for requested_value in requested_rule_identities:
+            normalized_requested_value = _normalize_name(requested_value)
+
+            identity_matches = [
+                rule_row.identity
+                for rule_row in rules
+                if _normalize_name(rule_row.identity) == normalized_requested_value
+            ]
+            if len(identity_matches) == 1:
+                resolved_rule_ids.add(identity_matches[0])
+                continue
+            if len(identity_matches) > 1:
+                raise _service_validation_error(
+                    "The selected Control D rule target is ambiguous",
+                    translation_key=TRANS_KEY_RULE_NAME_AMBIGUOUS,
+                )
+
+            hostname_matches = [
+                rule_row.identity
+                for rule_row in rules
+                if _normalize_name(rule_row.rule_pk) == normalized_requested_value
+            ]
+            if len(hostname_matches) == 1:
+                resolved_rule_ids.add(hostname_matches[0])
+                continue
+            if len(hostname_matches) > 1:
+                raise _service_validation_error(
+                    "The selected Control D rule target is ambiguous",
+                    translation_key=TRANS_KEY_RULE_NAME_AMBIGUOUS,
+                )
+
+            raise _service_validation_error(
+                (
+                    "The selected Control D rule target could not be resolved for "
+                    "one or more targeted profiles"
+                ),
+                translation_key=TRANS_KEY_RULE_NAME_NOT_FOUND,
+            )
+
+        profile_rules[profile_pk] = frozenset(resolved_rule_ids)
+
+    return profile_rules
 
 
 def _resolve_selected_option_pks(

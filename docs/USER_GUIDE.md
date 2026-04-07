@@ -237,6 +237,8 @@ The integration currently registers these Home Assistant services:
 - `controld_manager.disable_profile`
 - `controld_manager.enable_profile`
 - `controld_manager.set_filter_state`
+- `controld_manager.set_rule_state`
+- `controld_manager.set_service_state`
 - `controld_manager.get_catalog`
 
 ### Enable and disable profile services
@@ -290,6 +292,93 @@ Manual examples:
 	`profile_id: ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0"]`
 	`filter_name: ["Ads & Trackers"]`
 	`enabled: true`
+
+### Rule state service
+
+`controld_manager.set_rule_state` updates one or more selected custom rules in
+the selected profiles.
+
+- select profiles with `profile_id` or `profile_name`
+- `profile_id` wins if both profile selectors are provided
+- select rules with `rule_identity`
+- `rule_identity` accepts full stable identities such as `root|example.com` or
+	`group:1|example2.com`
+- `rule_identity` also accepts a bare hostname such as `example.com` when that
+	hostname is unique within the targeted profile scope
+- `config_entry_id` and `config_entry_name` remain optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+
+Supported mutation fields:
+
+- `enabled` toggles the selected rules on or off
+- `mode` changes the rule action to `block`, `bypass`, or `redirect`
+- `comment` attempts to replace the upstream rule comment
+- `cancel_expiration` clears the current expiration
+- `expiration_duration` sets a relative expiration
+- `expire_at` sets an absolute expiration in the Home Assistant local timezone
+
+Precedence rules:
+
+- `cancel_expiration` overrides both `expiration_duration` and `expire_at`
+- `expire_at` overrides `expiration_duration` when both are provided
+
+Current backend limitation:
+
+- rule comment updates are not persisting reliably in Control D today
+- the browser UI shows the same behavior: a comment can appear to update until
+	the page refreshes, then the previous value returns
+- the Home Assistant service exposes the field because it matches the observed
+	write contract, but comment changes should be treated as backend-limited for
+	now
+
+Current entity behavior for expired rules:
+
+- a rule with an expiration in the past is exposed as `off`
+- rule entities expose `expired: true` and `expires_at` attributes when an
+	expiration exists
+- rules without an expiration do not include those attributes
+
+Manual examples:
+
+- disable one rule by full identity:
+	`profile_name: ["Primary"]`
+	`rule_identity: ["group:1|example2.com"]`
+	`enabled: false`
+- expire one rule in 30 minutes:
+	`profile_name: ["Primary"]`
+	`rule_identity: ["root|example.com"]`
+	`expiration_duration: "00:30:00"`
+- cancel an existing expiration:
+	`profile_name: ["Primary"]`
+	`rule_identity: ["root|example.com"]`
+	`cancel_expiration: true`
+
+### Service mode service
+
+`controld_manager.set_service_state` updates one or more Control D services in
+the selected profiles.
+
+- select profiles with `profile_id` or `profile_name`
+- `profile_id` wins if both profile selectors are provided
+- select services with `service_id` or `service_name`
+- `service_id` wins if both service selectors are provided
+- `config_entry_id` and `config_entry_name` remain optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+
+This service does not require service entities to be exposed. It can resolve
+live service data even when the matching category is not currently enabled for
+entities.
+
+Manual examples:
+
+- block one service by raw ID:
+	`profile_name: ["Primary"]`
+	`service_id: ["amazonmusic"]`
+	`mode: "Blocked"`
+- redirect one service by user-facing name:
+	`profile_name: ["Primary"]`
+	`service_name: ["Amazon Music"]`
+	`mode: "Redirected"`
 
 ### Catalog service
 

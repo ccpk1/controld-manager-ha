@@ -99,6 +99,9 @@
     "set_filter_state": {
       "service": "mdi:filter-cog"
     },
+    "set_rule_state": {
+      "service": "mdi:shield-check"
+    },
     "set_service_state": {
       "service": "mdi:application-cog"
     },

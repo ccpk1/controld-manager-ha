@@ -632,6 +632,24 @@ def rule_group_mode_options() -> tuple[str, ...]:
     )
 
 
+def rule_action_do_from_key(action_key: str) -> int:
+    """Translate a rule action key into the Control D write payload value."""
+    return {
+        RULE_ACTION_BLOCK: 0,
+        RULE_ACTION_BYPASS: 1,
+        RULE_ACTION_REDIRECT: 2,
+    }[action_key]
+
+
+def rule_action_options() -> tuple[str, ...]:
+    """Return the supported mutable rule action keys."""
+    return (
+        RULE_ACTION_BLOCK,
+        RULE_ACTION_BYPASS,
+        RULE_ACTION_REDIRECT,
+    )
+
+
 @dataclass(slots=True)
 class ControlDSyncStatus:
     """Live refresh metadata kept in runtime memory."""

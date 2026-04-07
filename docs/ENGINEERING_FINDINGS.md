@@ -325,6 +325,13 @@ Observed and supplied evidence:
 - `GET /profiles/{profile_id}/groups` returns folder-like groups with `PK`, `group`, `action`, and `count`
 - `GET /profiles/{profile_id}/rules` returns top-level rules
 - `GET /profiles/{profile_id}/rules/all` returns both top-level and grouped rules
+- browser-backed traces confirm hostname-oriented write endpoints:
+  - `POST /profiles/{profile_id}/rules` creates rules
+  - `PUT /profiles/{profile_id}/rules` performs rich updates
+  - `PUT /profiles/{profile_id}/rules/{hostname}` performs simple hostname-targeted updates
+  - `DELETE /profiles/{profile_id}/rules` deletes rules by hostname list
+- create and update payloads use hostname fields rather than upstream numeric rule IDs
+- duplicate hostname creation is rejected upstream even when the requested folder differs
 
 Observed group patterns:
 
@@ -350,12 +357,30 @@ Observed rule patterns:
   - `action.status = 0`
 - expiring rule:
   - `action.ttl = <unix timestamp>`
+- expired rule:
+  - a past `action.ttl` is valid and produces an expired rule state
+  - expired rules appear greyed out in the portal and are not toggleable until expiration is canceled or moved into the future
+- comment updates:
+  - current backend behavior does not persist rule comment updates reliably
+  - the browser UI can appear to accept a comment change, but the prior value returns after a refresh
+  - treat this as an upstream backend defect rather than a Home Assistant-only write-path defect
+- timer cancellation:
+  - `PUT /profiles/{profile_id}/rules`
+  - payload includes `ttl = -1`
+  - payload includes `hostnames[]`, `group`, `comment`, and the current action fields
 
 Settled interpretation:
 
 - toggles are always at the rule level, including rules inside folders
 - folders are important for naming and exposure policy, but they do not replace rule-level switch semantics
 - rule exposure should store explicitly selected typed rule identities per profile
+- the upstream write contract is hostname-oriented rather than rule-PK-oriented
+- comment changes and expiration changes should use a merged rich `/profiles/{profile_id}/rules` payload built from the current rule state
+- expiration cancellation uses the rich hostname-based rule update endpoint with `ttl = -1`
+- past expiration timestamps are valid input and should not be rejected by Home Assistant service validation
+- expiration is a real rule state and should be surfaced on the rule entities
+- comment update support should remain documented as backend-limited until Control D persists those writes reliably
+- bare hostnames are a safe convenience selector when they are unique, while full rule identities should remain the recommended selector in Home Assistant
 - later implementation should preserve room for additional action semantics such as expiring rules and folder-imposed allow or block defaults
 
 ## Endpoint status findings
