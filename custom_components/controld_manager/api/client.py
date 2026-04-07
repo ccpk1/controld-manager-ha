@@ -74,6 +74,13 @@ class ControlDAPIClient:
         payload = await self._async_get_json(f"/profiles/{profile_pk}/filters")
         return self._extract_body_list(payload, "filters")
 
+    async def async_get_profile_external_filters(
+        self, profile_pk: str
+    ) -> list[dict[str, Any]]:
+        """Fetch third-party filter rows for one profile."""
+        payload = await self._async_get_json(f"/profiles/{profile_pk}/filters/external")
+        return self._extract_body_list(payload, "filters")
+
     async def async_get_profile_services(self, profile_pk: str) -> list[dict[str, Any]]:
         """Fetch service rows for one profile."""
         payload = await self._async_get_json(f"/profiles/{profile_pk}/services")
@@ -113,34 +120,28 @@ class ControlDAPIClient:
         include_rules: bool,
     ) -> ControlDProfileDetailPayload:
         """Fetch the detail payloads required for one profile policy."""
-        filters_task = self.async_get_profile_filters(profile_pk)
-        options_task = self.async_get_profile_options(profile_pk)
-        default_rule_task = self.async_get_profile_default_rule(profile_pk)
-        services_task = (
-            self.async_get_profile_services(profile_pk)
-            if include_services
-            else asyncio.sleep(0, result=[])
+        filters, external_filters, options, default_rule = await asyncio.gather(
+            self.async_get_profile_filters(profile_pk),
+            self.async_get_profile_external_filters(profile_pk),
+            self.async_get_profile_options(profile_pk),
+            self.async_get_profile_default_rule(profile_pk),
         )
-        groups_task = (
-            self.async_get_profile_groups(profile_pk)
-            if include_rules
-            else asyncio.sleep(0, result=[])
-        )
-        rules_task = (
-            self.async_get_profile_rules(profile_pk)
-            if include_rules
-            else asyncio.sleep(0, result=[])
-        )
-        filters, options, default_rule, services, groups, rules = await asyncio.gather(
-            filters_task,
-            options_task,
-            default_rule_task,
-            services_task,
-            groups_task,
-            rules_task,
-        )
+
+        services: list[dict[str, Any]] = []
+        if include_services:
+            services = await self.async_get_profile_services(profile_pk)
+
+        groups: list[dict[str, Any]] = []
+        rules: list[dict[str, Any]] = []
+        if include_rules:
+            groups, rules = await asyncio.gather(
+                self.async_get_profile_groups(profile_pk),
+                self.async_get_profile_rules(profile_pk),
+            )
+
         return ControlDProfileDetailPayload(
             filters=tuple(filters),
+            external_filters=tuple(external_filters),
             options=tuple(options),
             default_rule=default_rule,
             services=tuple(services),
@@ -178,10 +179,10 @@ class ControlDAPIClient:
         payload = await self._async_get_json("/devices?last_activity=1")
         return self._extract_body_list(payload, "devices")
 
-    async def async_set_profile_pause_until(
+    async def async_set_profile_disable_until(
         self, profile_pk: str, disable_ttl: int
     ) -> None:
-        """Pause or resume a profile using the documented disable-until contract."""
+        """Disable or enable a profile using the documented disable-until contract."""
         await self._async_request(
             "PUT", f"/profiles/{profile_pk}", {"disable_ttl": disable_ttl}
         )

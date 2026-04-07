@@ -10,6 +10,7 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 from ..models import (
+    ControlDFilter,
     ControlDProfileSummary,
     default_rule_action_from_mode,
     rule_group_action_from_mode,
@@ -64,13 +65,13 @@ class ProfileManager(BaseManager):
                 return None
         return None
 
-    async def async_pause_profiles(self, profile_pks: set[str], minutes: int) -> None:
-        """Pause one or more profiles until a future timestamp."""
+    async def async_disable_profiles(self, profile_pks: set[str], minutes: int) -> None:
+        """Disable one or more profiles until a future timestamp."""
         paused_until = dt_util.utcnow() + timedelta(minutes=minutes)
         disable_ttl = int(paused_until.timestamp())
         await asyncio.gather(
             *(
-                self.runtime.client.async_set_profile_pause_until(
+                self.runtime.client.async_set_profile_disable_until(
                     profile_pk, disable_ttl
                 )
                 for profile_pk in profile_pks
@@ -78,11 +79,11 @@ class ProfileManager(BaseManager):
         )
         await self.runtime.active_coordinator.async_refresh()
 
-    async def async_resume_profiles(self, profile_pks: set[str]) -> None:
-        """Resume one or more paused profiles immediately."""
+    async def async_enable_profiles(self, profile_pks: set[str]) -> None:
+        """Enable one or more disabled profiles immediately."""
         await asyncio.gather(
             *(
-                self.runtime.client.async_set_profile_pause_until(profile_pk, 0)
+                self.runtime.client.async_set_profile_disable_until(profile_pk, 0)
                 for profile_pk in profile_pks
             )
         )
@@ -92,19 +93,37 @@ class ProfileManager(BaseManager):
         self, profile_pk: str, filter_pk: str, enabled: bool
     ) -> None:
         """Enable or disable one profile filter."""
-        filter_row = self.runtime.registry.filters_by_profile[profile_pk][filter_pk]
-        await self.runtime.client.async_set_profile_filter(
-            profile_pk,
-            filter_pk,
-            enabled=enabled,
-            action_do=(1 if not enabled else filter_row.action_do),
-            level_slug=filter_row.effective_level_slug if enabled else None,
+        await self.async_set_filters_enabled({profile_pk: filter_pk}, enabled)
+
+    async def async_set_filters_enabled(
+        self, profile_filters: dict[str, str], enabled: bool
+    ) -> None:
+        """Enable or disable one filter across one or more targeted profiles."""
+        updated_filters: list[tuple[str, str, ControlDFilter]] = []
+        for profile_pk, filter_pk in profile_filters.items():
+            filter_row = self.runtime.registry.filters_by_profile[profile_pk][filter_pk]
+            updated_filters.append((profile_pk, filter_pk, filter_row))
+
+        await asyncio.gather(
+            *(
+                self.runtime.client.async_set_profile_filter(
+                    profile_pk,
+                    filter_pk,
+                    enabled=enabled,
+                    action_do=(1 if not enabled else filter_row.action_do),
+                    level_slug=(filter_row.effective_level_slug if enabled else None),
+                )
+                for profile_pk, filter_pk, filter_row in updated_filters
+            )
         )
-        self.runtime.registry.filters_by_profile[profile_pk][filter_pk] = replace(
-            filter_row,
-            enabled=enabled,
-            selected_level_slug=filter_row.effective_level_slug,
-        )
+
+        for profile_pk, filter_pk, filter_row in updated_filters:
+            self.runtime.registry.filters_by_profile[profile_pk][filter_pk] = replace(
+                filter_row,
+                enabled=enabled,
+                selected_level_slug=filter_row.effective_level_slug,
+            )
+
         self.runtime.active_coordinator.async_update_listeners()
         self.runtime.active_coordinator.hass.async_create_task(
             self.runtime.active_coordinator.async_refresh()

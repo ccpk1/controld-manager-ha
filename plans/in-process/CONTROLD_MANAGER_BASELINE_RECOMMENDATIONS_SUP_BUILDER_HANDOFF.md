@@ -55,7 +55,7 @@ This first pass is about correctness, ownership, and future-proofing. It is not 
 
 - exhaustive analytics surfaces
 - speculative entity expansion
-- broad service catalog expansion beyond the approved first profile pause and resume direction
+- broad service catalog expansion beyond the approved first profile disable and enable direction
 - Pi-hole compatibility and tamper-oriented add-ons
 
 ## Phase 2 closeout decisions the builder must treat as fixed inputs

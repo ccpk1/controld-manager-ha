@@ -91,7 +91,9 @@ Required review discipline:
 - What mutation rate limits, write consistency guarantees, and rollback behavior apply when one service targets multiple profiles or the whole instance?
 - Does the API support bulk operations natively, or will the integration need manager-level fan-out across multiple profile targets?
 - Should billing product and analytics-region metadata remain diagnostics-only, or should some of it surface on the instance system device?
-- Should profile pause and policy pause ultimately share one service family with typed target resolution, or should profile, filter, and service pause semantics remain separate service surfaces?
+- Should profile disable or enable behavior and any later policy-level disable
+	behavior ultimately share one service family with typed target resolution, or
+	should profile, filter, and service service surfaces remain separate?
 - What immutable typed identity should be stored for grouped-rule selections so folders and rule rows survive renames cleanly?
 - Should the endpoint activity threshold be stored only per profile, or should the options flow also support an entry-wide default that profiles may inherit?
 
@@ -100,10 +102,11 @@ Required review discipline:
 | Phase | Status | Goal | Primary files | Exit outcome |
 | --- | --- | --- | --- | --- |
 | 1 | Complete | Lock the lexicon, hierarchy, and manager architecture | `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT_STANDARDS.md`, `docs/QUALITY_REFERENCE.md`, `README.md` | Durable docs agree on the instance-centric model and minimum manager set |
-| 2 | Complete | Validate instance identity, API topology, and polling design | `custom_components/controld_manager/api/`, `custom_components/controld_manager/models.py`, tests, supporting notes if needed | Verified instance anchor, normalized read contract, deterministic multi-profile attachment policy, pause refresh contract, and dynamic polling contract, with deeper analytics research explicitly deferred as non-blocking follow-up |
+| 2 | Complete | Validate instance identity, API topology, and polling design | `custom_components/controld_manager/api/`, `custom_components/controld_manager/models.py`, tests, supporting notes if needed | Verified instance anchor, normalized read contract, deterministic multi-profile attachment policy, disable-state refresh contract, and dynamic polling contract, with deeper analytics research explicitly deferred as non-blocking follow-up |
 | 3 | Complete | Build the entry-scoped runtime and lifecycle managers | `custom_components/controld_manager/__init__.py`, `custom_components/controld_manager/coordinator.py`, `custom_components/controld_manager/managers/`, `custom_components/controld_manager/entity.py` | One config entry owns one runtime with manager-backed device and entity lifecycle control |
 | 4 | Complete | Add conservative entities, shared services, and later add-on evaluation | platform files, `services.yaml`, translations, tests, optional supporting notes | Stable profile devices, endpoint entities, shared service targeting, and documented late-phase add-on decisions |
 | 5 | Complete | Add scalable per-profile options policy and high-cardinality profile surfaces | `config_flow.py`, `models.py`, manager layer, platform files, translations, tests, plan docs | Menu-driven options flow, per-profile inclusion and exposure policy, auto-created filters, category-driven service exposure, typed rule selection, and endpoint-status threshold support |
+| 6 | In progress | Add a shared mutation-service layer with Control D terminology and multi-entry-safe targeting | `__init__.py`, `services.yaml`, `const.py`, manager helpers, translations, tests, plan docs | A small reusable service family supports flexible profile-scoped actions without one custom service per entity type |
 
 ## Immediate implementation kickoff
 
@@ -153,6 +156,9 @@ Remaining follow-on scope after the current slice:
 - `ecs_subnet` remains intentionally excluded from entity exposure
 - TTL-style options remain intentionally limited to advanced toggle behavior
 	rather than editable numeric controls
+- the next implementation phase should focus on the shared service layer,
+	including renaming profile pause or resume terminology to Control D-aligned
+	enable profile and disable profile behavior
 
 ### Phase 5: Add scalable per-profile options policy and high-cardinality profile surfaces
 
@@ -166,6 +172,37 @@ Remaining follow-on scope after the current slice:
 - [x] Implement the first endpoint status surface as an opt-in endpoint entity with attributes, using a per-profile activity-threshold option bounded to 5 to 60 minutes and defaulting to 15 minutes if no stronger upstream status contract is proven.
 - [x] Add focused tests for menu navigation, persisted per-profile policy, profile inclusion or exclusion behavior, service-category defaults, grouped-rule persistence, and endpoint-threshold behavior.
 - [x] Close the dynamic entity lifecycle gap so removed rules, removed rule folders, and other no-longer-desired dynamic entities are removed from the Home Assistant entity registry by stable unique ID during reconciliation.
+
+### Phase 6: Add a shared mutation-service layer and align profile terminology
+
+- [x] Implement Control D-aligned profile services `disable_profile` and
+	`enable_profile`, and update user-facing text to match the Control D
+	wording `Temporarily disable all filters, services and rules.`
+- [x] Define one shared target-resolution helper path for services so every
+	service can safely resolve exactly one loaded config entry and one or more
+	profiles without duplicating logic.
+- [ ] Keep routine entity actions on native Home Assistant entity services and
+	add only a small set of integration services where they provide real value,
+	such as bulk targeting, profile-wide actions, or operations that are not a
+	natural fit for a single entity.
+- [x] Prefer capability-based service families over one service per toggle or
+	option so the integration remains compact while still supporting future
+	profile options, filters, services, rules, and rule-folder actions.
+- [x] Ensure every custom service is translation-ready, multi-entry safe, and
+	validated through manager-owned mutation paths rather than direct entity or
+	API-layer payload construction.
+- [x] Add reusable service-schema and resolution helpers where the same config
+	entry, profile, or item-target selection pattern repeats across services.
+- [x] Update `services.yaml`, translations, and tests so the final service
+	surface is documented, localized, and aligned with platinum-quality Home
+	Assistant patterns.
+- [x] Add the capability-style filter mutation service `set_filter_state`, and
+	resolve filters by raw key or user-facing name across the selected profile
+	targets.
+- [x] Keep external or 3rd-party filters loaded in runtime for service writes
+	even when their entities stay hidden, and expose them only through a
+	per-profile `Expose 3rd-party filters` option with disabled-by-default
+	entity-registry posture.
 
 Phase 5 required research closeouts before code for that specific surface starts:
 
@@ -228,7 +265,10 @@ Current approved execution target for that slice:
 - [x] Lock the initial entity inventory for the instance system device, profile devices, and endpoint entities before platform code begins so device-registry growth stays intentional, using `GET /profiles` as the summary discovery source and profile-scoped list endpoints as the detailed source for item-level controls.
 - [x] Defer exhaustive regional analytics-surface decisions such as `v2/statistic/count`, `v2/statistic/count/triggerValue`, `v2/statistic/count/question`, and `v2/statistic/count/srcCountry` to a later analytics follow-up, while keeping the approved first entity slice conservative and avoiding speculative default entity commitments.
 - [x] Decide whether endpoint-scoped summary analytics should join the initial entity model alongside profile and instance analytics, now that `endpointId[]` samples show derivable top-level metrics such as total traffic, encrypted-DNS ratio, and home-country ratio.
-- [x] Lock the refreshed-read contract for profile pause and resume, including normalization of `disable` and `disable_ttl` into one paused-until representation and what profile state Phase 3 may represent after refresh.
+- [x] Lock the refreshed-read contract for profile disable and enable behavior,
+	including normalization of `disable` and `disable_ttl` into one
+	paused-until representation and what profile state Phase 3 may represent
+	after refresh.
 - [x] Capture the current API uncertainties and verified public-doc findings in a supporting note because they materially affect implementation sequencing.
 - [x] Declare the deterministic multi-profile endpoint attachment policy: always create the endpoint entity under the first attached upstream profile exposed by the published API payload.
 - [x] Define the runtime data needed to execute that policy honestly at the current two-profile level: derive enforced-profile membership from attached device fields such as `profile` and `profile2`, use `profile` as the owning Home Assistant profile device, and keep additional attached profiles as normalized metadata.
@@ -239,7 +279,10 @@ Current approved execution target for that slice:
 - [x] Defer exhaustive verification of the regional `/v2/statistic/count`, `/v2/statistic/count/triggerValue`, `/v2/statistic/count/question`, and `/v2/statistic/count/srcCountry` contracts to a later analytics follow-up because they are non-blocking to runtime scaffolding.
 - [x] Defer final verification of the derived security-overview metric contract, including exact `Benign Blocks` denominator behavior, to a later analytics follow-up.
 - [x] Defer broader dashboard-backed API inspection for endpoint, profile, service, filter, and rule pages until after the runtime foundation is stable.
-- [x] Lock the first paired mutation-service direction around `controld_manager.pause_profile` and `controld_manager.resume_profile`, and defer any shared target-family decision for filter and service pause semantics to the later service phase.
+- [x] Lock the first paired mutation-service direction around profile-wide
+	enable or disable behavior, while deferring the broader shared target-family
+	decision for filter, service, rule, and option services to the later service
+	phase.
 
 Phase 2 to Phase 3 gate:
 
@@ -259,7 +302,7 @@ Phase 2 deferred follow-up scope:
 - exhaustive analytics count and ranking contract verification
 - derived security-overview denominator verification
 - broader dashboard-backed API inspection
-- exact later service-family split or unification for profile, filter, and service pause semantics
+- exact later service-family split or unification for profile, filter, service, rule, and option disable semantics
 
 Approved Phase 2 closeout decisions:
 
@@ -322,8 +365,8 @@ Phase 3 required validations:
 - [x] Build the shared entity base in `custom_components/controld_manager/entity.py` so unique IDs, translation placeholders, purpose metadata, availability, and device attachment logic are centralized.
 - [x] Add the smallest useful entity set first: instance summary sensors, profile-level pause switches, and endpoint last-active telemetry entities from the documented inventory surface.
 - [x] Implement roaming-endpoint reconciliation so the entity manager updates an endpoint entity's parent profile device during refresh when profile membership changes, including profile-1 ownership for multi-profile endpoints.
-- [x] Register shared services only after manager write paths exist, including first-pass `controld_manager.pause_profile` and `controld_manager.resume_profile` services and a target-resolution path that supports `entity_id`, `device_id`, and `config_entry_id` safely.
-- [x] Evaluate whether profile, filter, and service pause semantics can share one typed target-resolution family without making service validation ambiguous; keep profile pause and resume as the explicit first service pair and defer filter or service pause semantics to a later follow-on pass.
+- [x] Register shared services only after manager write paths exist, including first-pass `controld_manager.disable_profile` and `controld_manager.enable_profile` services and a target-resolution path that supports `entity_id`, `device_id`, and `config_entry_id` safely.
+- [x] Evaluate whether profile, filter, and service disable semantics can share one typed target-resolution family without making service validation ambiguous; keep profile disable and enable as the explicit first service pair and defer broader filter, service, rule, and option mutation services to a later follow-on pass.
 - [x] Evaluate the Pi-hole compatibility option and the later tamper-oriented features only after the core runtime is stable, and capture an explicit deferral note: keep both out of the current implementation until the profile and endpoint surfaces mature.
 - [x] Reassess `custom_components/controld_manager/quality_scale.yaml` only after the runtime, entity lifecycle, and service contracts exist in working code.
 

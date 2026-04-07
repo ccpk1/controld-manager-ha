@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant.components.select import ATTR_OPTION
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import ATTR_ENTITY_ID
+from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -18,9 +18,12 @@ from custom_components.controld_manager.api import ControlDApiConnectionError
 from custom_components.controld_manager.const import (
     CONF_API_TOKEN,
     DOMAIN,
+    SERVICE_DISABLE_PROFILE,
+    SERVICE_ENABLE_PROFILE,
+    SERVICE_FIELD_ENABLED,
+    SERVICE_FIELD_FILTER_NAME,
     SERVICE_FIELD_MINUTES,
-    SERVICE_PAUSE_PROFILE,
-    SERVICE_RESUME_PROFILE,
+    SERVICE_SET_FILTER_STATE,
 )
 from custom_components.controld_manager.diagnostics import (
     async_get_config_entry_diagnostics,
@@ -269,6 +272,14 @@ def _detail_payload(
     )
     return ControlDProfileDetailPayload(
         filters=filters,
+        external_filters=(
+            {
+                "PK": "x-community",
+                "name": "Community List",
+                "action": {"do": 0, "status": 0},
+                "status": 0,
+            },
+        ),
         options=(
             {"PK": "ai_malware", "value": 0.9},
             {"PK": "safesearch", "value": 1},
@@ -897,16 +908,14 @@ async def test_removed_rule_entities_are_pruned_from_entity_registry(hass) -> No
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
             new=AsyncMock(
-                side_effect=lambda profile_pk, include_services, include_rules: (
-                    replace(
-                        _detail_payload(
-                            profile_pk,
-                            include_services=include_services,
-                            include_rules=include_rules,
-                        ),
-                        groups=(),
-                        rules=(),
-                    )
+                side_effect=lambda profile_pk, include_services, include_rules: replace(
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    ),
+                    groups=(),
+                    rules=(),
                 )
             ),
         ),
@@ -990,23 +999,21 @@ async def test_removed_dynamic_entities_are_pruned_across_platforms(hass) -> Non
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
             new=AsyncMock(
-                side_effect=lambda profile_pk, include_services, include_rules: (
-                    replace(
-                        _detail_payload(
+                side_effect=lambda profile_pk, include_services, include_rules: replace(
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    ),
+                    filters=tuple(
+                        filter_payload
+                        for filter_payload in _detail_payload(
                             profile_pk,
                             include_services=include_services,
                             include_rules=include_rules,
-                        ),
-                        filters=tuple(
-                            filter_payload
-                            for filter_payload in _detail_payload(
-                                profile_pk,
-                                include_services=include_services,
-                                include_rules=include_rules,
-                            ).filters
-                            if filter_payload["PK"] in {"ads", "ai_malware"}
-                        ),
-                    )
+                        ).filters
+                        if filter_payload["PK"] in {"ads", "ai_malware"}
+                    ),
                 )
             ),
         ),
@@ -1112,8 +1119,8 @@ async def test_status_sensor_tracks_degraded_and_problem_states(hass) -> None:
     )
 
 
-async def test_pause_service_targets_profile_from_entity_id(hass) -> None:
-    """The pause service should resolve a profile switch target safely."""
+async def test_disable_service_targets_profile_from_entity_id(hass) -> None:
+    """The disable service should resolve a profile entity target safely."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
@@ -1127,26 +1134,58 @@ async def test_pause_service_targets_profile_from_entity_id(hass) -> None:
         "switch", DOMAIN, "user-123::profile::profile-1::paused"
     )
     runtime = entry.runtime_data
-    runtime.client.async_set_profile_pause_until = AsyncMock()
+    runtime.client.async_set_profile_disable_until = AsyncMock()
     runtime.coordinator.async_refresh = AsyncMock()
 
     await hass.services.async_call(
         DOMAIN,
-        SERVICE_PAUSE_PROFILE,
+        SERVICE_DISABLE_PROFILE,
         {ATTR_ENTITY_ID: [pause_switch_entity_id], SERVICE_FIELD_MINUTES: 30},
         blocking=True,
     )
 
-    runtime.client.async_set_profile_pause_until.assert_awaited_once()
+    runtime.client.async_set_profile_disable_until.assert_awaited_once()
     profile_pk, disable_ttl = (
-        runtime.client.async_set_profile_pause_until.await_args.args
+        runtime.client.async_set_profile_disable_until.await_args.args
     )
     assert profile_pk == "profile-1"
     assert isinstance(disable_ttl, int)
 
 
-async def test_resume_service_supports_instance_target_by_config_entry_id(hass) -> None:
-    """The resume service should target all profiles when a config entry is selected."""
+async def test_disable_service_targets_profile_from_device_id(hass) -> None:
+    """The disable service should resolve a managed profile device target safely."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    profile_device = dr.async_get(hass).async_get_device(
+        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    )
+    assert profile_device is not None
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_disable_until = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DISABLE_PROFILE,
+        {ATTR_DEVICE_ID: [profile_device.id], SERVICE_FIELD_MINUTES: 45},
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_disable_until.assert_awaited_once()
+    assert (
+        runtime.client.async_set_profile_disable_until.await_args.args[0] == "profile-1"
+    )
+
+
+async def test_enable_service_supports_instance_target_by_config_entry_id(hass) -> None:
+    """The enable service should target all profiles when a config entry is selected."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
@@ -1156,21 +1195,21 @@ async def test_resume_service_supports_instance_target_by_config_entry_id(hass) 
     await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
 
     runtime = entry.runtime_data
-    runtime.client.async_set_profile_pause_until = AsyncMock()
+    runtime.client.async_set_profile_disable_until = AsyncMock()
     runtime.coordinator.async_refresh = AsyncMock()
 
     await hass.services.async_call(
         DOMAIN,
-        SERVICE_RESUME_PROFILE,
+        SERVICE_ENABLE_PROFILE,
         {"config_entry_name": "Control D Home"},
         blocking=True,
     )
 
-    assert runtime.client.async_set_profile_pause_until.await_count == 2
+    assert runtime.client.async_set_profile_disable_until.await_count == 2
 
 
-async def test_pause_service_rejects_mixed_instance_targets(hass) -> None:
-    """The pause service should reject targets that span multiple instances."""
+async def test_disable_service_infers_entry_from_entity_target(hass) -> None:
+    """The disable service should infer the entry from an entity target."""
     entry_one = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_API_TOKEN: "token-one", "entry_name": "Control D Home"},
@@ -1219,29 +1258,97 @@ async def test_pause_service_rejects_mixed_instance_targets(hass) -> None:
             assert await hass.config_entries.async_setup(entry_two.entry_id)
             await hass.async_block_till_done()
 
+    target_entity_id = er.async_get(hass).async_get_entity_id(
+        "switch", DOMAIN, "user-456::profile::profile-1::paused"
+    )
+    assert target_entity_id is not None
+
+    entry_one.runtime_data.client.async_set_profile_disable_until = AsyncMock()
+    entry_one.runtime_data.coordinator.async_refresh = AsyncMock()
+    entry_two.runtime_data.client.async_set_profile_disable_until = AsyncMock()
+    entry_two.runtime_data.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DISABLE_PROFILE,
+        {ATTR_ENTITY_ID: [target_entity_id], SERVICE_FIELD_MINUTES: 20},
+        blocking=True,
+    )
+
+    entry_one.runtime_data.client.async_set_profile_disable_until.assert_not_awaited()
+    entry_two.runtime_data.client.async_set_profile_disable_until.assert_awaited_once()
+
+
+async def test_disable_service_rejects_mixed_instance_targets(hass) -> None:
+    """The disable service should reject targets that span multiple instances."""
+    entry_one = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-one", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry_two = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-two", "entry_name": "Control D Cabin"},
+        unique_id="user-456",
+        title="Control D Cabin",
+    )
+    entry_one.add_to_hass(hass)
+    entry_two.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(
+                side_effect=[
+                    _inventory("user-123", "profile-1"),
+                    _inventory("user-456", "profile-1"),
+                ]
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry_one.entry_id)
+        await hass.async_block_till_done()
+        if entry_two.state is ConfigEntryState.NOT_LOADED:
+            assert await hass.config_entries.async_setup(entry_two.entry_id)
+            await hass.async_block_till_done()
+
+    target_entity_id = er.async_get(hass).async_get_entity_id(
+        "switch", DOMAIN, "user-456::profile::profile-1::paused"
+    )
+    assert target_entity_id is not None
+
     with pytest.raises(ServiceValidationError):
         await hass.services.async_call(
             DOMAIN,
-            SERVICE_PAUSE_PROFILE,
+            SERVICE_DISABLE_PROFILE,
             {
                 "config_entry_name": "Control D Home",
-                ATTR_ENTITY_ID: [
-                    entity_id
-                    for entity_id in [
-                        er.async_get(hass).async_get_entity_id(
-                            "switch", DOMAIN, "user-456::profile::profile-1::paused"
-                        )
-                    ]
-                    if entity_id is not None
-                ],
+                ATTR_ENTITY_ID: [target_entity_id],
                 SERVICE_FIELD_MINUTES: 15,
             },
             blocking=True,
         )
 
 
-async def test_pause_service_defaults_to_single_loaded_entry(hass) -> None:
-    """The pause service should default to the only loaded entry when one exists."""
+async def test_enable_service_defaults_to_single_loaded_entry(hass) -> None:
+    """The enable service should default to the only loaded entry when one exists."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
@@ -1251,21 +1358,21 @@ async def test_pause_service_defaults_to_single_loaded_entry(hass) -> None:
     await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
 
     runtime = entry.runtime_data
-    runtime.client.async_set_profile_pause_until = AsyncMock()
+    runtime.client.async_set_profile_disable_until = AsyncMock()
     runtime.coordinator.async_refresh = AsyncMock()
 
     await hass.services.async_call(
         DOMAIN,
-        SERVICE_RESUME_PROFILE,
+        SERVICE_ENABLE_PROFILE,
         {},
         blocking=True,
     )
 
-    assert runtime.client.async_set_profile_pause_until.await_count == 2
+    assert runtime.client.async_set_profile_disable_until.await_count == 2
 
 
-async def test_pause_service_requires_explicit_entry_when_multiple_loaded(hass) -> None:
-    """The pause service should require explicit entry selection.
+async def test_enable_service_requires_explicit_entry(hass) -> None:
+    """The enable service should require explicit entry selection.
 
     This applies when multiple entries are loaded.
     """
@@ -1320,10 +1427,180 @@ async def test_pause_service_requires_explicit_entry_when_multiple_loaded(hass) 
     with pytest.raises(ServiceValidationError):
         await hass.services.async_call(
             DOMAIN,
-            SERVICE_RESUME_PROFILE,
+            SERVICE_ENABLE_PROFILE,
             {},
             blocking=True,
         )
+
+
+async def test_set_filter_state_supports_raw_filter_key(hass) -> None:
+    """The filter service should resolve a raw Control D filter key."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_filter = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_FILTER_STATE,
+        {
+            "config_entry_name": "Control D Home",
+            SERVICE_FIELD_FILTER_NAME: "ads",
+            SERVICE_FIELD_ENABLED: False,
+        },
+        blocking=True,
+    )
+
+    assert runtime.client.async_set_profile_filter.await_count == 2
+    assert all(
+        call.args[1] == "ads"
+        for call in runtime.client.async_set_profile_filter.await_args_list
+    )
+
+
+async def test_set_filter_state_supports_user_facing_name(hass) -> None:
+    """The filter service should resolve a user-facing filter name."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    profile_device = dr.async_get(hass).async_get_device(
+        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    )
+    assert profile_device is not None
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_filter = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_FILTER_STATE,
+        {
+            ATTR_DEVICE_ID: [profile_device.id],
+            SERVICE_FIELD_FILTER_NAME: "ads & trackers",
+            SERVICE_FIELD_ENABLED: True,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_filter.assert_awaited_once()
+    assert runtime.client.async_set_profile_filter.await_args.args[1] == "ads"
+
+
+async def test_set_filter_state_rejects_unknown_filter_name(hass) -> None:
+    """The filter service should reject an unknown filter name."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_FILTER_STATE,
+            {
+                "config_entry_name": "Control D Home",
+                SERVICE_FIELD_FILTER_NAME: "not-a-real-filter",
+                SERVICE_FIELD_ENABLED: True,
+            },
+            blocking=True,
+        )
+
+
+async def test_set_filter_state_supports_external_filter_without_entity(hass) -> None:
+    """The filter service should resolve external filters when entities stay hidden."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    assert (
+        entity_registry.async_get_entity_id(
+            "switch", DOMAIN, "user-123::profile::profile-1::filter::x-community"
+        )
+        is None
+    )
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_filter = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_FILTER_STATE,
+        {
+            "config_entry_name": "Control D Home",
+            SERVICE_FIELD_FILTER_NAME: "Community List",
+            SERVICE_FIELD_ENABLED: True,
+        },
+        blocking=True,
+    )
+
+    assert runtime.client.async_set_profile_filter.await_count == 2
+    assert all(
+        call.args[1] == "x-community"
+        for call in runtime.client.async_set_profile_filter.await_args_list
+    )
+
+
+async def test_external_filter_entities_are_disabled_by_default_when_exposed(
+    hass,
+) -> None:
+    """External filter entities should be created disabled-by-default when opted in."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options={
+            "profile_policies": {
+                "profile-1": {"expose_external_filters": True},
+                "profile-2": {"expose_external_filters": True},
+            }
+        },
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    switch_entity_id = entity_registry.async_get_entity_id(
+        "switch", DOMAIN, "user-123::profile::profile-1::filter::x-community"
+    )
+    select_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::filter_mode::x-community"
+    )
+    switch_entry = (
+        entity_registry.async_get(switch_entity_id)
+        if switch_entity_id is not None
+        else None
+    )
+    select_entry = (
+        entity_registry.async_get(select_entity_id)
+        if select_entity_id is not None
+        else None
+    )
+
+    assert switch_entry is not None
+    assert switch_entry.disabled_by is not None
+    assert select_entry is None
 
 
 async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> None:

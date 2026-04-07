@@ -27,12 +27,12 @@ from .const import (
     CONF_ADVANCED_PROFILE_OPTIONS,
     CONF_ALLOWED_SERVICE_CATEGORIES,
     CONF_API_TOKEN,
-    CONF_AUTO_ENABLE_SERVICE_SWITCHES,
     CONF_CONFIGURATION_SYNC_INTERVAL_MINUTES,
     CONF_ENDPOINT_ANALYTICS_INTERVAL_MINUTES,
     CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
     CONF_ENDPOINT_SENSORS_ENABLED,
     CONF_ENTRY_NAME,
+    CONF_EXPOSE_EXTERNAL_FILTERS,
     CONF_EXPOSED_CUSTOM_RULES,
     CONF_MANAGED_IN_HOME_ASSISTANT,
     CONF_PROFILE_ANALYTICS_INTERVAL_MINUTES,
@@ -243,6 +243,7 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                 managed_in_home_assistant=bool(
                     user_input[CONF_MANAGED_IN_HOME_ASSISTANT]
                 ),
+                expose_external_filters=bool(user_input[CONF_EXPOSE_EXTERNAL_FILTERS]),
                 advanced_profile_options=bool(
                     user_input[CONF_ADVANCED_PROFILE_OPTIONS]
                 ),
@@ -255,8 +256,8 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                 allowed_service_categories=frozenset(
                     user_input[CONF_ALLOWED_SERVICE_CATEGORIES]
                 ),
-                auto_enable_service_switches=bool(
-                    user_input[CONF_AUTO_ENABLE_SERVICE_SWITCHES]
+                auto_enable_service_switches=(
+                    profile_policy.auto_enable_service_switches
                 ),
                 exposed_custom_rules=frozenset(user_input[CONF_EXPOSED_CUSTOM_RULES]),
             )
@@ -271,6 +272,10 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                     vol.Required(
                         CONF_MANAGED_IN_HOME_ASSISTANT,
                         default=profile_policy.managed_in_home_assistant,
+                    ): selector.BooleanSelector(),
+                    vol.Required(
+                        CONF_EXPOSE_EXTERNAL_FILTERS,
+                        default=profile_policy.expose_external_filters,
                     ): selector.BooleanSelector(),
                     vol.Required(
                         CONF_ADVANCED_PROFILE_OPTIONS,
@@ -307,10 +312,6 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                             mode=selector.SelectSelectorMode.DROPDOWN,
                         )
                     ),
-                    vol.Required(
-                        CONF_AUTO_ENABLE_SERVICE_SWITCHES,
-                        default=profile_policy.auto_enable_service_switches,
-                    ): selector.BooleanSelector(),
                     vol.Required(
                         CONF_EXPOSED_CUSTOM_RULES,
                         default=sorted(profile_policy.exposed_custom_rules),

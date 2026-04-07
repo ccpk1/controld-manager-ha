@@ -14,6 +14,7 @@ from .const import (
     CONF_ENDPOINT_ANALYTICS_INTERVAL_MINUTES,
     CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
     CONF_ENDPOINT_SENSORS_ENABLED,
+    CONF_EXPOSE_EXTERNAL_FILTERS,
     CONF_EXPOSED_CUSTOM_RULES,
     CONF_MANAGED_IN_HOME_ASSISTANT,
     CONF_PROFILE_ANALYTICS_INTERVAL_MINUTES,
@@ -104,6 +105,7 @@ class ControlDFilter:
     name: str
     enabled: bool
     action_do: int
+    external: bool = False
     selected_level_slug: str | None = None
     levels: tuple[ControlDFilterLevel, ...] = ()
 
@@ -289,6 +291,7 @@ class ControlDProfilePolicy:
     """Compact stored policy for one Control D profile."""
 
     managed_in_home_assistant: bool = True
+    expose_external_filters: bool = False
     advanced_profile_options: bool = False
     endpoint_sensors_enabled: bool = False
     endpoint_inactivity_threshold_minutes: int = (
@@ -316,6 +319,7 @@ class ControlDProfilePolicy:
             managed_in_home_assistant=bool(
                 data.get(CONF_MANAGED_IN_HOME_ASSISTANT, True)
             ),
+            expose_external_filters=bool(data.get(CONF_EXPOSE_EXTERNAL_FILTERS, False)),
             advanced_profile_options=bool(
                 data.get(CONF_ADVANCED_PROFILE_OPTIONS, False)
             ),
@@ -342,6 +346,7 @@ class ControlDProfilePolicy:
         """Serialize the policy into config-entry options storage."""
         return {
             CONF_MANAGED_IN_HOME_ASSISTANT: self.managed_in_home_assistant,
+            CONF_EXPOSE_EXTERNAL_FILTERS: self.expose_external_filters,
             CONF_ADVANCED_PROFILE_OPTIONS: self.advanced_profile_options,
             CONF_ENDPOINT_SENSORS_ENABLED: self.endpoint_sensors_enabled,
             CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES: (
@@ -458,6 +463,7 @@ class ControlDProfileDetailPayload:
     """Raw detail payloads for one profile."""
 
     filters: tuple[dict[str, Any], ...] = ()
+    external_filters: tuple[dict[str, Any], ...] = ()
     options: tuple[dict[str, Any], ...] = ()
     default_rule: dict[str, Any] | None = None
     services: tuple[dict[str, Any], ...] = ()

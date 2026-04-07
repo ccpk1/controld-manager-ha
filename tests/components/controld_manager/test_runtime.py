@@ -487,11 +487,11 @@ async def test_options_flow_saves_typed_profile_policy(hass) -> None:
             flow_id,
             {
                 "managed_in_home_assistant": True,
+                "expose_external_filters": True,
                 "advanced_profile_options": True,
                 "endpoint_sensors_enabled": True,
                 "endpoint_inactivity_threshold_minutes": 20,
                 "allowed_service_categories": ["audio"],
-                "auto_enable_service_switches": True,
                 "exposed_custom_rules": ["group:1", "rule:root|example.com"],
             },
         )
@@ -517,11 +517,12 @@ async def test_options_flow_saves_typed_profile_policy(hass) -> None:
     assert entry.options["endpoint_analytics_interval_minutes"] == 7
     assert entry.options["profile_policies"]["profile-1"] == {
         "managed_in_home_assistant": True,
+        "expose_external_filters": True,
         "advanced_profile_options": True,
         "endpoint_sensors_enabled": True,
         "endpoint_inactivity_threshold_minutes": 20,
         "allowed_service_categories": ["audio"],
-        "auto_enable_service_switches": True,
+        "auto_enable_service_switches": False,
         "exposed_custom_rules": ["group:1", "rule:root|example.com"],
     }
 
@@ -561,8 +562,8 @@ async def test_options_flow_rule_choice_labels_include_scope_and_action(hass) ->
     ):
         choices = await flow._async_get_rule_target_choices("profile-1")
 
-    assert choices["group:1"] == "📁✅ Allow folder (Bypass)"
-    assert choices["group:2"] == "📁⛔ Block folder (Block)"
+    assert choices["group:1"] == "📁 Allow folder (Bypass)"
+    assert choices["group:2"] == "📁 Block folder (Block)"
     assert choices["rule:root|example.com"] == "⛔ example.com (Block)"
     assert (
         choices["rule:group:1|example2.com"]
@@ -570,13 +571,15 @@ async def test_options_flow_rule_choice_labels_include_scope_and_action(hass) ->
     )
 
 
-async def test_entity_manager_skips_remove_for_unattached_entity() -> None:
+async def test_entity_manager_skips_remove_for_unattached_entity(hass) -> None:
     """Dynamic removal should tolerate entities that have not been added yet."""
     entity_manager = EntityManager()
     entity_manager.attach_runtime(
         cast(
             Any,
             SimpleNamespace(
+                active_coordinator=SimpleNamespace(hass=hass),
+                entry_id="test-entry-id",
                 options=ControlDOptions(),
                 registry=ControlDRegistry.empty(),
             ),

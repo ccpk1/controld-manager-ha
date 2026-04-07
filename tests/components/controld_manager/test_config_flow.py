@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.controld_manager.config_flow import ControlDManagerOptionsFlow
 from custom_components.controld_manager.const import CONF_API_TOKEN, DOMAIN
 from custom_components.controld_manager.models import ControlDUser
 
@@ -104,3 +106,45 @@ async def test_user_flow_rejects_duplicate_instance(hass) -> None:
 
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "already_configured"
+
+
+async def test_options_flow_edit_profile_exposes_external_filters_and_hides_auto_enable(
+    hass,
+) -> None:
+    """The profile form should show the external-filter toggle and hide auto-enable."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    flow = ControlDManagerOptionsFlow(entry)
+    flow.hass = hass
+    flow._selected_profile_pk = "profile-1"
+
+    with (
+        patch.object(
+            flow,
+            "_async_get_profile_choices",
+            new=AsyncMock(return_value={"profile-1": "Primary"}),
+        ),
+        patch.object(
+            flow,
+            "_async_get_service_category_choices",
+            new=AsyncMock(return_value={"audio": "Audio"}),
+        ),
+        patch.object(
+            flow,
+            "_async_get_rule_target_choices",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        result = await flow.async_step_edit_profile()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert isinstance(schema, vol.Schema)
+    field_names = [marker.schema for marker in schema.schema]
+    assert field_names[0] == "managed_in_home_assistant"
+    assert field_names[1] == "expose_external_filters"
+    assert "auto_enable_service_switches" not in field_names

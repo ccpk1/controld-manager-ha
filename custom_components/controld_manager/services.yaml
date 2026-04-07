@@ -1,15 +1,21 @@
-pause_profile:
-  name: Pause profile
-  description: Pause one or more Control D profiles for a temporary duration.
+disable_profile:
+  name: Disable profile
+  description: Temporarily disable all filters, services and rules for one or more Control D profiles.
   target:
     entity:
-      domain: switch
       integration: controld_manager
   fields:
+    device_id:
+      required: false
+      selector:
+        device:
+          multiple: true
+          integration: controld_manager
     config_entry_id:
       required: false
       selector:
-        text:
+        config_entry:
+          integration: controld_manager
     config_entry_name:
       required: false
       selector:
@@ -23,19 +29,56 @@ pause_profile:
           max: 1440
           mode: box
 
-resume_profile:
-  name: Resume profile
-  description: Resume one or more paused Control D profiles immediately.
+enable_profile:
+  name: Enable profile
+  description: Re-enable one or more previously disabled Control D profiles immediately.
   target:
     entity:
-      domain: switch
       integration: controld_manager
   fields:
+    device_id:
+      required: false
+      selector:
+        device:
+          multiple: true
+          integration: controld_manager
     config_entry_id:
       required: false
       selector:
-        text:
+        config_entry:
+          integration: controld_manager
     config_entry_name:
       required: false
       selector:
         text:
+
+set_filter_state:
+  name: Set filter state
+  description: Enable or disable one Control D filter by raw key or user-facing name across the targeted profiles.
+  target:
+    entity:
+      integration: controld_manager
+  fields:
+    device_id:
+      required: false
+      selector:
+        device:
+          multiple: true
+          integration: controld_manager
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+    filter_name:
+      required: true
+      selector:
+        text:
+    enabled:
+      required: true
+      selector:
+        boolean:

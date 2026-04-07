@@ -279,9 +279,9 @@ Required behavior:
 - service handling must remain entry-scoped by default
 - mixed-instance targeting must be rejected unless a service explicitly supports it
 - mutation services must delegate to manager-owned write paths
-- duration-based pause behavior must remain stateless in Home Assistant when the upstream API supports a cloud-owned disable timer
-- pause and resume behavior should be exposed as paired services rather than as one overloaded mutation surface
-- future pause behavior for profile sub-resources such as filters or services may share a typed target-resolution model only if validation remains explicit and unambiguous
+- duration-based profile disable behavior must remain stateless in Home Assistant when the upstream API supports a cloud-owned disable timer
+- profile disable and enable behavior should be exposed as paired services rather than as one overloaded mutation surface
+- future disable behavior for profile sub-resources such as filters or services may share a typed target-resolution model only if validation remains explicit and unambiguous
 
 ## Runtime data contract
 

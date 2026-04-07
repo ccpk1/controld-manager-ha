@@ -59,7 +59,10 @@ class IntegrationManager(BaseManager):
             profiles=profiles,
             endpoints=endpoints,
             filters_by_profile={
-                profile_pk: self._normalize_filters(detail.filters)
+                profile_pk: self._normalize_filters(
+                    detail.filters,
+                    detail.external_filters,
+                )
                 for profile_pk, detail in inventory.profile_details.items()
                 if profile_pk in included_profile_pks
             },
@@ -127,36 +130,53 @@ class IntegrationManager(BaseManager):
     @staticmethod
     def _normalize_filters(
         filters_payload: tuple[dict[str, Any], ...],
+        external_filters_payload: tuple[dict[str, Any], ...] = (),
     ) -> dict[str, ControlDFilter]:
         """Normalize profile filter rows."""
         filters: dict[str, ControlDFilter] = {}
         for payload in filters_payload:
-            filter_pk = IntegrationManager._require_string(payload, "PK")
-            action = IntegrationManager._mapping_or_empty(payload.get("action"))
-            levels = tuple(
-                ControlDFilterLevel(
-                    slug=IntegrationManager._require_string(level_payload, "name"),
-                    title=IntegrationManager._require_string(level_payload, "title"),
-                    enabled=bool(level_payload.get("status", 0)),
-                )
-                for level_payload in payload.get("levels", [])
-                if isinstance(level_payload, dict)
+            normalized = IntegrationManager._normalize_filter_row(
+                payload, external=False
             )
-            selected_level_slug = IntegrationManager._optional_string(action.get("lvl"))
-            if selected_level_slug is None:
-                selected_level_slug = next(
-                    (level.slug for level in levels if level.enabled),
-                    None,
-                )
-            filters[filter_pk] = ControlDFilter(
-                filter_pk=filter_pk,
-                name=IntegrationManager._require_string(payload, "name"),
-                enabled=bool(payload.get("status", 0)),
-                action_do=int(action.get("do", 0) or 0),
-                selected_level_slug=selected_level_slug,
-                levels=levels,
+            filters[normalized.filter_pk] = normalized
+        for payload in external_filters_payload:
+            normalized = IntegrationManager._normalize_filter_row(
+                payload, external=True
             )
+            filters[normalized.filter_pk] = normalized
         return filters
+
+    @staticmethod
+    def _normalize_filter_row(
+        payload: dict[str, Any], *, external: bool
+    ) -> ControlDFilter:
+        """Normalize one native or external filter row."""
+        filter_pk = IntegrationManager._require_string(payload, "PK")
+        action = IntegrationManager._mapping_or_empty(payload.get("action"))
+        levels = tuple(
+            ControlDFilterLevel(
+                slug=IntegrationManager._require_string(level_payload, "name"),
+                title=IntegrationManager._require_string(level_payload, "title"),
+                enabled=bool(level_payload.get("status", 0)),
+            )
+            for level_payload in payload.get("levels", [])
+            if isinstance(level_payload, dict)
+        )
+        selected_level_slug = IntegrationManager._optional_string(action.get("lvl"))
+        if selected_level_slug is None:
+            selected_level_slug = next(
+                (level.slug for level in levels if level.enabled),
+                None,
+            )
+        return ControlDFilter(
+            filter_pk=filter_pk,
+            name=IntegrationManager._require_string(payload, "name"),
+            enabled=bool(payload.get("status", 0)),
+            action_do=int(action.get("do", 0) or 0),
+            external=external,
+            selected_level_slug=selected_level_slug,
+            levels=levels,
+        )
 
     @staticmethod
     def _normalize_default_rule(

@@ -146,12 +146,15 @@ class EntityManager(BaseManager):
                 f"profile::{profile_pk}::paused" for profile_pk in included_profiles
             }
             for profile_pk in included_profiles:
+                profile_policy = self.runtime.options.profile_policy(profile_pk)
+                profile_filters = self.runtime.registry.filters_by_profile.get(
+                    profile_pk, {}
+                )
                 desired_keys.update(
                     f"profile::{profile_pk}::filter::{filter_pk}"
-                    for filter_pk in self.runtime.registry.filters_by_profile.get(
-                        profile_pk, {}
-                    )
+                    for filter_pk, filter_row in profile_filters.items()
                     if filter_pk != "ai_malware"
+                    if not filter_row.external or profile_policy.expose_external_filters
                 )
                 desired_keys.update(
                     f"profile::{profile_pk}::option::{option_pk}"
@@ -182,6 +185,7 @@ class EntityManager(BaseManager):
         if platform == "select":
             select_keys: set[str] = set()
             for profile_pk in included_profiles:
+                profile_policy = self.runtime.options.profile_policy(profile_pk)
                 if profile_pk in self.runtime.registry.default_rules_by_profile:
                     select_keys.add(f"profile::{profile_pk}::default_rule")
                 select_keys.update(
@@ -199,6 +203,7 @@ class EntityManager(BaseManager):
                     f"profile::{profile_pk}::filter_mode::{filter_pk}"
                     for filter_pk, filter_row in profile_filters.items()
                     if filter_row.supports_modes and filter_pk != "ai_malware"
+                    if not filter_row.external or profile_policy.expose_external_filters
                 )
                 select_keys.update(
                     f"profile::{profile_pk}::option::{option_pk}"

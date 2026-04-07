@@ -19,6 +19,7 @@ CONF_PROFILE_ANALYTICS_INTERVAL_MINUTES = "profile_analytics_interval_minutes"
 CONF_ENDPOINT_ANALYTICS_INTERVAL_MINUTES = "endpoint_analytics_interval_minutes"
 CONF_PROFILE_POLICIES = "profile_policies"
 CONF_MANAGED_IN_HOME_ASSISTANT = "managed_in_home_assistant"
+CONF_EXPOSE_EXTERNAL_FILTERS = "expose_external_filters"
 CONF_ADVANCED_PROFILE_OPTIONS = "advanced_profile_options"
 CONF_ENDPOINT_SENSORS_ENABLED = "endpoint_sensors_enabled"
 CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES = "endpoint_inactivity_threshold_minutes"
@@ -70,12 +71,15 @@ PLATFORMS: tuple[Platform, ...] = (
     Platform.SWITCH,
 )
 
-SERVICE_PAUSE_PROFILE = "pause_profile"
-SERVICE_RESUME_PROFILE = "resume_profile"
+SERVICE_DISABLE_PROFILE = "disable_profile"
+SERVICE_ENABLE_PROFILE = "enable_profile"
+SERVICE_SET_FILTER_STATE = "set_filter_state"
 SERVICE_FIELD_CONFIG_ENTRY_ID = "config_entry_id"
 SERVICE_FIELD_CONFIG_ENTRY_NAME = "config_entry_name"
+SERVICE_FIELD_ENABLED = "enabled"
+SERVICE_FIELD_FILTER_NAME = "filter_name"
 SERVICE_FIELD_MINUTES = "minutes"
-DEFAULT_PAUSE_MINUTES = 60
+DEFAULT_DISABLE_MINUTES = 60
 
 ATTR_PURPOSE = "purpose"
 ATTR_ATTACHED_PROFILES = "attached_profiles"
@@ -112,6 +116,8 @@ TRANS_KEY_WRONG_INTEGRATION_ENTRY = "wrong_integration_entry"
 TRANS_KEY_PROFILE_TARGET_REQUIRED = "profile_target_required"
 TRANS_KEY_PROFILE_TARGET_NOT_FOUND = "profile_target_not_found"
 TRANS_KEY_PROFILE_TARGET_AMBIGUOUS = "profile_target_ambiguous"
+TRANS_KEY_FILTER_NAME_NOT_FOUND = "filter_name_not_found"
+TRANS_KEY_FILTER_NAME_AMBIGUOUS = "filter_name_ambiguous"
 
 PURPOSE_INSTANCE_ACTION = "purpose_instance_action"
 PURPOSE_INSTANCE_STATUS = "purpose_instance_status"

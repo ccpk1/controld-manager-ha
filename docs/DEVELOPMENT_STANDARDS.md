@@ -332,9 +332,9 @@ Critical rules:
 - service target resolution must accept `entity_id`, `device_id`, and `config_entry_id` as first-class selectors
 - service handlers must validate Home Assistant-facing input and then delegate to manager methods
 - services must reject ambiguous or mixed-instance targets with specific, translation-ready exceptions
-- paired pause and resume services should follow the Firewalla Local pattern: explicit target field, explicit timing validation, and translation-ready conflict errors for incompatible inputs
-- the first planned mutation-oriented custom services are `controld_manager.pause_profile` and `controld_manager.resume_profile`, with pause computing the future disable timestamp locally and resume clearing that upstream pause state
-- if later pause semantics are added for filters, services, or other profile sub-resources, the repository must first prove that one shared typed target-resolution family is clearer than separate service surfaces
+- paired disable and enable profile services should follow the Firewalla Local pattern: explicit target field, explicit timing validation, and translation-ready conflict errors for incompatible inputs
+- the current profile-wide custom services are `controld_manager.disable_profile` and `controld_manager.enable_profile`, with disable computing the future `disable_ttl` timestamp locally and enable clearing that upstream disable state
+- if later disable semantics are added for filters, services, rules, options, or other profile sub-resources, the repository must first prove that one shared typed target-resolution family is clearer than separate service surfaces
 
 ## Exception handling rules
 

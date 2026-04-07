@@ -113,7 +113,7 @@ Implementation consequence:
 
 - item-level service, filter, and rule controls should still use profile-scoped detail endpoints when those surfaces are selected for entities or services
 
-### Pause and resume are profile-level writes
+### Disable and enable are profile-level writes
 
 The upstream write contract is strong enough to support a paired service model.
 
@@ -127,11 +127,11 @@ Observed and verified:
 
 Settled interpretation:
 
-- pause and resume should be implemented as profile-level writes
+- disable and enable should be implemented as profile-level writes
 - the runtime should normalize both `disable` and `disable_ttl` into one internal paused-until field
 - paired services remain the correct UX direction:
-  - `controld_manager.pause_profile`
-  - `controld_manager.resume_profile`
+  - `controld_manager.disable_profile`
+  - `controld_manager.enable_profile`
 
 ### Devices API is the endpoint inventory source
 
@@ -205,6 +205,77 @@ Settled interpretation:
 - endpoint identity must remain anchored to `device_id`
 - endpoint names are presentation only
 - Home Assistant-owned `entity_id` disambiguation is sufficient for v1
+
+## External filter findings
+
+Third-party filter lists are now proven to exist as a distinct discovery surface,
+while still sharing the native filter mutation path.
+
+Observed and supplied evidence:
+
+- `GET /profiles/{profile_id}/filters/external` returns `body.filters`
+- returned external-filter rows include fields such as:
+  - `PK`
+  - `name`
+  - `description`
+  - `additional`
+  - `sources[]`
+  - `resolvers.v4[]`
+  - `resolvers.v6[]`
+  - `status`
+  - optional `action`
+- observed external-filter identifiers currently use an `x-` prefix, for example:
+  - `x-1hosts-lite`
+  - `x-hagezi-normal`
+  - `x-oisd`
+- observed external-filter names are user-facing community-list names such as:
+  - `1Hosts - Lite`
+  - `AdGuard Filter`
+  - `Hagezi's DNS - Normal`
+- returned `additional` content can contain HTML warnings that the list is a
+  community list and not maintained by Control D
+- returned `sources[]` provides upstream maintainer or project URLs
+- returned `resolvers` provides list-specific resolver addresses for both IPv4
+  and IPv6
+- enabling an external filter used the same mutation endpoint family as native
+  filters:
+  - `PUT /profiles/{profile_id}/filters/filter/{filter_id}`
+- enabling payload sample:
+  - `{"status":1,"do":0}`
+- disabling payload sample:
+  - `{"status":0,"do":1}`
+- the mutation response returned `body.filters` as a map of currently active
+  filters, and the external filter appeared in that map only while enabled
+
+Working interpretation:
+
+- native filters and third-party external filters are one mutation family, not
+  two separate write families
+- discovery is split across at least two sources:
+  - native filter discovery from the existing profile detail filter payload
+  - external filter discovery from `GET /profiles/{profile_id}/filters/external`
+- external filters appear to be simple enable or disable controls, not
+  multi-level mode surfaces
+- the same core action semantics still apply:
+  - `status = 1` means enabled
+  - `status = 0` means disabled
+  - `do = 0` remains the block-style enabled action
+  - `do = 1` is used when removing the external filter from the active set
+- the runtime should model external filters as part of the broader filter
+  family while preserving enough metadata to distinguish them from native
+  filters when needed
+
+Implementation consequence:
+
+- filter discovery should no longer assume one authoritative source
+- the integration should merge native and external filter catalogs into one
+  profile filter inventory keyed by immutable filter `PK`
+- external filters should be targetable through the same service and entity
+  patterns as native filters, including lookup by raw key and user-facing name
+- raw HTML from `additional` should not be surfaced directly as a user-facing
+  entity attribute without sanitization or a clearer UX reason
+- `sources` and `resolvers` are useful metadata candidates for diagnostics or
+  advanced attributes rather than for primary entity state
 
 ## Service catalog findings
 
@@ -605,7 +676,7 @@ Closeout status:
 
 - endpoint identity must use `device_id`
 - duplicate names require explicit display disambiguation
-- paired profile pause and resume services are the right first service direction
+- paired profile disable and enable services are the right first service direction
 - polling should be split into refresh groups with bounded options
 - analytics surfaces must distinguish scope explicitly:
   - instance-level or broader dashboard scope
@@ -629,7 +700,7 @@ These are the remaining gaps that are worth resolving before or during implement
 - which analytics surfaces belong in the first entity slice versus diagnostics only
 - which endpoint-scoped analytics, if any, belong in the first entity slice versus a later follow-on pass
 - should billing product metadata remain diagnostics-only or surface on the instance system device
-- can later filter and service pause semantics share the same target-resolution family as profile pause and resume
+- can later filter and service disable semantics share the same target-resolution family as profile disable and enable
 
 ## Targeted follow-up captures
 
@@ -1407,22 +1478,22 @@ Current contract:
 - the integration does not need to add its own duplicate-name fallback suffixes
 - Home Assistant may disambiguate duplicate final `entity_id` values with `_2` or similar when required
 
-## Pause and resume findings
+## Disable and enable findings
 
 Firewalla Local remains the best current reference for service ergonomics, not for upstream semantics.
 
 Reusable pattern:
 
-- paired pause and resume services
+- paired disable and enable services
 - explicit target field
 - explicit timing validation
 - translation-ready errors for incompatible input combinations
 
 Current recommendation:
 
-- keep `controld_manager.pause_profile` and `controld_manager.resume_profile` as the first concrete pair
-- do not force filters, services, or other policy objects into that same service family until Control D confirms they share a coherent upstream pause contract
-- treat sub-resource pause support as a later capability review, not as a requirement for the first profile pause implementation
+- keep `controld_manager.disable_profile` and `controld_manager.enable_profile` as the first concrete pair
+- do not force filters, services, rules, options, or other policy objects into that same service family until Control D confirms they share a coherent upstream disable contract
+- treat sub-resource disable support as a later capability review, not as a requirement for the first profile-wide disable implementation
 
 Additional consequence from the latest sample:
 
@@ -1894,12 +1965,14 @@ These findings are strong enough to convert several planning topics from theory 
 
 - endpoint identity must be based on `device_id`, not endpoint name
 - duplicate endpoint names are a real runtime concern, but Home Assistant-owned `entity_id` disambiguation is sufficient for v1
-- paired profile pause and resume services are the correct first service direction
+- paired profile disable and enable services are the correct first service direction
 - polling should be group-based and options-backed with bounded intervals
 - `GET /profiles` should be treated as the summary discovery source for profile-backed surfaces, while per-profile list endpoints should be treated as detail sources for item-level switch creation
 - paused-profile reads should be normalized from either `disable` or `disable_ttl` into one internal paused-until field
 - user-facing profile entities should align to Control D terminology, including `Disable` for the profile-wide off surface
 - filters with both enabled state and mode should be modeled as two entities: a switch for enablement and a select for mode
+- external community filters should be treated as part of the filter family,
+  with separate discovery but the same per-filter mutation contract
 - main profile options with dedicated profile-scoped endpoints should be treated
   as a separate typed control family instead of being forced into the filter,
   service, or rule abstractions
@@ -1956,7 +2029,7 @@ These findings are strong enough to convert several planning topics from theory 
 - the exact create list for advanced profile options once the per-profile
   advanced-options exposure flag is enabled
 - whether billing product metadata should remain diagnostics-only or also surface on the instance system device
-- whether filter and service pause semantics can share the same target-resolution family as profile pause and resume
+- whether filter and service disable semantics can share the same target-resolution family as profile disable and enable
 - what immutable typed identity format is best for persisted grouped-rule selections
 
 ## Next proof-of-concept actions

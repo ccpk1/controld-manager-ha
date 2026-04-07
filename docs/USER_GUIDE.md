@@ -45,6 +45,14 @@ Each profile can be configured with these controls:
 - Enable management in Home Assistant
 	Turn this off to exclude the profile from Home Assistant. Profile devices and
 	entities for that profile are removed from Home Assistant.
+- Expose 3rd-party filters
+	Creates disabled-by-default entities for the available community or external
+	filter lists on that profile. Even when this stays off, those filters can
+	still be targeted through the shared filter service.
+- Expose advanced profile options
+	Turns on the larger profile option set for that profile. These extra controls
+	are added in Home Assistant but stay off by default until you enable the ones
+	you want.
 - Generate endpoint sensors
 	Creates endpoint activity entities for devices that belong to that profile.
 - Endpoint inactivity threshold (minutes)
@@ -52,11 +60,9 @@ Each profile can be configured with these controls:
 	entity reports inactive.
 - Allowed service categories
 	Limits which Control D service categories are exposed as service controls.
-- Auto-enable service controls for allowed service categories
-	Leaves newly created service controls enabled by default for the allowed
-	categories. This can increase entity count over time.
 - Expose custom rules
-	Lets you expose selected rule folders or individual custom rules as switches.
+	Lets you expose selected rule folders or individual custom rules as Home
+	Assistant controls.
 
 ### Integration settings
 
@@ -68,8 +74,6 @@ This form controls refresh cadence only.
 	Reserved for higher-level analytics refresh cadence.
 - Endpoint analytics interval (minutes)
 	Reserved for endpoint telemetry refresh cadence.
-
-Current supported bounds are 5 to 60 minutes.
 
 ## Devices and entities
 
@@ -92,11 +96,12 @@ account device.
 
 Current profile surfaces can include:
 
-- a pause or disable switch for the profile
+- a disable switch for the profile
 - filter switches
 - filter mode selectors where the upstream filter supports multiple levels
+- profile option switches and selectors
 - service mode selectors for allowed service categories
-- custom rule switches for exposed rules
+- custom rule switches and rule folder selectors
 - endpoint status entities for endpoints owned by that profile when enabled
 
 ## Account entities
@@ -160,16 +165,26 @@ for the next scheduled refresh.
 
 ## Profile controls
 
+Different Control D features appear in Home Assistant in different ways. This
+is intentional so each type of control stays simple to use.
+
 ### Disable switch
 
-Each managed profile exposes a Disable switch. Turning it on pauses the profile.
-Turning it off resumes the profile.
+Each managed profile exposes a Disable switch. Turning it on disables the
+profile for the configured duration. Turning it off enables the profile again.
 
 ### Filter switches and mode selectors
 
 Filters are exposed as switches. Filters with multiple upstream levels also get
 a selector entity for the active mode. Filter mode selectors follow the same
 default entity-registry visibility as their companion filter switch.
+
+In practice:
+
+- simple filters appear as on or off switches
+- filters with levels appear as a switch plus a mode selector
+- 3rd-party filters stay hidden by default unless you enable Expose 3rd-party
+	filters for that profile
 
 ### Service mode selectors
 
@@ -178,10 +193,29 @@ the profile options.
 
 Current options are `Off`, `Blocked`, `Bypassed`, and `Redirected`.
 
-### Custom rule switches
+Services use selectors instead of switches because they usually represent an
+action choice, not just on or off.
+
+### Profile options
+
+Profile options can appear as either switches or selectors.
+
+- options that are naturally on or off appear as switches
+- options that let you choose between several behaviors appear as selectors
+- a small core set is created automatically for managed profiles
+- extra profile options only appear when you turn on Expose advanced profile
+	options for that profile
+
+### Custom rules and rule folders
 
 Custom rules are only created for the rule folders or individual rules you
-expose in the profile options.
+choose in the profile options.
+
+- a rule folder appears as a selector because you choose a folder-wide action
+- an individual rule appears as a switch because you are simply turning that
+	rule on or off
+- you can expose both a folder and individual rules inside that folder when you
+	want both kinds of control
 
 ### Endpoint status entities
 
@@ -193,11 +227,16 @@ last activity time.
 
 The integration currently registers these Home Assistant services:
 
-- `controld_manager.pause_profile`
-- `controld_manager.resume_profile`
+- `controld_manager.disable_profile`
+- `controld_manager.enable_profile`
+- `controld_manager.set_filter_state`
 
-These services can target profiles by entity, config entry ID, or config entry
-name.
+These services can target profiles by entity, device, config entry ID, or
+config entry name.
+
+`controld_manager.set_filter_state` accepts either the raw filter key or the
+user-facing filter name. It also works for 3rd-party filters even when their
+entities are not exposed in Home Assistant.
 
 ## Runtime behavior
 
@@ -225,5 +264,10 @@ persistent state across Home Assistant restarts.
 	management in Home Assistant is turned off for that profile.
 - If expected service controls are missing, verify that the relevant service
 	categories are enabled for that profile.
-- If expected custom rule switches are missing, verify that the specific rules
+- If expected 3rd-party filter entities are missing, verify that Expose
+	3rd-party filters is turned on for that profile.
+- If expected custom rule controls are missing, verify that the specific rules
 	or rule folders are exposed for that profile.
+- If expected profile options are missing, verify that the profile is managed
+	in Home Assistant and that Expose advanced profile options is turned on when
+	you expect the larger option set.

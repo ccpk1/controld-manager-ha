@@ -177,7 +177,7 @@ Required next step:
 
 - implement the config-entry identity contract as `users.id` primary plus `users.PK` secondary unless a later authenticated write or reauth flow proves that assumption wrong
 
-### Pause semantics
+### Disable semantics
 
 - `PUT /profiles/{profile_id}` supports `disable_ttl`
 - the reference describes `disable_ttl` as disabling a profile until the specified Unix timestamp
@@ -188,9 +188,9 @@ Required next step:
 
 Planning impact:
 
-- `controld_manager.pause_profile` can target the profile resource directly rather than treating pause as an unresolved endpoint-side workaround
-- the first implementation should treat pause as a profile disable-until write, with service duration translated into an absolute Unix timestamp
-- resume semantics can be modeled by writing `disable_ttl = 0`
+- `controld_manager.disable_profile` can target the profile resource directly rather than treating profile disable as an unresolved endpoint-side workaround
+- the first implementation should treat disable as a profile disable-until write, with service duration translated into an absolute Unix timestamp
+- enable semantics can be modeled by writing `disable_ttl = 0`
 - the runtime should normalize both `disable` and `disable_ttl` into one internal paused-until representation
 
 Required next step:
@@ -264,5 +264,5 @@ Required next step:
 - keep profile devices and endpoint entities as the accepted Home Assistant hierarchy
 - treat `users.id`, `profile PK`, and `device_id` as the current best primary upstream identifiers
 - retain `users.PK` and endpoint `PK` as secondary correlation fields
-- treat `pause_profile` as viable for implementation once service input and post-write refresh behavior are locked
+- treat `disable_profile` and `enable_profile` as viable for implementation once service input and post-write refresh behavior are locked
 - normalize all attached profile sibling fields during refresh while using the first attached profile as the owning Home Assistant device attachment

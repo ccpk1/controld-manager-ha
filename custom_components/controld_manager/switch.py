@@ -22,8 +22,8 @@ from .const import (
     ATTR_GROUP,
     ATTR_PAUSED_UNTIL,
     ATTR_RULE_IDENTITY,
+    DEFAULT_DISABLE_MINUTES,
     DEFAULT_ENABLED_FILTERS,
-    DEFAULT_PAUSE_MINUTES,
     PURPOSE_PROFILE_FILTER,
     PURPOSE_PROFILE_OPTION,
     PURPOSE_PROFILE_PAUSE,
@@ -86,7 +86,7 @@ def _build_switch_entity(
 
 
 class ControlDManagerProfilePausedSwitch(ControlDManagerProfileEntity, SwitchEntity):
-    """Switch surface for the documented profile pause state."""
+    """Switch surface for the documented profile disable state."""
 
     _attr_translation_key = "paused"
     _purpose = PURPOSE_PROFILE_PAUSE
@@ -124,24 +124,24 @@ class ControlDManagerProfilePausedSwitch(ControlDManagerProfileEntity, SwitchEnt
         raise NotImplementedError
 
     async def async_turn_on(self, **kwargs: object) -> None:
-        """Pause the profile using the default service-compatible duration."""
+        """Disable the profile using the default service-compatible duration."""
         del kwargs
         try:
-            await self.runtime.managers.profile.async_pause_profiles(
-                {self._profile_pk}, DEFAULT_PAUSE_MINUTES
+            await self.runtime.managers.profile.async_disable_profiles(
+                {self._profile_pk}, DEFAULT_DISABLE_MINUTES
             )
         except (
             ControlDApiAuthError,
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError("Unable to pause the Control D profile") from err
+            raise HomeAssistantError("Unable to disable the Control D profile") from err
 
     async def async_turn_off(self, **kwargs: object) -> None:
-        """Resume the profile immediately."""
+        """Enable the profile immediately."""
         del kwargs
         try:
-            await self.runtime.managers.profile.async_resume_profiles(
+            await self.runtime.managers.profile.async_enable_profiles(
                 {self._profile_pk}
             )
         except (
@@ -149,7 +149,7 @@ class ControlDManagerProfilePausedSwitch(ControlDManagerProfileEntity, SwitchEnt
             ControlDApiConnectionError,
             ControlDApiResponseError,
         ) as err:
-            raise HomeAssistantError("Unable to resume the Control D profile") from err
+            raise HomeAssistantError("Unable to enable the Control D profile") from err
 
 
 class ControlDManagerProfileFilterSwitch(ControlDManagerProfileEntity, SwitchEntity):
@@ -174,7 +174,9 @@ class ControlDManagerProfileFilterSwitch(ControlDManagerProfileEntity, SwitchEnt
             else f"Filters / {filter_pk}"
         )
         self._attr_entity_registry_enabled_default = (
-            filter_pk in DEFAULT_ENABLED_FILTERS
+            filter_row is not None
+            and not filter_row.external
+            and filter_pk in DEFAULT_ENABLED_FILTERS
         )
 
     @property

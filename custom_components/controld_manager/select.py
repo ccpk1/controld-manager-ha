@@ -114,7 +114,9 @@ class ControlDManagerProfileFilterModeSelect(
             else f"Filters / {filter_pk} Mode"
         )
         self._attr_entity_registry_enabled_default = (
-            filter_pk in DEFAULT_ENABLED_FILTERS
+            filter_row is not None
+            and not filter_row.external
+            and filter_pk in DEFAULT_ENABLED_FILTERS
         )
 
     @property
