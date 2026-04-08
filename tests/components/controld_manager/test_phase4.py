@@ -14,6 +14,7 @@ from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.controld_manager.api import (
@@ -434,6 +435,12 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     status_entity_id = entity_registry.async_get_entity_id(
         "sensor", DOMAIN, "user-123::instance::system::status"
     )
+    profile_status_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::profile::profile-1::status"
+    )
+    profile_endpoint_count_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::profile::profile-1::endpoint_count"
+    )
     sync_button_entity_id = entity_registry.async_get_entity_id(
         "button", DOMAIN, "user-123::instance::system::sync"
     )
@@ -477,8 +484,10 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert blocked_queries_entity_id is not None
     assert bypassed_queries_entity_id is not None
     assert redirected_queries_entity_id is not None
-    assert blocked_queries_ratio_entity_id is None
+    assert blocked_queries_ratio_entity_id is not None
     assert status_entity_id is not None
+    assert profile_status_entity_id is not None
+    assert profile_endpoint_count_entity_id is not None
     assert sync_button_entity_id is not None
     assert pause_switch_entity_id is not None
     assert ads_filter_entity_id is not None
@@ -504,12 +513,26 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert hass.states.get(blocked_queries_entity_id).state == "8100"
     assert hass.states.get(bypassed_queries_entity_id).state == "49700"
     assert hass.states.get(redirected_queries_entity_id).state == "26"
+    assert hass.states.get(blocked_queries_ratio_entity_id).state == "14.0"
     assert (
         hass.states.get(total_queries_entity_id).attributes["unit_of_measurement"]
         == "queries"
     )
+    assert (
+        hass.states.get(blocked_queries_ratio_entity_id).attributes[
+            "unit_of_measurement"
+        ]
+        == "%"
+    )
     assert hass.states.get(status_entity_id).state == "healthy"
+    assert hass.states.get(profile_status_entity_id).state == "healthy"
+    assert hass.states.get(profile_endpoint_count_entity_id).state == "3"
     assert hass.states.get(status_entity_id).name == "Account Status"
+    assert hass.states.get(profile_status_entity_id).name == "Primary Status"
+    assert (
+        hass.states.get(profile_endpoint_count_entity_id).name
+        == "Primary Endpoint count"
+    )
     assert hass.states.get(endpoint_count_entity_id).name == "Account Endpoint count"
     assert hass.states.get(profile_count_entity_id).name == "Account Profile count"
     assert hass.states.get(total_queries_entity_id).name == "Account Total queries"
@@ -520,6 +543,10 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert (
         hass.states.get(redirected_queries_entity_id).name
         == "Account Redirected queries"
+    )
+    assert (
+        hass.states.get(blocked_queries_ratio_entity_id).name
+        == "Account Blocked queries ratio"
     )
     assert hass.states.get(sync_button_entity_id).name == "Account Sync now"
     assert hass.states.get(pause_switch_entity_id).name == "Primary Disable (Temporary)"
@@ -557,6 +584,28 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert profile_device is not None
     assert account_device is not None
     assert account_device.name == "Account"
+    total_queries_entry = entity_registry.async_get(total_queries_entity_id)
+    endpoint_count_entry = entity_registry.async_get(endpoint_count_entity_id)
+    profile_endpoint_count_entry = entity_registry.async_get(
+        profile_endpoint_count_entity_id
+    )
+    blocked_queries_entry = entity_registry.async_get(blocked_queries_entity_id)
+    blocked_queries_ratio_entry = entity_registry.async_get(
+        blocked_queries_ratio_entity_id
+    )
+    profile_status_entry = entity_registry.async_get(profile_status_entity_id)
+    assert total_queries_entry is not None
+    assert endpoint_count_entry is not None
+    assert profile_endpoint_count_entry is not None
+    assert blocked_queries_entry is not None
+    assert blocked_queries_ratio_entry is not None
+    assert profile_status_entry is not None
+    assert endpoint_count_entry.translation_key == "dns_unique_clients"
+    assert profile_endpoint_count_entry.translation_key == "dns_unique_clients"
+    assert total_queries_entry.translation_key == "dns_queries_today"
+    assert blocked_queries_entry.translation_key == "ads_blocked_today"
+    assert blocked_queries_ratio_entry.translation_key == "ads_percentage_today"
+    assert profile_status_entry.translation_key == "status"
     ads_filter_entry = entity_registry.async_get(ads_filter_entity_id)
     social_filter_entry = entity_registry.async_get(social_filter_entity_id)
     assert ads_filter_entry is not None
@@ -584,8 +633,14 @@ async def test_profile_analytics_sensors_are_created_for_each_profile(hass) -> N
     profile_total_entity_id = entity_registry.async_get_entity_id(
         "sensor", DOMAIN, "user-123::profile::profile-1::total_queries"
     )
+    profile_endpoint_count_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::profile::profile-1::endpoint_count"
+    )
     profile_blocked_entity_id = entity_registry.async_get_entity_id(
         "sensor", DOMAIN, "user-123::profile::profile-1::blocked_queries"
+    )
+    profile_blocked_ratio_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::profile::profile-1::blocked_queries_ratio"
     )
     profile_bypassed_entity_id = entity_registry.async_get_entity_id(
         "sensor", DOMAIN, "user-123::profile::profile-1::bypassed_queries"
@@ -596,20 +651,35 @@ async def test_profile_analytics_sensors_are_created_for_each_profile(hass) -> N
     secondary_total_entity_id = entity_registry.async_get_entity_id(
         "sensor", DOMAIN, "user-123::profile::profile-2::total_queries"
     )
+    secondary_endpoint_count_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::profile::profile-2::endpoint_count"
+    )
 
     assert profile_total_entity_id is not None
+    assert profile_endpoint_count_entity_id is not None
     assert profile_blocked_entity_id is not None
+    assert profile_blocked_ratio_entity_id is not None
     assert profile_bypassed_entity_id is not None
     assert profile_redirected_entity_id is not None
     assert secondary_total_entity_id is not None
+    assert secondary_endpoint_count_entity_id is not None
     assert hass.states.get(profile_total_entity_id).state == "57123"
+    assert hass.states.get(profile_endpoint_count_entity_id).state == "3"
     assert hass.states.get(profile_blocked_entity_id).state == "8000"
+    assert hass.states.get(profile_blocked_ratio_entity_id).state == "14.0"
     assert hass.states.get(profile_bypassed_entity_id).state == "49100"
     assert hass.states.get(profile_redirected_entity_id).state == "23"
     assert hass.states.get(secondary_total_entity_id).state == "703"
+    assert hass.states.get(secondary_endpoint_count_entity_id).state == "1"
     assert (
         hass.states.get(profile_total_entity_id).attributes["unit_of_measurement"]
         == "queries"
+    )
+    assert (
+        hass.states.get(profile_endpoint_count_entity_id).attributes[
+            "unit_of_measurement"
+        ]
+        == "endpoints"
     )
     assert hass.states.get(profile_total_entity_id).name == "Primary Total queries"
     assert (
@@ -619,6 +689,56 @@ async def test_profile_analytics_sensors_are_created_for_each_profile(hass) -> N
     assert (
         hass.states.get(profile_total_entity_id).attributes["analytics_end_time"]
         is not None
+    )
+    profile_total_entry = entity_registry.async_get(profile_total_entity_id)
+    profile_endpoint_count_entry = entity_registry.async_get(
+        profile_endpoint_count_entity_id
+    )
+    profile_blocked_entry = entity_registry.async_get(profile_blocked_entity_id)
+    profile_blocked_ratio_entry = entity_registry.async_get(
+        profile_blocked_ratio_entity_id
+    )
+    assert profile_total_entry is not None
+    assert profile_endpoint_count_entry is not None
+    assert profile_blocked_entry is not None
+    assert profile_blocked_ratio_entry is not None
+    assert profile_total_entry.translation_key == "dns_queries_today"
+    assert profile_endpoint_count_entry.translation_key == "dns_unique_clients"
+    assert profile_blocked_entry.translation_key == "ads_blocked_today"
+    assert profile_blocked_ratio_entry.translation_key == "ads_percentage_today"
+    assert (
+        hass.states.get(profile_blocked_ratio_entity_id).attributes[
+            "unit_of_measurement"
+        ]
+        == "%"
+    )
+
+
+async def test_profile_status_sensor_reports_disabled_state(hass) -> None:
+    """A disabled profile should surface a disabled status state."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    inventory = _inventory("user-123", "profile-1")
+    paused_until = dt_util.utcnow().astimezone(UTC) + timedelta(hours=2)
+    profiles = list(inventory.profiles)
+    profiles[0] = {**profiles[0], "disable": int(paused_until.timestamp())}
+    disabled_inventory = replace(inventory, profiles=tuple(profiles))
+
+    await _async_setup_entry(hass, entry, disabled_inventory)
+
+    entity_registry = er.async_get(hass)
+    profile_status_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::profile::profile-1::status"
+    )
+
+    assert profile_status_entity_id is not None
+    assert hass.states.get(profile_status_entity_id).state == "disabled"
+    assert (
+        hass.states.get(profile_status_entity_id).attributes["paused_until"] is not None
     )
 
 
@@ -4886,3 +5006,5 @@ async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> N
     }
     assert diagnostics["runtime"]["profiles"]["profile-1"]["name"] == "Primary"
     assert diagnostics["runtime"]["profiles"]["profile-1"]["filter_count"] == 5
+    assert diagnostics["runtime"]["profiles"]["profile-1"]["endpoint_count"] == 3
+    assert diagnostics["runtime"]["profiles"]["profile-2"]["endpoint_count"] == 1

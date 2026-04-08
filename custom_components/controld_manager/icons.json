@@ -17,6 +17,7 @@
       "status": {
         "default": "mdi:shield-check",
         "state": {
+          "disabled": "mdi:pause-circle",
           "degraded": "mdi:shield-alert",
           "problem": "mdi:shield-off"
         }
@@ -24,13 +25,19 @@
       "profile_count": {
         "default": "mdi:account-multiple"
       },
-      "endpoint_count": {
+      "dns_unique_clients": {
         "default": "mdi:devices"
       },
       "total_queries": {
         "default": "mdi:counter"
       },
+      "dns_queries_today": {
+        "default": "mdi:counter"
+      },
       "blocked_queries": {
+        "default": "mdi:shield-remove"
+      },
+      "ads_blocked_today": {
         "default": "mdi:shield-remove"
       },
       "bypassed_queries": {
@@ -40,6 +47,9 @@
         "default": "mdi:transit-connection-variant"
       },
       "blocked_queries_ratio": {
+        "default": "mdi:percent-outline"
+      },
+      "ads_percentage_today": {
         "default": "mdi:percent-outline"
       }
     },

@@ -109,10 +109,8 @@ async def async_get_config_entry_diagnostics(
                     "option_count": len(
                         registry.options_by_profile.get(profile_pk, {})
                     ),
-                    "endpoint_count": sum(
-                        1
-                        for endpoint_row in registry.endpoints.values()
-                        if endpoint_row.owning_profile_pk == profile_pk
+                    "endpoint_count": registry.protected_endpoint_count_for_profile(
+                        profile_pk
                     ),
                 }
                 for profile_pk, profile_row in registry.profiles.items()

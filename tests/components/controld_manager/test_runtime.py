@@ -205,6 +205,8 @@ def test_integration_manager_builds_normalized_registry() -> None:
     assert registry.endpoints["device-1"].last_active == datetime.fromtimestamp(
         1775067384, UTC
     )
+    assert registry.endpoints["router-1"].associated_client_count == 1
+    assert registry.endpoints["device-1"].associated_client_count == 0
     assert registry.endpoints["device-1"].parent_device_id == "router-1"
     assert registry.endpoint_inventory.discovered_endpoint_count == 2
     assert registry.endpoint_inventory.router_client_count == 1

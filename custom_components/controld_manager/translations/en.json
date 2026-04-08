@@ -643,13 +643,15 @@
         "state": {
           "healthy": "Healthy",
           "degraded": "Degraded",
-          "problem": "Problem"
+          "problem": "Problem",
+          "disabled": "Disabled"
         },
         "state_attributes": {
           "purpose": {
             "name": "Purpose",
             "state": {
-              "purpose_instance_status": "Shows the current refresh health and account status for this Control D integration"
+              "purpose_instance_status": "Shows the current refresh health and account status for this Control D integration",
+              "purpose_profile_status": "Shows the current refresh health for this Control D profile and whether the profile is disabled"
             }
           }
         }
@@ -665,13 +667,14 @@
           }
         }
       },
-      "endpoint_count": {
+      "dns_unique_clients": {
         "name": "Endpoint count",
         "state_attributes": {
           "purpose": {
             "name": "Purpose",
             "state": {
-              "purpose_instance_summary": "Shows a summary count for the current Control D account"
+              "purpose_instance_summary": "Shows a summary count for the current Control D account",
+              "purpose_profile_summary": "Shows a summary count for the current Control D profile"
             }
           }
         }
@@ -688,7 +691,31 @@
           }
         }
       },
+      "dns_queries_today": {
+        "name": "Total queries",
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_instance_analytics": "Shows account-level query analytics for the current Control D reporting window",
+              "purpose_profile_analytics": "Shows profile-level query analytics for the current Control D reporting window"
+            }
+          }
+        }
+      },
       "blocked_queries": {
+        "name": "Blocked queries",
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_instance_analytics": "Shows account-level query analytics for the current Control D reporting window",
+              "purpose_profile_analytics": "Shows profile-level query analytics for the current Control D reporting window"
+            }
+          }
+        }
+      },
+      "ads_blocked_today": {
         "name": "Blocked queries",
         "state_attributes": {
           "purpose": {
@@ -731,6 +758,18 @@
             "name": "Purpose",
             "state": {
               "purpose_instance_analytics": "Shows account-level query analytics for the current Control D reporting window"
+            }
+          }
+        }
+      },
+      "ads_percentage_today": {
+        "name": "Blocked queries ratio",
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_instance_analytics": "Shows account-level query analytics for the current Control D reporting window",
+              "purpose_profile_analytics": "Shows profile-level query analytics for the current Control D reporting window"
             }
           }
         }

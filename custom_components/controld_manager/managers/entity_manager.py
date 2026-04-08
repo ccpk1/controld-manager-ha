@@ -127,14 +127,18 @@ class EntityManager(BaseManager):
                 "instance::endpoint_count",
                 "instance::total_queries",
                 "instance::blocked_queries",
+                "instance::blocked_queries_ratio",
                 "instance::bypassed_queries",
                 "instance::redirected_queries",
             }
             for profile_pk in included_profiles:
                 sensor_keys.update(
                     {
+                        f"profile::{profile_pk}::status",
+                        f"profile::{profile_pk}::endpoint_count",
                         f"profile::{profile_pk}::total_queries",
                         f"profile::{profile_pk}::blocked_queries",
+                        f"profile::{profile_pk}::blocked_queries_ratio",
                         f"profile::{profile_pk}::bypassed_queries",
                         f"profile::{profile_pk}::redirected_queries",
                     }

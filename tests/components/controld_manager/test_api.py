@@ -222,8 +222,7 @@ async def test_client_fetches_account_analytics() -> None:
     ]
 
 
-async def test_client_falls_back_to_requested_window_when_bucket_response_omits_bounds(
-) -> None:
+async def test_client_preserves_requested_window_when_bucket_bounds_missing() -> None:
     """Preserve the requested reporting window when bucket totals omit timestamps."""
     client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
     start_time = datetime(2026, 4, 7, 0, 0, 0, tzinfo=UTC)

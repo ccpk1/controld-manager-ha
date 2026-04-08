@@ -98,6 +98,7 @@ class ControlDEndpointSummary:
     owning_profile_pk: str | None
     last_active: datetime | None = None
     attached_profiles: tuple[ControlDAttachedProfile, ...] = ()
+    associated_client_count: int = 0
     parent_device_id: str | None = None
 
 
@@ -550,6 +551,17 @@ class ControlDRegistry:
     def empty(cls) -> Self:
         """Return an empty runtime registry."""
         return cls()
+
+    def protected_endpoint_count_for_profile(self, profile_pk: str) -> int:
+        """Return the protected endpoint count for one profile."""
+        return sum(
+            1 + endpoint.associated_client_count
+            for endpoint in self.endpoints.values()
+            if any(
+                attached_profile.profile_pk == profile_pk
+                for attached_profile in endpoint.attached_profiles
+            )
+        )
 
 
 @dataclass(slots=True, frozen=True)

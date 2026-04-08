@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import TYPE_CHECKING
 
 from homeassistant.components.sensor import (
@@ -12,6 +13,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.util import dt as dt_util
 
 from .const import (
     ATTR_ACCOUNT_STATUS,
@@ -23,6 +25,7 @@ from .const import (
     ATTR_LAST_REFRESH_ERROR,
     ATTR_LAST_REFRESH_TRIGGER,
     ATTR_LAST_SUCCESSFUL_REFRESH,
+    ATTR_PAUSED_UNTIL,
     ATTR_REFRESH_IN_PROGRESS,
     ATTR_ROUTER_CLIENT_COUNT,
     ATTR_STATS_ENDPOINT,
@@ -30,17 +33,23 @@ from .const import (
     PURPOSE_INSTANCE_STATUS,
     PURPOSE_INSTANCE_SUMMARY,
     PURPOSE_PROFILE_ANALYTICS,
-    TRANS_KEY_ENTITY_BLOCKED_QUERIES,
-    TRANS_KEY_ENTITY_BLOCKED_QUERIES_RATIO,
+    PURPOSE_PROFILE_STATUS,
+    PURPOSE_PROFILE_SUMMARY,
     TRANS_KEY_ENTITY_BYPASSED_QUERIES,
-    TRANS_KEY_ENTITY_ENDPOINT_COUNT,
+    TRANS_KEY_ENTITY_PIHOLE_BLOCKED_QUERIES,
+    TRANS_KEY_ENTITY_PIHOLE_BLOCKED_QUERIES_RATIO,
+    TRANS_KEY_ENTITY_PIHOLE_TOTAL_QUERIES,
+    TRANS_KEY_ENTITY_PIHOLE_UNIQUE_CLIENTS,
     TRANS_KEY_ENTITY_PROFILE_COUNT,
     TRANS_KEY_ENTITY_REDIRECTED_QUERIES,
     TRANS_KEY_ENTITY_STATUS,
-    TRANS_KEY_ENTITY_TOTAL_QUERIES,
 )
 from .entity import ControlDManagerInstanceEntity, ControlDManagerProfileEntity
-from .models import ControlDAccountAnalytics, ControlDManagerRuntime
+from .models import (
+    ControlDAccountAnalytics,
+    ControlDManagerRuntime,
+    ControlDSyncStatus,
+)
 
 if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -82,6 +91,14 @@ def _build_sensor_entity(
             return ControlDManagerProfileTotalQueriesSensor(config_entry, profile_pk)
         if sensor_key == "blocked_queries":
             return ControlDManagerProfileBlockedQueriesSensor(config_entry, profile_pk)
+        if sensor_key == "status":
+            return ControlDManagerProfileStatusSensor(config_entry, profile_pk)
+        if sensor_key == "endpoint_count":
+            return ControlDManagerProfileEndpointCountSensor(config_entry, profile_pk)
+        if sensor_key == "blocked_queries_ratio":
+            return ControlDManagerProfileBlockedQueriesRatioSensor(
+                config_entry, profile_pk
+            )
         if sensor_key == "bypassed_queries":
             return ControlDManagerProfileBypassedQueriesSensor(config_entry, profile_pk)
         if sensor_key == "redirected_queries":
@@ -109,6 +126,43 @@ def _build_sensor_entity(
     raise ValueError(f"Unsupported Control D sensor key {key!r}")
 
 
+def _runtime_health(sync_status: ControlDSyncStatus) -> str:
+    """Return the current runtime health derived from refresh state."""
+    if sync_status.last_refresh_error is None:
+        return "healthy"
+    if (
+        sync_status.consecutive_failed_refreshes == 1
+        and sync_status.last_successful_refresh is not None
+    ):
+        return "degraded"
+    return "problem"
+
+
+def _status_attributes(runtime: ControlDManagerRuntime) -> dict[str, object]:
+    """Return refresh metadata shared by status sensors."""
+    attributes: dict[str, object] = {}
+    user = runtime.registry.user
+    sync_status = runtime.sync_status
+    attributes.update(
+        {
+            ATTR_LAST_REFRESH_ATTEMPT: sync_status.last_refresh_attempt,
+            ATTR_LAST_SUCCESSFUL_REFRESH: sync_status.last_successful_refresh,
+            ATTR_REFRESH_IN_PROGRESS: sync_status.refresh_in_progress,
+            ATTR_LAST_REFRESH_TRIGGER: sync_status.last_refresh_trigger,
+            ATTR_CONSECUTIVE_FAILED_REFRESHES: (
+                sync_status.consecutive_failed_refreshes
+            ),
+        }
+    )
+    if user is not None and user.stats_endpoint is not None:
+        attributes[ATTR_STATS_ENDPOINT] = user.stats_endpoint
+    if user is not None and user.status is not None:
+        attributes[ATTR_ACCOUNT_STATUS] = user.status
+    if sync_status.last_refresh_error is not None:
+        attributes[ATTR_LAST_REFRESH_ERROR] = sync_status.last_refresh_error
+    return attributes
+
+
 class ControlDManagerStatusSensor(ControlDManagerInstanceEntity, SensorEntity):
     """Expose the current account and polling status."""
 
@@ -131,39 +185,57 @@ class ControlDManagerStatusSensor(ControlDManagerInstanceEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         """Return the current health of the Control D integration runtime."""
-        sync_status = self.runtime.sync_status
-        if sync_status.last_refresh_error is None:
-            return "healthy"
-        if (
-            sync_status.consecutive_failed_refreshes == 1
-            and sync_status.last_successful_refresh is not None
-        ):
-            return "degraded"
-        return "problem"
+        return _runtime_health(self.runtime.sync_status)
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         """Return concise account and refresh metadata."""
         attributes = super().extra_state_attributes or {}
-        user = self.runtime.registry.user
-        sync_status = self.runtime.sync_status
-        attributes.update(
-            {
-                ATTR_LAST_REFRESH_ATTEMPT: sync_status.last_refresh_attempt,
-                ATTR_LAST_SUCCESSFUL_REFRESH: sync_status.last_successful_refresh,
-                ATTR_REFRESH_IN_PROGRESS: sync_status.refresh_in_progress,
-                ATTR_LAST_REFRESH_TRIGGER: sync_status.last_refresh_trigger,
-                ATTR_CONSECUTIVE_FAILED_REFRESHES: (
-                    sync_status.consecutive_failed_refreshes
-                ),
-            }
-        )
-        if user is not None and user.stats_endpoint is not None:
-            attributes[ATTR_STATS_ENDPOINT] = user.stats_endpoint
-        if user is not None and user.status is not None:
-            attributes[ATTR_ACCOUNT_STATUS] = user.status
-        if sync_status.last_refresh_error is not None:
-            attributes[ATTR_LAST_REFRESH_ERROR] = sync_status.last_refresh_error
+        attributes.update(_status_attributes(self.runtime))
+        return attributes
+
+
+class ControlDManagerProfileStatusSensor(ControlDManagerProfileEntity, SensorEntity):
+    """Expose the current profile and polling status."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_translation_key = TRANS_KEY_ENTITY_STATUS
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _purpose = PURPOSE_PROFILE_STATUS
+
+    def __init__(
+        self,
+        config_entry: ConfigEntry[ControlDManagerRuntime],
+        profile_pk: str,
+    ) -> None:
+        """Initialize the profile-status sensor."""
+        super().__init__(config_entry, profile_pk, "status")
+        self._attr_name = "Status"
+        self._attr_options = ["healthy", "degraded", "problem", "disabled"]
+
+    @property
+    def available(self) -> bool:
+        """Keep the profile status visible while the profile exists."""
+        return self.profile is not None
+
+    @property
+    def native_value(self) -> str:
+        """Return the current health of the profile surface."""
+        if (
+            (profile := self.profile) is not None
+            and profile.paused_until is not None
+            and profile.paused_until > (dt_util.utcnow().astimezone(UTC))
+        ):
+            return "disabled"
+        return _runtime_health(self.runtime.sync_status)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Return profile status metadata."""
+        attributes = super().extra_state_attributes or {}
+        attributes.update(_status_attributes(self.runtime))
+        if (profile := self.profile) is not None and profile.paused_until is not None:
+            attributes[ATTR_PAUSED_UNTIL] = profile.paused_until.isoformat()
         return attributes
 
 
@@ -189,7 +261,7 @@ class ControlDManagerProfileCountSensor(ControlDManagerInstanceEntity, SensorEnt
 class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEntity):
     """Expose the current number of discovered endpoints."""
 
-    _attr_translation_key = TRANS_KEY_ENTITY_ENDPOINT_COUNT
+    _attr_translation_key = TRANS_KEY_ENTITY_PIHOLE_UNIQUE_CLIENTS
     _attr_native_unit_of_measurement = "endpoints"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _purpose = PURPOSE_INSTANCE_SUMMARY
@@ -219,6 +291,33 @@ class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEn
             }
         )
         return attributes
+
+
+class ControlDManagerProfileEndpointCountSensor(
+    ControlDManagerProfileEntity, SensorEntity
+):
+    """Expose the current number of endpoints attached to one profile."""
+
+    _attr_translation_key = TRANS_KEY_ENTITY_PIHOLE_UNIQUE_CLIENTS
+    _attr_native_unit_of_measurement = "endpoints"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _purpose = PURPOSE_PROFILE_SUMMARY
+
+    def __init__(
+        self,
+        config_entry: ConfigEntry[ControlDManagerRuntime],
+        profile_pk: str,
+    ) -> None:
+        """Initialize the profile endpoint-count sensor."""
+        super().__init__(config_entry, profile_pk, "endpoint_count")
+        self._attr_name = "Endpoint count"
+
+    @property
+    def native_value(self) -> int:
+        """Return the current number of endpoints attached to this profile."""
+        return self.runtime.registry.protected_endpoint_count_for_profile(
+            self._profile_pk
+        )
 
 
 class ControlDManagerAccountAnalyticsSensor(
@@ -252,7 +351,7 @@ class ControlDManagerAccountAnalyticsSensor(
 class ControlDManagerTotalQueriesSensor(ControlDManagerAccountAnalyticsSensor):
     """Expose the current account-level total query count."""
 
-    _attr_translation_key = TRANS_KEY_ENTITY_TOTAL_QUERIES
+    _attr_translation_key = TRANS_KEY_ENTITY_PIHOLE_TOTAL_QUERIES
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
         """Initialize the total-queries sensor."""
@@ -272,7 +371,7 @@ class ControlDManagerTotalQueriesSensor(ControlDManagerAccountAnalyticsSensor):
 class ControlDManagerBlockedQueriesSensor(ControlDManagerAccountAnalyticsSensor):
     """Expose the current account-level blocked query count."""
 
-    _attr_translation_key = TRANS_KEY_ENTITY_BLOCKED_QUERIES
+    _attr_translation_key = TRANS_KEY_ENTITY_PIHOLE_BLOCKED_QUERIES
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
         """Initialize the blocked-queries sensor."""
@@ -362,7 +461,7 @@ class ControlDManagerRedirectedQueriesSensor(ControlDManagerAccountAnalyticsSens
 class ControlDManagerBlockedQueriesRatioSensor(ControlDManagerAccountAnalyticsSensor):
     """Expose the current blocked-query ratio for the account."""
 
-    _attr_translation_key = TRANS_KEY_ENTITY_BLOCKED_QUERIES_RATIO
+    _attr_translation_key = TRANS_KEY_ENTITY_PIHOLE_BLOCKED_QUERIES_RATIO
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -424,7 +523,7 @@ class ControlDManagerProfileAnalyticsSensor(ControlDManagerProfileEntity, Sensor
 class ControlDManagerProfileTotalQueriesSensor(ControlDManagerProfileAnalyticsSensor):
     """Expose the current profile-level total query count."""
 
-    _attr_translation_key = TRANS_KEY_ENTITY_TOTAL_QUERIES
+    _attr_translation_key = TRANS_KEY_ENTITY_PIHOLE_TOTAL_QUERIES
 
     def __init__(
         self,
@@ -447,7 +546,7 @@ class ControlDManagerProfileTotalQueriesSensor(ControlDManagerProfileAnalyticsSe
 class ControlDManagerProfileBlockedQueriesSensor(ControlDManagerProfileAnalyticsSensor):
     """Expose the current profile-level blocked query count."""
 
-    _attr_translation_key = TRANS_KEY_ENTITY_BLOCKED_QUERIES
+    _attr_translation_key = TRANS_KEY_ENTITY_PIHOLE_BLOCKED_QUERIES
 
     def __init__(
         self,
@@ -475,6 +574,45 @@ class ControlDManagerProfileBlockedQueriesSensor(ControlDManagerProfileAnalytics
         if (analytics := self.analytics) is None or analytics.blocked_queries is None:
             return None
         return analytics.blocked_queries
+
+
+class ControlDManagerProfileBlockedQueriesRatioSensor(
+    ControlDManagerProfileAnalyticsSensor
+):
+    """Expose the current blocked-query ratio for the profile."""
+
+    _attr_translation_key = TRANS_KEY_ENTITY_PIHOLE_BLOCKED_QUERIES_RATIO
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        config_entry: ConfigEntry[ControlDManagerRuntime],
+        profile_pk: str,
+    ) -> None:
+        """Initialize the profile blocked-query-ratio sensor."""
+        super().__init__(config_entry, profile_pk, "blocked_queries_ratio")
+        self._attr_name = "Blocked queries ratio"
+        self._attr_suggested_display_precision = 1
+
+    @property
+    def available(self) -> bool:
+        """Return whether a proven blocked-query ratio is available."""
+        analytics = self.analytics
+        return (
+            super().available
+            and analytics is not None
+            and analytics.blocked_queries_ratio is not None
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the current blocked-query ratio for the reporting window."""
+        if (
+            analytics := self.analytics
+        ) is None or analytics.blocked_queries_ratio is None:
+            return None
+        return round(analytics.blocked_queries_ratio, 1)
 
 
 class ControlDManagerProfileBypassedQueriesSensor(
