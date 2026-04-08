@@ -105,6 +105,12 @@
     "set_service_state": {
       "service": "mdi:application-cog"
     },
+    "create_rule": {
+      "service": "mdi:playlist-plus"
+    },
+    "delete_rule": {
+      "service": "mdi:playlist-remove"
+    },
     "set_option_state": {
       "service": "mdi:tune"
     },

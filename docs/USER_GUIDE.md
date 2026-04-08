@@ -236,6 +236,8 @@ last activity time.
 
 The integration currently registers these Home Assistant services:
 
+- `controld_manager.create_rule`
+- `controld_manager.delete_rule`
 - `controld_manager.disable_profile`
 - `controld_manager.enable_profile`
 - `controld_manager.set_default_rule_state`
@@ -449,6 +451,76 @@ Manual examples:
 	`profile_name: ["Primary"]`
 	`rule_identity: ["root|example.com"]`
 	`cancel_expiration: true`
+
+### Create rule service
+
+`controld_manager.create_rule` creates one or more custom rules in the selected
+profiles.
+
+- select profiles with `profile_id` or `profile_name`
+- `profile_id` wins if both profile selectors are provided
+- provide one or more hostnames with `hostname`
+- optionally place the new rules inside one rule folder with
+	`rule_group_id` or `rule_group_name`
+- `rule_group_id` wins if both rule-group selectors are provided
+- the selected rule folder must resolve unambiguously in every targeted
+	profile
+- `enabled`, `mode`, `comment`, `expiration_duration`, and `expire_at` reuse
+	the same semantics as `set_rule_state`
+- if `enabled` is omitted, the new rules default to enabled
+- if `mode` is omitted, the new rules default to `block`
+- `config_entry_id` and `config_entry_name` remain optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+- duplicate hostnames inside the same create request are rejected before any
+	upstream write is attempted
+- create requests are rejected if a targeted profile already has the same
+	hostname as an existing rule, even in a different folder
+
+This service does not accept generic entity targets, and the Account device is
+not a valid profile target.
+
+Manual examples:
+
+- create one top-level blocking rule:
+	`profile_name: ["Primary"]`
+	`hostname: ["example.org"]`
+- create two bypass rules in one folder:
+	`profile_name: ["Primary"]`
+	`hostname: ["example.org", "example.net"]`
+	`rule_group_name: "Allow folder"`
+	`mode: "bypass"`
+- create one redirect rule with an expiration:
+	`profile_name: ["Primary"]`
+	`hostname: ["example.org"]`
+	`mode: "redirect"`
+	`expiration_duration: "00:30:00"`
+
+### Delete rule service
+
+`controld_manager.delete_rule` deletes one or more existing custom rules from
+the selected profiles.
+
+- select profiles with `profile_id` or `profile_name`
+- `profile_id` wins if both profile selectors are provided
+- select rules with `rule_identity`
+- `rule_identity` accepts full stable identities such as `root|example.com` or
+	`group:1|example2.com`
+- `rule_identity` also accepts a bare hostname such as `example.com` when that
+	hostname is unique within the targeted profile scope
+- `config_entry_id` and `config_entry_name` remain optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+
+This service does not accept generic entity targets, and the Account device is
+not a valid profile target.
+
+Manual examples:
+
+- delete one top-level rule:
+	`profile_name: ["Primary"]`
+	`rule_identity: ["root|example.com"]`
+- delete one grouped rule by bare hostname:
+	`profile_name: ["Primary"]`
+	`rule_identity: ["example2.com"]`
 
 ### Service mode service
 

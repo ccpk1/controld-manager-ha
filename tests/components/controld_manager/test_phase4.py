@@ -25,6 +25,8 @@ from custom_components.controld_manager.const import (
     ATTR_EXPIRES_AT,
     CONF_API_TOKEN,
     DOMAIN,
+    SERVICE_CREATE_RULE,
+    SERVICE_DELETE_RULE,
     SERVICE_DISABLE_PROFILE,
     SERVICE_ENABLE_PROFILE,
     SERVICE_FIELD_CANCEL_EXPIRATION,
@@ -35,12 +37,14 @@ from custom_components.controld_manager.const import (
     SERVICE_FIELD_EXPIRE_AT,
     SERVICE_FIELD_FILTER_ID,
     SERVICE_FIELD_FILTER_NAME,
+    SERVICE_FIELD_HOSTNAME,
     SERVICE_FIELD_MINUTES,
     SERVICE_FIELD_MODE,
     SERVICE_FIELD_OPTION_ID,
     SERVICE_FIELD_OPTION_NAME,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
+    SERVICE_FIELD_RULE_GROUP_NAME,
     SERVICE_FIELD_RULE_IDENTITY,
     SERVICE_FIELD_SERVICE_ID,
     SERVICE_FIELD_SERVICE_NAME,
@@ -3294,6 +3298,178 @@ async def test_set_rule_state_supports_raw_rule_identity(hass) -> None:
         ttl=None,
         comment="Here is my reason",
     )
+
+
+async def test_create_rule_supports_default_root_rule_creation(hass) -> None:
+    """The create-rule service should default to an enabled blocking root rule."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_create_profile_rules = AsyncMock()
+    runtime.client.async_get_profile_detail = AsyncMock(
+        return_value=_detail_payload(
+            "profile-1",
+            include_services=False,
+            include_rules=True,
+        )
+    )
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CREATE_RULE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_HOSTNAME: ["new.example"],
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_create_profile_rules.assert_awaited_once_with(
+        "profile-1",
+        ["new.example"],
+        enabled=True,
+        action_do=0,
+        group_pk=None,
+        comment="",
+        ttl=None,
+    )
+    assert (
+        runtime.registry.rules_by_profile["profile-1"]["root|new.example"].rule_pk
+        == "new.example"
+    )
+
+
+async def test_create_rule_supports_grouped_rich_creation(hass) -> None:
+    """The create-rule service should support grouped creates with rich fields."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_create_profile_rules = AsyncMock()
+    runtime.client.async_get_profile_detail = AsyncMock(
+        return_value=_detail_payload(
+            "profile-1",
+            include_services=False,
+            include_rules=True,
+        )
+    )
+    runtime.coordinator.async_refresh = AsyncMock()
+    expire_at = datetime(2026, 4, 7, 18, 30, tzinfo=UTC)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CREATE_RULE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_HOSTNAME: ["new2.example"],
+            SERVICE_FIELD_RULE_GROUP_NAME: "Allow folder",
+            SERVICE_FIELD_MODE: "redirect",
+            SERVICE_FIELD_COMMENT: "Temporary redirect",
+            SERVICE_FIELD_EXPIRE_AT: expire_at,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_create_profile_rules.assert_awaited_once_with(
+        "profile-1",
+        ["new2.example"],
+        enabled=True,
+        action_do=2,
+        group_pk="1",
+        comment="Temporary redirect",
+        ttl=int(expire_at.timestamp()),
+    )
+    created_rule = runtime.registry.rules_by_profile["profile-1"][
+        "group:1|new2.example"
+    ]
+    assert created_rule.group_name == "Allow folder"
+    assert created_rule.action_do == 2
+
+
+async def test_create_rule_rejects_existing_hostname(hass) -> None:
+    """The create-rule service should reject existing hostnames up front."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entry.runtime_data.client.async_get_profile_detail = AsyncMock(
+        return_value=_detail_payload(
+            "profile-1",
+            include_services=False,
+            include_rules=True,
+        )
+    )
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_CREATE_RULE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_HOSTNAME: ["example.com"],
+            },
+            blocking=True,
+        )
+
+
+async def test_delete_rule_deletes_targeted_rules(hass) -> None:
+    """The delete-rule service should delete rules resolved by identity."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset(
+                        {
+                            "rule:root|example.com",
+                            "group:1",
+                            "rule:group:1|example2.com",
+                        }
+                    )
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_delete_profile_rules = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_RULE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_RULE_IDENTITY: ["group:1|example2.com"],
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_delete_profile_rules.assert_awaited_once_with(
+        "profile-1",
+        ["example2.com"],
+    )
+    assert "group:1|example2.com" not in runtime.registry.rules_by_profile["profile-1"]
 
 
 async def test_set_rule_state_supports_mode_updates(hass) -> None:

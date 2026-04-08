@@ -317,6 +317,43 @@ class ControlDAPIClient:
             payload["ttl"] = ttl
         await self._async_request("PUT", f"/profiles/{profile_pk}/rules", payload)
 
+    async def async_create_profile_rules(
+        self,
+        profile_pk: str,
+        hostnames: list[str],
+        *,
+        enabled: bool,
+        action_do: int,
+        group_pk: str | None,
+        comment: str,
+        ttl: int | None,
+    ) -> None:
+        """Create one or more profile rules using the browser-backed contract."""
+        payload: dict[str, Any] = {
+            "do": action_do,
+            "status": int(enabled),
+            "via": "-1",
+            "via_v6": "-1",
+            "hostnames": hostnames,
+            "group": 0 if group_pk is None else int(group_pk),
+            "comment": comment,
+        }
+        if ttl is not None:
+            payload["ttl"] = ttl
+        await self._async_request("POST", f"/profiles/{profile_pk}/rules", payload)
+
+    async def async_delete_profile_rules(
+        self,
+        profile_pk: str,
+        hostnames: list[str],
+    ) -> None:
+        """Delete one or more profile rules using the hostname-list contract."""
+        await self._async_request(
+            "DELETE",
+            f"/profiles/{profile_pk}/rules",
+            {"hostnames": hostnames},
+        )
+
     async def async_set_profile_group(
         self,
         profile_pk: str,

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -28,6 +30,8 @@ from .api import (
 from .const import (
     DEFAULT_DISABLE_MINUTES,
     DOMAIN,
+    SERVICE_CREATE_RULE,
+    SERVICE_DELETE_RULE,
     SERVICE_DISABLE_PROFILE,
     SERVICE_ENABLE_PROFILE,
     SERVICE_FIELD_CANCEL_EXPIRATION,
@@ -40,12 +44,15 @@ from .const import (
     SERVICE_FIELD_EXPIRE_AT,
     SERVICE_FIELD_FILTER_ID,
     SERVICE_FIELD_FILTER_NAME,
+    SERVICE_FIELD_HOSTNAME,
     SERVICE_FIELD_MINUTES,
     SERVICE_FIELD_MODE,
     SERVICE_FIELD_OPTION_ID,
     SERVICE_FIELD_OPTION_NAME,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
+    SERVICE_FIELD_RULE_GROUP_ID,
+    SERVICE_FIELD_RULE_GROUP_NAME,
     SERVICE_FIELD_RULE_IDENTITY,
     SERVICE_FIELD_SERVICE_ID,
     SERVICE_FIELD_SERVICE_NAME,
@@ -60,6 +67,8 @@ from .const import (
     TRANS_KEY_CONFIG_ENTRY_NAME_NOT_FOUND,
     TRANS_KEY_CONFIG_ENTRY_NOT_FOUND,
     TRANS_KEY_CONFIG_ENTRY_NOT_LOADED,
+    TRANS_KEY_CREATE_RULES_FAILED,
+    TRANS_KEY_DELETE_RULES_FAILED,
     TRANS_KEY_DISABLE_PROFILES_FAILED,
     TRANS_KEY_ENABLE_PROFILES_FAILED,
     TRANS_KEY_MULTIPLE_ENTRIES_LOADED,
@@ -68,6 +77,11 @@ from .const import (
     TRANS_KEY_PROFILE_TARGET_AMBIGUOUS,
     TRANS_KEY_PROFILE_TARGET_NOT_FOUND,
     TRANS_KEY_PROFILE_TARGET_REQUIRED,
+    TRANS_KEY_RULE_ALREADY_EXISTS,
+    TRANS_KEY_RULE_GROUP_NAME_AMBIGUOUS,
+    TRANS_KEY_RULE_GROUP_NAME_NOT_FOUND,
+    TRANS_KEY_RULE_HOSTNAME_DUPLICATE,
+    TRANS_KEY_RULE_HOSTNAME_REQUIRED,
     TRANS_KEY_RULE_MUTATION_REQUIRED,
     TRANS_KEY_SERVICE_MODE_REJECTED,
     TRANS_KEY_SET_DEFAULT_RULES_FAILED,
@@ -131,6 +145,11 @@ _OPTION_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
 
 _RULE_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
     vol.Optional(SERVICE_FIELD_RULE_IDENTITY): vol.Any(cv.string, [cv.string]),
+}
+
+_RULE_GROUP_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
+    vol.Optional(SERVICE_FIELD_RULE_GROUP_ID): vol.Any(cv.string, [cv.string]),
+    vol.Optional(SERVICE_FIELD_RULE_GROUP_NAME): vol.Any(cv.string, [cv.string]),
 }
 
 _PROFILE_SERVICE_ENTRY_TARGET_FIELDS: dict[vol.Marker, object] = {
@@ -210,6 +229,31 @@ SET_RULE_STATE_SERVICE_SCHEMA = vol.Schema(
     }
 )
 
+CREATE_RULE_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        vol.Required(SERVICE_FIELD_HOSTNAME): vol.Any(cv.string, [cv.string]),
+        **_RULE_GROUP_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        vol.Optional(SERVICE_FIELD_ENABLED): cv.boolean,
+        vol.Optional(SERVICE_FIELD_MODE): vol.In(rule_action_options()),
+        vol.Optional(SERVICE_FIELD_COMMENT): cv.string,
+        vol.Optional(SERVICE_FIELD_EXPIRATION_DURATION): vol.All(
+            cv.time_period,
+            vol.Range(min=timedelta(seconds=1)),
+        ),
+        vol.Optional(SERVICE_FIELD_EXPIRE_AT): cv.datetime,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+DELETE_RULE_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        **_RULE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
 GET_CATALOG_SERVICE_SCHEMA = vol.Schema(
     {
         vol.Required(SERVICE_FIELD_CATALOG_TYPE): vol.In(CATALOG_TYPES),
@@ -267,6 +311,17 @@ class ResolvedOptionServiceTarget:
 
     entry: ControlDManagerConfigEntry
     profile_options: dict[str, frozenset[str]]
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedCreateRuleServiceTarget:
+    """Resolved service target for a profile-rule creation request."""
+
+    entry: ControlDManagerConfigEntry
+    profile_pks: frozenset[str]
+    rule_group_by_profile: dict[str, str | None]
+    rule_group_name_by_profile: dict[str, str | None]
+    existing_hostnames_by_profile: dict[str, frozenset[str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,6 +401,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def async_handle_set_rule_state(call: ServiceCall) -> None:
         """Enable or disable one or more targeted Control D rules."""
         mutation = _parse_rule_mutation(call)
+        _require_rule_mutation(mutation)
         resolved_target = _resolve_rule_service_target(hass, call)
         try:
             profile_manager = resolved_target.entry.runtime_data.managers.profile
@@ -362,6 +418,47 @@ async def async_register_services(hass: HomeAssistant) -> None:
             ControlDApiResponseError,
         ) as err:
             raise _ha_error(TRANS_KEY_SET_RULES_FAILED) from err
+
+    async def async_handle_create_rule(call: ServiceCall) -> None:
+        """Create one or more Control D rules across the selected profiles."""
+        mutation = _parse_rule_mutation(call)
+        resolved_target = await _resolve_create_rule_service_target(hass, call)
+        hostnames = _resolve_rule_hostnames(call)
+        _validate_rule_creates(
+            resolved_target.existing_hostnames_by_profile,
+            hostnames,
+        )
+        try:
+            profile_manager = resolved_target.entry.runtime_data.managers.profile
+            await profile_manager.async_create_rules(
+                resolved_target.profile_pks,
+                hostnames=hostnames,
+                group_pks_by_profile=resolved_target.rule_group_by_profile,
+                group_names_by_profile=resolved_target.rule_group_name_by_profile,
+                enabled=mutation.enabled,
+                mode=mutation.mode,
+                ttl=mutation.ttl,
+                comment=mutation.comment,
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_CREATE_RULES_FAILED) from err
+
+    async def async_handle_delete_rule(call: ServiceCall) -> None:
+        """Delete one or more targeted Control D rules."""
+        resolved_target = _resolve_rule_service_target(hass, call)
+        try:
+            profile_manager = resolved_target.entry.runtime_data.managers.profile
+            await profile_manager.async_delete_rules(resolved_target.profile_rules)
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_DELETE_RULES_FAILED) from err
 
     async def async_handle_set_service_state(call: ServiceCall) -> None:
         """Set one or more targeted Control D services to the requested mode."""
@@ -471,6 +568,20 @@ async def async_register_services(hass: HomeAssistant) -> None:
             async_handle_set_rule_state,
             schema=SET_RULE_STATE_SERVICE_SCHEMA,
         )
+    if not hass.services.has_service(DOMAIN, SERVICE_CREATE_RULE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CREATE_RULE,
+            async_handle_create_rule,
+            schema=CREATE_RULE_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_DELETE_RULE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_DELETE_RULE,
+            async_handle_delete_rule,
+            schema=DELETE_RULE_SERVICE_SCHEMA,
+        )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_SERVICE_STATE):
         hass.services.async_register(
             DOMAIN,
@@ -574,6 +685,83 @@ def _resolve_option_service_target(
     )
 
 
+async def _resolve_create_rule_service_target(
+    hass: HomeAssistant, call: ServiceCall
+) -> ResolvedCreateRuleServiceTarget:
+    """Resolve a rule-creation target across one or more profiles."""
+    resolved_profiles = _resolve_profile_service_target(
+        hass,
+        call,
+        allow_entity_ids=False,
+        allow_profile_names=True,
+        profile_device_field=SERVICE_FIELD_PROFILE_ID,
+        require_profile_selector=True,
+    )
+    requested_group_ids = _ensure_name_list(call.data.get(SERVICE_FIELD_RULE_GROUP_ID))
+    requested_group_names = _ensure_name_list(
+        call.data.get(SERVICE_FIELD_RULE_GROUP_NAME)
+    )
+    live_rule_catalog = await _async_load_rules_for_resolution(
+        resolved_profiles.entry,
+        resolved_profiles.profile_pks,
+    )
+    if len(requested_group_ids) > 1 or len(requested_group_names) > 1:
+        raise ServiceValidationError(
+            "The selected Control D rule-group target is ambiguous",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_RULE_GROUP_NAME_AMBIGUOUS,
+        )
+    if not requested_group_ids and not requested_group_names:
+        return ResolvedCreateRuleServiceTarget(
+            entry=resolved_profiles.entry,
+            profile_pks=resolved_profiles.profile_pks,
+            rule_group_by_profile=dict.fromkeys(resolved_profiles.profile_pks, None),
+            rule_group_name_by_profile=dict.fromkeys(
+                resolved_profiles.profile_pks, None
+            ),
+            existing_hostnames_by_profile={
+                profile_pk: frozenset(
+                    rule_row.rule_pk.removesuffix(".").casefold()
+                    for rule_row in rules_by_profile.values()
+                )
+                for profile_pk, (_, rules_by_profile) in live_rule_catalog.items()
+            },
+        )
+    matched_value = (
+        requested_group_ids[0] if requested_group_ids else requested_group_names[0]
+    )
+    normalized_match = _normalize_name(matched_value)
+    return ResolvedCreateRuleServiceTarget(
+        entry=resolved_profiles.entry,
+        profile_pks=resolved_profiles.profile_pks,
+        rule_group_by_profile={
+            profile_pk: _resolve_live_rule_group_pk(
+                live_rule_catalog[profile_pk][0],
+                normalized_match,
+                use_ids=bool(requested_group_ids),
+            )
+            for profile_pk in resolved_profiles.profile_pks
+        },
+        rule_group_name_by_profile={
+            profile_pk: live_rule_catalog[profile_pk][0][
+                _resolve_live_rule_group_pk(
+                    live_rule_catalog[profile_pk][0],
+                    normalized_match,
+                    use_ids=bool(requested_group_ids),
+                )
+            ].name
+            for profile_pk in resolved_profiles.profile_pks
+        },
+        existing_hostnames_by_profile={
+            profile_pk: frozenset(
+                rule_row.rule_pk.removesuffix(".").casefold()
+                for rule_row in rules_by_profile.values()
+            )
+            for profile_pk, (_, rules_by_profile) in live_rule_catalog.items()
+        },
+    )
+
+
 def _parse_rule_mutation(call: ServiceCall) -> ParsedRuleMutation:
     """Normalize the supported rule-mutation fields for service handlers."""
     enabled = call.data.get(SERVICE_FIELD_ENABLED)
@@ -590,13 +778,21 @@ def _parse_rule_mutation(call: ServiceCall) -> ParsedRuleMutation:
     if not cancel_expiration and expire_at is not None:
         expires_at = int(dt_util.as_utc(expire_at).timestamp())
 
+    return ParsedRuleMutation(
+        enabled=enabled,
+        mode=mode,
+        comment=comment,
+        ttl=expires_at,
+    )
+
+
+def _require_rule_mutation(mutation: ParsedRuleMutation) -> None:
+    """Require at least one explicit rule mutation field."""
     if (
-        enabled is None
-        and mode is None
-        and comment is None
-        and not cancel_expiration
-        and expiration_duration is None
-        and expire_at is None
+        mutation.enabled is None
+        and mutation.mode is None
+        and mutation.comment is None
+        and mutation.ttl is None
     ):
         raise ServiceValidationError(
             "Provide at least one rule mutation field",
@@ -604,12 +800,113 @@ def _parse_rule_mutation(call: ServiceCall) -> ParsedRuleMutation:
             translation_key=TRANS_KEY_RULE_MUTATION_REQUIRED,
         )
 
-    return ParsedRuleMutation(
-        enabled=enabled,
-        mode=mode,
-        comment=comment,
-        ttl=expires_at,
+
+def _resolve_rule_hostnames(call: ServiceCall) -> tuple[str, ...]:
+    """Normalize the requested create-rule hostnames from one service call."""
+    raw_values = _ensure_name_list(call.data.get(SERVICE_FIELD_HOSTNAME))
+    if not raw_values:
+        raise ServiceValidationError(
+            "Select at least one Control D rule hostname",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_RULE_HOSTNAME_REQUIRED,
+        )
+
+    normalized_values: list[str] = []
+    seen_values: set[str] = set()
+    for raw_value in raw_values:
+        hostname = raw_value.strip().removesuffix(".")
+        if not hostname:
+            continue
+        normalized_hostname = hostname.casefold()
+        if normalized_hostname in seen_values:
+            raise ServiceValidationError(
+                "The selected Control D rule hostname is duplicated",
+                translation_domain=DOMAIN,
+                translation_key=TRANS_KEY_RULE_HOSTNAME_DUPLICATE,
+            )
+        seen_values.add(normalized_hostname)
+        normalized_values.append(hostname)
+
+    if not normalized_values:
+        raise ServiceValidationError(
+            "Select at least one Control D rule hostname",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_RULE_HOSTNAME_REQUIRED,
+        )
+    return tuple(normalized_values)
+
+
+async def _async_load_rules_for_resolution(
+    entry: ControlDManagerConfigEntry,
+    profile_pks: frozenset[str],
+) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
+    """Load live rule-group and rule rows for targeted profiles."""
+    integration_manager = entry.runtime_data.managers.integration
+    profile_details = await asyncio.gather(
+        *(
+            entry.runtime_data.client.async_get_profile_detail(
+                profile_pk,
+                include_services=False,
+                include_rules=True,
+            )
+            for profile_pk in profile_pks
+        )
     )
+    return {
+        profile_pk: (
+            integration_manager._normalize_rule_groups(detail.groups),
+            integration_manager._normalize_rules(detail.groups, detail.rules),
+        )
+        for profile_pk, detail in zip(profile_pks, profile_details, strict=True)
+    }
+
+
+def _resolve_live_rule_group_pk(
+    groups_by_profile: dict[str, Any],
+    normalized_match: str,
+    *,
+    use_ids: bool,
+) -> str:
+    """Resolve one live rule-group selector for one profile."""
+    matches = [
+        group_pk
+        for group_pk, group_row in groups_by_profile.items()
+        if _normalize_name(group_pk if use_ids else group_row.name) == normalized_match
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ServiceValidationError(
+            "The selected Control D rule-group target is ambiguous",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_RULE_GROUP_NAME_AMBIGUOUS,
+        )
+    raise ServiceValidationError(
+        (
+            "The selected Control D rule-group target could not be resolved "
+            "for one or more targeted profiles"
+        ),
+        translation_domain=DOMAIN,
+        translation_key=TRANS_KEY_RULE_GROUP_NAME_NOT_FOUND,
+    )
+
+
+def _validate_rule_creates(
+    existing_hostnames_by_profile: dict[str, frozenset[str]],
+    hostnames: tuple[str, ...],
+) -> None:
+    """Reject duplicate rule creates before calling the upstream API."""
+    normalized_requested = {hostname.casefold() for hostname in hostnames}
+    for existing_hostnames in existing_hostnames_by_profile.values():
+        if normalized_requested & existing_hostnames:
+            raise ServiceValidationError(
+                (
+                    "The selected Control D rule hostname already exists for "
+                    "one or more targeted profiles"
+                ),
+                translation_domain=DOMAIN,
+                translation_key=TRANS_KEY_RULE_ALREADY_EXISTS,
+            )
 
 
 def _validate_option_mutation(

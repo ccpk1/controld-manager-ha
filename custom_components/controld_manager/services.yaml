@@ -182,6 +182,116 @@ set_rule_state:
       selector:
         text:
 
+create_rule:
+  name: Create rule
+  description: Create one or more Control D custom rules across the selected profiles. If no Enabled or Mode value is supplied, the new rules default to enabled blocking rules.
+  fields:
+    profile_id:
+      required: false
+      example: |
+        ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0", "9f2a6c4e1b7d43a8a0c5e2f1d9b6c3a7"]
+      selector:
+        device:
+          multiple: true
+          filter:
+            - integration: controld_manager
+              model: Profile
+    profile_name:
+      required: false
+      example: |
+        ["Primary", "Kids"]
+      selector:
+        text:
+    hostname:
+      required: true
+      example: |
+        ["example.org", "example.net"]
+      selector:
+        text:
+    rule_group_id:
+      required: false
+      example: "1"
+      selector:
+        text:
+    rule_group_name:
+      required: false
+      example: "Allow folder"
+      selector:
+        text:
+    enabled:
+      required: false
+      selector:
+        boolean:
+    mode:
+      required: false
+      example: "bypass"
+      selector:
+        select:
+          options:
+            - block
+            - bypass
+            - redirect
+    comment:
+      required: false
+      example: "Temporary allowance for maintenance"
+      selector:
+        text:
+    expiration_duration:
+      required: false
+      example: "00:30:00"
+      selector:
+        duration:
+    expire_at:
+      required: false
+      example: "2026-04-07T18:30:00"
+      selector:
+        datetime:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
+delete_rule:
+  name: Delete rule
+  description: Delete one or more existing Control D custom rules by stable identity across the selected profiles.
+  fields:
+    profile_id:
+      required: false
+      example: |
+        ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0", "9f2a6c4e1b7d43a8a0c5e2f1d9b6c3a7"]
+      selector:
+        device:
+          multiple: true
+          filter:
+            - integration: controld_manager
+              model: Profile
+    profile_name:
+      required: false
+      example: |
+        ["Primary", "Kids"]
+      selector:
+        text:
+    rule_identity:
+      required: true
+      example: |
+        ["root|example.com", "group:1|example2.com", "example.com"]
+      selector:
+        text:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
 set_service_state:
   name: Set service state
   description: Set one or more Control D services to Off, Blocked, Bypassed, or Redirected across the selected profiles.

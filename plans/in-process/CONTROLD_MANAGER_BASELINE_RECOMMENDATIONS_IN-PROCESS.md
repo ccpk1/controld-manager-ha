@@ -289,6 +289,17 @@ Latest Phase 6 status update:
 	`ttl_pass` field options
 - `set_default_rule_state` now ships as the bulk default-rule mutation surface
 	for `Blocking`, `Bypassing`, and `Redirecting`
+- `create_rule` and `delete_rule` now ship as the custom-rule lifecycle
+	service pair, reusing the shared rule-mutation helper path for enabled,
+	action, comment, and expiration semantics wherever the upstream contract
+	overlaps
+- custom-rule creation now resolves rule-folder targets from live profile rule
+	data instead of only the exposed-entity registry, which keeps service writes
+	usable even when the matching rule folder or rule is not currently exposed in
+	Home Assistant
+- custom-rule deletion now reuses the existing stable rule-identity selector
+	contract and converts those targets back into the browser-backed hostname-list
+	delete payload expected by Control D
 - `b_resp` is intentionally limited to the proven values `0.0.0.0 / ::`,
 	`NXDOMAIN`, and `REFUSED`, while `Custom` and `Branded` remain blocked until
 	their full write and read semantics are intentionally implemented
@@ -296,19 +307,31 @@ Latest Phase 6 status update:
 	`Auto`, and explicit off behavior, while `Custom` remains blocked in product
 	code until the repository chooses to implement its extra `custom_value`
 	contract
+- the user guide and service metadata now document create and delete rule
+	targeting, duplicate-hostname rejection, grouped-rule creation, and the
+	current backend limitation around rule comment persistence
 - focused and full-repository validation now pass for the current slice,
 	including `ruff`, `mypy`, and `pytest tests/ -v`
 
+Phase 6 standards audit note:
+
+- the current service surface is translation-ready, manager-owned, multi-entry
+	safe, and aligned with the repository's layer and terminology rules
+- one architecture gap remains open relative to
+	`docs/DEVELOPMENT_STANDARDS.md`: some profile-scoped custom services still
+	require explicit profile selectors instead of accepting first-class generic
+	`entity_id` and `device_id` targets; this should remain tracked as follow-on
+	service-target work rather than being treated as already complete
+
 Next recommended Phase 6 slice:
 
-- treat custom-rule create and delete services as unblocked follow-on work,
-	because the browser-backed contract is already recorded in
-	`docs/ENGINEERING_FINDINGS.md`; when implemented, they should reuse the same
-	rule-mutation helper path as `set_rule_state` wherever the shared hostname,
-	action, comment, and TTL logic overlaps
 - decide whether the first follow-on options slice should prioritize
 	service-only support for additional proven advanced options or move selected
 	controls into entity exposure once their read semantics are fully closed
+- decide whether to add one shared first-class `entity_id` and `device_id`
+	selector family for profile-scoped custom services so the runtime surface can
+	close the remaining service-target standards gap without reintroducing
+	duplicated service-resolution logic
 
 Phase 5 required research closeouts before code for that specific surface starts:
 

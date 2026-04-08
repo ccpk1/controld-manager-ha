@@ -17,6 +17,7 @@ from ..models import (
     ControlDRule,
     ControlDRuleGroup,
     ControlDService,
+    build_rule_identity,
     default_rule_action_from_mode,
     rule_action_do_from_key,
     rule_group_action_from_mode,
@@ -162,12 +163,68 @@ class ProfileManager(BaseManager):
             comment=(rule_row.comment if comment is None else comment),
         )
 
+    def _create_cached_rule(
+        self,
+        profile_pk: str,
+        *,
+        hostname: str,
+        group_pk: str | None,
+        group_name: str | None,
+        enabled: bool,
+        action_do: int,
+        comment: str,
+        ttl: int | None,
+    ) -> None:
+        """Insert one newly created rule into the cached registry."""
+        rules_by_identity = self.runtime.registry.rules_by_profile[profile_pk]
+        next_order = (
+            max((rule_row.order for rule_row in rules_by_identity.values()), default=0)
+            + 1
+        )
+        identity = build_rule_identity(group_pk, hostname)
+        rules_by_identity[identity] = ControlDRule(
+            identity=identity,
+            rule_pk=hostname,
+            order=next_order,
+            group_pk=group_pk,
+            group_name=group_name,
+            enabled=enabled,
+            action_do=action_do,
+            comment=comment,
+            ttl=ttl,
+        )
+
+    def _delete_cached_rule(self, profile_pk: str, rule_identity: str) -> None:
+        """Remove one deleted rule from the cached registry."""
+        self.runtime.registry.rules_by_profile[profile_pk].pop(rule_identity, None)
+
     def _schedule_runtime_refresh(self) -> None:
         """Push optimistic state to listeners and queue a background refresh."""
         self.runtime.active_coordinator.async_update_listeners()
         self.runtime.active_coordinator.hass.async_create_task(
             self.runtime.active_coordinator.async_refresh()
         )
+
+    @staticmethod
+    def _resolved_rule_write_state(
+        *,
+        current_enabled: bool,
+        current_action_do: int,
+        current_comment: str,
+        current_ttl: int | None,
+        enabled: bool | None,
+        mode: str | None,
+        ttl: int | None,
+        comment: str | None,
+    ) -> tuple[bool, int, str, int | None]:
+        """Resolve the effective rule write values from one optional mutation."""
+        next_enabled = current_enabled if enabled is None else enabled
+        next_action_do = (
+            current_action_do if mode is None else rule_action_do_from_key(mode)
+        )
+        next_comment = current_comment if comment is None else comment
+        next_ttl = current_ttl if ttl is None else ttl
+        return next_enabled, next_action_do, next_comment, next_ttl
 
     @staticmethod
     def _service_write_payload(
@@ -721,14 +778,21 @@ class ProfileManager(BaseManager):
         for profile_pk, rule_identities in profile_rules.items():
             for rule_identity in rule_identities:
                 rule_row = self._rule_row(profile_pk, rule_identity)
-                next_enabled = rule_row.enabled if enabled is None else enabled
-                next_action_do = (
-                    rule_row.action_do
-                    if mode is None
-                    else rule_action_do_from_key(mode)
+                (
+                    next_enabled,
+                    next_action_do,
+                    next_comment,
+                    payload_ttl,
+                ) = self._resolved_rule_write_state(
+                    current_enabled=rule_row.enabled,
+                    current_action_do=rule_row.action_do,
+                    current_comment=rule_row.comment,
+                    current_ttl=rule_row.ttl,
+                    enabled=enabled,
+                    mode=mode,
+                    ttl=ttl,
+                    comment=comment,
                 )
-                next_comment = rule_row.comment if comment is None else comment
-                payload_ttl = rule_row.ttl if ttl is None else ttl
                 uses_rich_update = comment is not None or ttl is not None
                 updated_rules.append(
                     (
@@ -801,6 +865,123 @@ class ProfileManager(BaseManager):
                 ttl=cached_ttl,
                 comment=next_comment,
             )
+
+        self._schedule_runtime_refresh()
+
+    async def async_create_rules(
+        self,
+        profile_pks: frozenset[str],
+        *,
+        hostnames: tuple[str, ...],
+        group_pks_by_profile: dict[str, str | None],
+        group_names_by_profile: dict[str, str | None],
+        enabled: bool | None,
+        mode: str | None,
+        ttl: int | None,
+        comment: str | None,
+    ) -> None:
+        """Create one or more rules across one or more selected profiles."""
+        create_requests: list[
+            tuple[str, str | None, str | None, bool, int, str, int | None]
+        ] = []
+
+        for profile_pk in profile_pks:
+            group_pk = group_pks_by_profile[profile_pk]
+            group_name = group_names_by_profile[profile_pk]
+            next_enabled, next_action_do, next_comment, next_ttl = (
+                self._resolved_rule_write_state(
+                    current_enabled=True,
+                    current_action_do=0,
+                    current_comment="",
+                    current_ttl=None,
+                    enabled=enabled,
+                    mode=mode,
+                    ttl=ttl,
+                    comment=comment,
+                )
+            )
+            create_requests.append(
+                (
+                    profile_pk,
+                    group_pk,
+                    group_name,
+                    next_enabled,
+                    next_action_do,
+                    next_comment,
+                    next_ttl,
+                )
+            )
+
+        await asyncio.gather(
+            *(
+                self.runtime.client.async_create_profile_rules(
+                    profile_pk,
+                    list(hostnames),
+                    enabled=next_enabled,
+                    action_do=next_action_do,
+                    group_pk=group_pk,
+                    comment=next_comment,
+                    ttl=next_ttl,
+                )
+                for (
+                    profile_pk,
+                    group_pk,
+                    _,
+                    next_enabled,
+                    next_action_do,
+                    next_comment,
+                    next_ttl,
+                ) in create_requests
+            )
+        )
+
+        for (
+            profile_pk,
+            group_pk,
+            group_name,
+            next_enabled,
+            next_action_do,
+            next_comment,
+            next_ttl,
+        ) in create_requests:
+            for hostname in hostnames:
+                self._create_cached_rule(
+                    profile_pk,
+                    hostname=hostname,
+                    group_pk=group_pk,
+                    group_name=group_name,
+                    enabled=next_enabled,
+                    action_do=next_action_do,
+                    comment=next_comment,
+                    ttl=next_ttl,
+                )
+
+        self._schedule_runtime_refresh()
+
+    async def async_delete_rules(
+        self,
+        profile_rules: dict[str, frozenset[str]],
+    ) -> None:
+        """Delete one or more selected rules across profiles."""
+        delete_requests: list[tuple[str, list[str], tuple[str, ...]]] = []
+
+        for profile_pk, rule_identities in profile_rules.items():
+            hostnames = [
+                self._rule_row(profile_pk, rule_identity).rule_pk
+                for rule_identity in rule_identities
+            ]
+            delete_requests.append((profile_pk, hostnames, tuple(rule_identities)))
+
+        await asyncio.gather(
+            *(
+                self.runtime.client.async_delete_profile_rules(profile_pk, hostnames)
+                for profile_pk, hostnames, _ in delete_requests
+            )
+        )
+
+        for profile_pk, _, deleted_rule_identities in delete_requests:
+            for rule_identity in deleted_rule_identities:
+                self._delete_cached_rule(profile_pk, rule_identity)
 
         self._schedule_runtime_refresh()
 

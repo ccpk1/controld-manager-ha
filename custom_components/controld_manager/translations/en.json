@@ -150,6 +150,12 @@
     "enable_profiles_failed": {
       "message": "Unable to enable the targeted Control D profiles."
     },
+    "create_rules_failed": {
+      "message": "Unable to create the selected Control D rules."
+    },
+    "delete_rules_failed": {
+      "message": "Unable to delete the selected Control D rules."
+    },
     "set_default_rules_failed": {
       "message": "Unable to update the selected Control D default rule settings."
     },
@@ -164,6 +170,15 @@
     },
     "rule_mutation_required": {
       "message": "Provide at least one rule mutation field such as Enabled, Mode, Comment, Cancel expiration, Expiration duration, or Expire at."
+    },
+    "rule_hostname_required": {
+      "message": "Select at least one Control D rule hostname."
+    },
+    "rule_hostname_duplicate": {
+      "message": "The selected Control D rule hostname is duplicated."
+    },
+    "rule_already_exists": {
+      "message": "The selected Control D rule hostname already exists for one or more targeted profiles."
     },
     "option_mutation_required": {
       "message": "Provide a compatible mutation for the selected Control D profile options."
@@ -369,6 +384,86 @@
         "expire_at": {
           "name": "Expire at",
           "description": "Optional. Set the selected rules to expire at an absolute date and time in the Home Assistant local timezone. Ignored when Cancel expiration is set. When both Expiration duration and Expire at are provided, this field takes precedence. Past values are allowed."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "create_rule": {
+      "name": "Create rule",
+      "description": "Create one or more Control D custom rules across the selected profiles. If you do not provide Enabled or Mode, the new rules default to enabled blocking rules.",
+      "fields": {
+        "profile_id": {
+          "name": "Select a profile",
+          "description": "Required unless you provide Profile names. Select one or more managed Control D profiles by ID. If Profile IDs and Profile names are both provided, Profile IDs take precedence."
+        },
+        "profile_name": {
+          "name": "Profile names",
+          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids."
+        },
+        "hostname": {
+          "name": "Hostnames",
+          "description": "Required. Enter one or more hostnames to create as Control D rules, separated by commas, such as example.org,example.net."
+        },
+        "rule_group_id": {
+          "name": "Rule group ID",
+          "description": "Optional. Create the new rules inside one specific Control D rule folder by raw ID. If Rule group ID and Rule group name are both provided, Rule group ID takes precedence."
+        },
+        "rule_group_name": {
+          "name": "Rule group name",
+          "description": "Optional. Create the new rules inside one specific Control D rule folder by display name."
+        },
+        "enabled": {
+          "name": "Enabled",
+          "description": "Optional. Turn the new rules on or off. If omitted, new rules default to enabled."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Optional. Create the new rules as block, bypass, or redirect rules. If omitted, new rules default to block."
+        },
+        "comment": {
+          "name": "Comment",
+          "description": "Optional. Set the rule comment when the new rules are created. Provide an empty string to create the rules without a comment."
+        },
+        "expiration_duration": {
+          "name": "Expiration duration",
+          "description": "Optional. Set the new rules to expire after a relative duration such as 30 minutes. Ignored when Expire at is also provided."
+        },
+        "expire_at": {
+          "name": "Expire at",
+          "description": "Optional. Set the new rules to expire at an absolute date and time in the Home Assistant local timezone. When both Expiration duration and Expire at are provided, this field takes precedence. Past values are allowed."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "delete_rule": {
+      "name": "Delete rule",
+      "description": "Delete one or more existing Control D custom rules by stable identity across the selected profiles.",
+      "fields": {
+        "profile_id": {
+          "name": "Select a profile",
+          "description": "Required unless you provide Profile names. Select one or more managed Control D profiles by ID. If Profile IDs and Profile names are both provided, Profile IDs take precedence."
+        },
+        "profile_name": {
+          "name": "Profile names",
+          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids."
+        },
+        "rule_identity": {
+          "name": "Rule identities",
+          "description": "Required. Enter one or more stable Control D rule identities, such as root|example.com or group:1|example2.com. You can also use a bare hostname such as example.com when it is unambiguous."
         },
         "config_entry_id": {
           "name": "Configuration Entry ID",
