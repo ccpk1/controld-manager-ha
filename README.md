@@ -6,7 +6,7 @@
 [![Stars](https://img.shields.io/github/stars/ccpk1/controld-manager-ha?color=1E88E5&labelColor=555)](https://github.com/ccpk1/controld-manager-ha/stargazers)
 
 <p align="center">
-  <img src="custom_components/controld_manager/brand/logo.png" alt="Control D Manager" width="220">
+  <img src="custom_components/controld_manager/brand/dark_logo.png" alt="Control D Manager" width="120">
 </p>
 
 # Control D Manager for Home Assistant
@@ -17,22 +17,22 @@ Control D Manager is a standalone Home Assistant custom integration for managing
 
 ## 💡 Why Control D?
 
-Control D is especially compelling in Home Assistant because its profile model translates cleanly into automation. Filters, service overrides, custom rules, default-rule behavior, and endpoint activity all map naturally to scripts, dashboards, and conditions in a way that many DNS products simply do not expose.
+Control D is especially compelling in Home Assistant because its **profile model translates cleanly into automation**. **Filters, service overrides, custom rules, default-rule behavior, and endpoint activity** all map naturally to scripts, dashboards, and conditions in a way that many DNS products simply do not expose.
 
-That matters because a good Home Assistant integration should do more than mirror a web dashboard. It should make Control D feel programmable. This project leans into that by combining a selective entity model with a broader native service layer, so you can build polished dashboards when you want them and keep routine policy changes in the background when you do not.
+That matters because a good Home Assistant integration should do more than mirror a web dashboard. It should **make Control D feel programmable**. This project leans into that by combining a selective entity model with a broader native service layer, so you can build polished dashboards when you want them and keep routine policy changes in the background when you do not.
 
-Control D is also unusually strong as a homelab foundation. If you already use `ctrld` on a firewall or router, Control D makes it much easier to segment policy by VLAN, client, or profile without resorting to brittle scripts and manual workarounds. That broader ecosystem is a big part of why this integration exists: the service is already flexible enough to deserve a Home Assistant layer that can actually keep up with it.
+Control D is also **unusually strong as a homelab foundation**. If you already use `ctrld` on a firewall or router, Control D makes it much easier to segment policy by VLAN, client, or profile without resorting to brittle scripts and manual workarounds. That broader ecosystem is a big part of why this integration exists: the service is already flexible enough to deserve a Home Assistant layer that can actually keep up with it.
 
 ## Table of contents
 
 - [💡 Why Control D?](#why-control-d)
 - [🏆 The platinum-quality approach](#the-platinum-quality-approach)
 - [✨ What it enables](#what-it-enables)
+- [⚡ Quick installation](#quick-installation)
 - [🧩 Supported setup and prerequisites](#supported-setup-and-prerequisites)
 - [🛡️ Security and privacy notes](#security-and-privacy-notes)
 - [🧭 Design philosophy and scope](#design-philosophy-and-scope)
 - [❤️ Support the project](#support-the-project)
-- [⚡ Quick installation](#quick-installation)
 - [📖 User guide](#user-guide)
 - [🏗️ Development and architecture docs](#development-and-architecture-docs)
 - [🤝 Community and contribution](#community-and-contribution)
@@ -101,6 +101,8 @@ This makes it possible to target profiles by name or identity, create or expire 
 - Endpoint status entities use last-activity data and profile-level inactivity thresholds to show whether a client is still active.
 - Several analytics sensors intentionally align with the `custom:pi-hole` card's expected translation keys, giving you a practical way to reuse existing DNS dashboard layouts.
 
+👉 Check the [Pi-hole card example in the user guide](docs/USER_GUIDE.md#pi-hole-card) for a ready-to-use YAML snippet you can drop into a `custom:pi-hole` dashboard.
+
 For households and family-control use cases, endpoint visibility is more than a convenience feature. It can act as a practical tamper-detection signal. If a phone or tablet is normally chatty on Control D and suddenly stops showing activity, that is a useful indicator to investigate whether the device has switched away from the expected DNS path. It is not a cryptographic guarantee, but it is a valuable operational hook for catching the real-world ways DNS controls get bypassed.
 
 ### Homelab and segmentation value
@@ -130,28 +132,6 @@ Redirect-related controls exist in the current release, but redirect behavior ha
 
 Why a write-capable token? Because this integration supports real mutation paths, not just read-only reporting. Profile pause, filter changes, service changes, option changes, and rule management all depend on that permission level.
 
-## 🛡️ Security and privacy notes
-
-Bridging DNS policy control into Home Assistant is powerful, and that power deserves a clear security posture.
-
-- Unofficial project: this repository is an independent community project and is not affiliated with, endorsed by, or supported by Control D.
-- Sensitive capability: the integration can modify Control D policy, so your Home Assistant security posture matters.
-- Redacted diagnostics: diagnostics are designed to remain useful without exposing sensitive data directly.
-- Cloud-backed integration: this is a `cloud_polling` integration, not a local Control D control plane.
-
-If your Home Assistant instance is exposed or compromised, DNS policy changes could be triggered through this integration. Protect Home Assistant accordingly with sound account, remote-access, and permission practices.
-
-## 🧭 Design philosophy and scope
-
-Control D Manager is designed to be opinionated in the right places.
-
-- The goal: expose the Control D surfaces that have clear automation value and present them in a way that feels native in Home Assistant.
-- The flexibility: you decide how much of Control D becomes a Home Assistant surface and how much stays service-driven, giving you precise control without forcing unnecessary entity bloat.
-- The device model: the device registry stays compact by modeling the Control D instance and profiles as devices while leaving physical endpoints as entities only.
-- The service model: richer write operations belong in Home Assistant services so automations can stay expressive without depending on a wall of always-on switches.
-
-This is a Home Assistant integration for real household and homelab workflows, not a Control D account-management console or a full mirror of every upstream API object.
-
 ## ❤️ Support the project
 
 Building and maintaining integrations like this takes a substantial amount of time across implementation, testing, release validation, documentation, and long-term maintenance. If Control D Manager is giving you the DNS control and visibility you have been looking for in Home Assistant, here is how you can help keep the project moving.
@@ -165,6 +145,7 @@ If Control D Manager is making your smart home or homelab better, I would genuin
 - ⭐ Star the repository: <https://github.com/ccpk1/controld-manager-ha>
 - ❤️ Sponsor on GitHub: <https://github.com/sponsors/ccpk1>
 - ☕ Buy me a coffee: <https://buymeacoffee.com/ccpk1>
+
 
 ## ⚡ Quick installation
 
@@ -192,6 +173,17 @@ If Control D Manager is making your smart home or homelab better, I would genuin
 
 Create a Control D API key with write access. The integration uses that token for both inventory refresh and supported policy mutations.
 
+## 🧭 Design philosophy and scope
+
+Control D Manager is designed to be opinionated in the right places.
+
+- The goal: expose the Control D surfaces that have clear automation value and present them in a way that feels native in Home Assistant.
+- The flexibility: you decide how much of Control D becomes a Home Assistant surface and how much stays service-driven, giving you precise control without forcing unnecessary entity bloat.
+- The device model: the device registry stays compact by modeling the Control D instance and profiles as devices while leaving physical endpoints as entities only.
+- The service model: richer write operations belong in Home Assistant services so automations can stay expressive without depending on a wall of always-on switches.
+
+This is a Home Assistant integration for real household and homelab workflows, not a Control D account-management console or a full mirror of every upstream API object.
+
 ## 📖 User guide
 
 The operating guide lives in [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
@@ -206,6 +198,17 @@ It covers:
 - analytics sensors and Pi-hole-card compatibility
 - service examples and catalog discovery
 - diagnostics and availability behavior
+
+## 🛡️ Security and privacy notes
+
+Bridging DNS policy control into Home Assistant is powerful, and that power deserves a clear security posture.
+
+- Unofficial project: this repository is an independent community project and is not affiliated with, endorsed by, or supported by Control D.
+- Sensitive capability: the integration can modify Control D policy, so your Home Assistant security posture matters.
+- Redacted diagnostics: diagnostics are designed to remain useful without exposing sensitive data directly.
+- Cloud-backed integration: this is a `cloud_polling` integration, not a local Control D control plane.
+
+If your Home Assistant instance is exposed or compromised, DNS policy changes could be triggered through this integration. Protect Home Assistant accordingly with sound account, remote-access, and permission practices.
 
 ## 🏗️ Development and architecture docs
 
@@ -246,7 +249,7 @@ Repository layout:
 
 ## ⚠️ Disclaimer and liability
 
-This software is provided "as is", without warranty of any kind, express or implied. While the integration is being engineered carefully and validated continuously, you are responsible for reviewing the behavior you automate and for securing the Home Assistant environment that is allowed to control your DNS policy.
+This software is provided "as is", without warranty of any kind, express or implied. It is an unofficial community project and is not affiliated with, endorsed by, or supported by Control D. While the integration is being engineered carefully and validated continuously, you are responsible for reviewing the behavior you automate and for securing the Home Assistant environment that is allowed to control your DNS policy.
 
 Use this project with appropriate caution, especially when exposing Home Assistant remotely or granting other users access to service calls that can alter Control D behavior.
 
