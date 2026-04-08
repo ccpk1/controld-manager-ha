@@ -14,7 +14,6 @@ from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.controld_manager.api import (
@@ -549,7 +548,9 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
         == "Account Blocked queries ratio"
     )
     assert hass.states.get(sync_button_entity_id).name == "Account Sync now"
-    assert hass.states.get(pause_switch_entity_id).name == "Primary Disable (Temporary)"
+    assert (
+        hass.states.get(pause_switch_entity_id).name == "Primary Disable (15 minutes)"
+    )
     assert (
         hass.states.get(status_entity_id).attributes["last_successful_refresh"]
         is not None
@@ -723,12 +724,17 @@ async def test_profile_status_sensor_reports_disabled_state(hass) -> None:
         title="Control D Home",
     )
     inventory = _inventory("user-123", "profile-1")
-    paused_until = dt_util.utcnow().astimezone(UTC) + timedelta(hours=2)
+    now = datetime(2026, 4, 8, 12, 0, tzinfo=UTC)
+    paused_until = now + timedelta(hours=2, minutes=5)
     profiles = list(inventory.profiles)
     profiles[0] = {**profiles[0], "disable": int(paused_until.timestamp())}
     disabled_inventory = replace(inventory, profiles=tuple(profiles))
 
-    await _async_setup_entry(hass, entry, disabled_inventory)
+    with patch(
+        "custom_components.controld_manager.sensor.dt_util.utcnow",
+        return_value=now,
+    ):
+        await _async_setup_entry(hass, entry, disabled_inventory)
 
     entity_registry = er.async_get(hass)
     profile_status_entity_id = entity_registry.async_get_entity_id(
@@ -736,7 +742,11 @@ async def test_profile_status_sensor_reports_disabled_state(hass) -> None:
     )
 
     assert profile_status_entity_id is not None
-    assert hass.states.get(profile_status_entity_id).state == "disabled"
+    assert hass.states.get(profile_status_entity_id).state == "Disabled: 2h5m"
+    assert (
+        hass.states.get(profile_status_entity_id).attributes["icon"]
+        == "mdi:pause-circle"
+    )
     assert (
         hass.states.get(profile_status_entity_id).attributes["paused_until"] is not None
     )

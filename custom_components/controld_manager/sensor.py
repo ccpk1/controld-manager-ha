@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from homeassistant.components.sensor import (
@@ -138,6 +138,24 @@ def _runtime_health(sync_status: ControlDSyncStatus) -> str:
     return "problem"
 
 
+def _format_compact_duration(duration: timedelta) -> str:
+    """Return a compact rounded-up duration label."""
+    total_minutes = max(1, int((duration.total_seconds() + 59) // 60))
+    days, remainder_minutes = divmod(total_minutes, 24 * 60)
+    hours, minutes = divmod(remainder_minutes, 60)
+
+    if days:
+        return f"{days}d{hours}h" if hours else f"{days}d"
+    if hours:
+        return f"{hours}h{minutes}m" if minutes else f"{hours}h"
+    return f"{minutes}m"
+
+
+def _disabled_status_label(paused_until: datetime, now: datetime) -> str:
+    """Return the compact disabled status label for a paused profile."""
+    return f"Disabled: {_format_compact_duration(paused_until - now)}"
+
+
 def _status_attributes(runtime: ControlDManagerRuntime) -> dict[str, object]:
     """Return refresh metadata shared by status sensors."""
     attributes: dict[str, object] = {}
@@ -211,7 +229,14 @@ class ControlDManagerProfileStatusSensor(ControlDManagerProfileEntity, SensorEnt
         """Initialize the profile-status sensor."""
         super().__init__(config_entry, profile_pk, "status")
         self._attr_name = "Status"
-        self._attr_options = ["healthy", "degraded", "problem", "disabled"]
+
+    @property
+    def options(self) -> list[str]:
+        """Return the allowed profile status states."""
+        base_options = ["healthy", "degraded", "problem", "disabled"]
+        if (disabled_label := self._disabled_label()) is None:
+            return base_options
+        return [*base_options, disabled_label]
 
     @property
     def available(self) -> bool:
@@ -221,13 +246,22 @@ class ControlDManagerProfileStatusSensor(ControlDManagerProfileEntity, SensorEnt
     @property
     def native_value(self) -> str:
         """Return the current health of the profile surface."""
-        if (
-            (profile := self.profile) is not None
-            and profile.paused_until is not None
-            and profile.paused_until > (dt_util.utcnow().astimezone(UTC))
-        ):
-            return "disabled"
+        if (disabled_label := self._disabled_label()) is not None:
+            return disabled_label
         return _runtime_health(self.runtime.sync_status)
+
+    @property
+    def icon(self) -> str:
+        """Return an icon matching the current profile status."""
+        if self._disabled_label() is not None:
+            return "mdi:pause-circle"
+        match _runtime_health(self.runtime.sync_status):
+            case "degraded":
+                return "mdi:shield-alert"
+            case "problem":
+                return "mdi:shield-off"
+            case _:
+                return "mdi:shield-check"
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
@@ -237,6 +271,15 @@ class ControlDManagerProfileStatusSensor(ControlDManagerProfileEntity, SensorEnt
         if (profile := self.profile) is not None and profile.paused_until is not None:
             attributes[ATTR_PAUSED_UNTIL] = profile.paused_until.isoformat()
         return attributes
+
+    def _disabled_label(self) -> str | None:
+        """Return the current compact disabled label when the profile is paused."""
+        if (profile := self.profile) is None or profile.paused_until is None:
+            return None
+        now = dt_util.utcnow().astimezone(UTC)
+        if profile.paused_until <= now:
+            return None
+        return _disabled_status_label(profile.paused_until, now)
 
 
 class ControlDManagerProfileCountSensor(ControlDManagerInstanceEntity, SensorEntity):

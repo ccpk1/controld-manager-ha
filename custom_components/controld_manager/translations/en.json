@@ -841,7 +841,7 @@
     },
     "switch": {
       "paused": {
-        "name": "Disable (Temporary)",
+        "name": "Disable (15 minutes)",
         "state_attributes": {
           "purpose": {
             "name": "Purpose",
