@@ -5,11 +5,7 @@
 [![Version](https://img.shields.io/static/v1?label=Version&message=0.1.0&color=1E88E5&labelColor=555)](https://github.com/ccpk1/controld-manager-ha)
 [![Stars](https://img.shields.io/github/stars/ccpk1/controld-manager-ha?color=1E88E5&labelColor=555)](https://github.com/ccpk1/controld-manager-ha/stargazers)
 
-<p align="center">
-  <img src="custom_components/controld_manager/brand/dark_logo.png" alt="Control D Manager" width="120">
-</p>
-
-# Control D Manager for Home Assistant
+![Control D Manager for Home Assistant](<https://github.com/ccpk1/controld-manager-ha/tree/main/docs/assets/3-1 Logo Rectangle@2x.png>)
 
 > Cloud-smart Home Assistant control for Control D DNS. Profile-driven, automation-first, and designed to keep your entity registry focused instead of flooded.
 
