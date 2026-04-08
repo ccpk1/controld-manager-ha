@@ -25,20 +25,20 @@ Control D is also **unusually strong as a homelab foundation**. If you already u
 
 ## Table of contents
 
-- [💡 Why Control D?](#why-control-d)
-- [🏆 The platinum-quality approach](#the-platinum-quality-approach)
-- [✨ What it enables](#what-it-enables)
-- [⚡ Quick installation](#quick-installation)
-- [🧩 Supported setup and prerequisites](#supported-setup-and-prerequisites)
-- [🛡️ Security and privacy notes](#security-and-privacy-notes)
-- [🧭 Design philosophy and scope](#design-philosophy-and-scope)
-- [❤️ Support the project](#support-the-project)
-- [📖 User guide](#user-guide)
-- [🏗️ Development and architecture docs](#development-and-architecture-docs)
-- [🤝 Community and contribution](#community-and-contribution)
-- [🔒 Security and support posture](#security-and-support-posture)
-- [⚠️ Disclaimer and liability](#disclaimer-and-liability)
-- [📄 License](#license)
+- 💡 [Why Control D?](#why-control-d)
+- 🏆 [The platinum-quality approach](#the-platinum-quality-approach)
+- ✨ [What it enables](#what-it-enables)
+- ❤️ [Support the project](#support-the-project)
+- 🧩 [Supported setup and prerequisites](#supported-setup-and-prerequisites)
+- ⚡ [Quick installation](#quick-installation)
+- 📖 [User guide](#user-guide)
+- 🧭 [Design philosophy and scope](#design-philosophy-and-scope)
+- 🏗️ [Development and architecture docs](#development-and-architecture-docs)
+- 🤝 [Community and contribution](#community-and-contribution)
+- 🛡️ [Security and privacy notes](#security-and-privacy-notes)
+- 🔒 [Security and support posture](#security-and-support-posture)
+- ⚠️ [Disclaimer and liability](#disclaimer-and-liability)
+- 📄 [License](#license)
 
 ## 🏆 The platinum-quality approach
 
@@ -123,15 +123,6 @@ Control D pairs especially well with environments that already use profile-based
 
 Redirect-related controls exist in the current release, but redirect behavior has not yet been fully validated end to end against live Control D behavior. Treat redirect-capable options and rule modes as early functionality until that validation work is complete.
 
-## 🧩 Supported setup and prerequisites
-
-- Control D account: you need a valid Control D account and a write-capable API token.
-- Home Assistant: requires Home Assistant `2026.3` or newer.
-- Installation method: HACS is recommended, but manual installation is also supported.
-- Connectivity: Home Assistant must be able to reach the Control D cloud API.
-
-Why a write-capable token? Because this integration supports real mutation paths, not just read-only reporting. Profile pause, filter changes, service changes, option changes, and rule management all depend on that permission level.
-
 ## ❤️ Support the project
 
 Building and maintaining integrations like this takes a substantial amount of time across implementation, testing, release validation, documentation, and long-term maintenance. If Control D Manager is giving you the DNS control and visibility you have been looking for in Home Assistant, here is how you can help keep the project moving.
@@ -146,6 +137,15 @@ If Control D Manager is making your smart home or homelab better, I would genuin
 - ❤️ Sponsor on GitHub: <https://github.com/sponsors/ccpk1>
 - ☕ Buy me a coffee: <https://buymeacoffee.com/ccpk1>
 
+
+## 🧩 Supported setup and prerequisites
+
+- Control D account: you need a valid Control D account and a write-capable API token.
+- Home Assistant: requires Home Assistant `2026.3` or newer.
+- Installation method: HACS is recommended, but manual installation is also supported.
+- Connectivity: Home Assistant must be able to reach the Control D cloud API.
+
+Why a write-capable token? Because this integration supports real mutation paths, not just read-only reporting. Profile pause, filter changes, service changes, option changes, and rule management all depend on that permission level.
 
 ## ⚡ Quick installation
 
@@ -173,17 +173,6 @@ If Control D Manager is making your smart home or homelab better, I would genuin
 
 Create a Control D API key with write access. The integration uses that token for both inventory refresh and supported policy mutations.
 
-## 🧭 Design philosophy and scope
-
-Control D Manager is designed to be opinionated in the right places.
-
-- The goal: expose the Control D surfaces that have clear automation value and present them in a way that feels native in Home Assistant.
-- The flexibility: you decide how much of Control D becomes a Home Assistant surface and how much stays service-driven, giving you precise control without forcing unnecessary entity bloat.
-- The device model: the device registry stays compact by modeling the Control D instance and profiles as devices while leaving physical endpoints as entities only.
-- The service model: richer write operations belong in Home Assistant services so automations can stay expressive without depending on a wall of always-on switches.
-
-This is a Home Assistant integration for real household and homelab workflows, not a Control D account-management console or a full mirror of every upstream API object.
-
 ## 📖 User guide
 
 The operating guide lives in [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
@@ -199,16 +188,16 @@ It covers:
 - service examples and catalog discovery
 - diagnostics and availability behavior
 
-## 🛡️ Security and privacy notes
+## 🧭 Design philosophy and scope
 
-Bridging DNS policy control into Home Assistant is powerful, and that power deserves a clear security posture.
+Control D Manager is designed to be opinionated in the right places.
 
-- Unofficial project: this repository is an independent community project and is not affiliated with, endorsed by, or supported by Control D.
-- Sensitive capability: the integration can modify Control D policy, so your Home Assistant security posture matters.
-- Redacted diagnostics: diagnostics are designed to remain useful without exposing sensitive data directly.
-- Cloud-backed integration: this is a `cloud_polling` integration, not a local Control D control plane.
+- The goal: expose the Control D surfaces that have clear automation value and present them in a way that feels native in Home Assistant.
+- The flexibility: you decide how much of Control D becomes a Home Assistant surface and how much stays service-driven, giving you precise control without forcing unnecessary entity bloat.
+- The device model: the device registry stays compact by modeling the Control D instance and profiles as devices while leaving physical endpoints as entities only.
+- The service model: richer write operations belong in Home Assistant services so automations can stay expressive without depending on a wall of always-on switches.
 
-If your Home Assistant instance is exposed or compromised, DNS policy changes could be triggered through this integration. Protect Home Assistant accordingly with sound account, remote-access, and permission practices.
+This is a Home Assistant integration for real household and homelab workflows, not a Control D account-management console or a full mirror of every upstream API object.
 
 ## 🏗️ Development and architecture docs
 
@@ -240,6 +229,17 @@ Repository layout:
 - Discussions: <https://github.com/ccpk1/controld-manager-ha/discussions>
 - Pull requests: <https://github.com/ccpk1/controld-manager-ha/pulls>
 - Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+
+## 🛡️ Security and privacy notes
+
+Bridging DNS policy control into Home Assistant is powerful, and that power deserves a clear security posture.
+
+- Unofficial project: this repository is an independent community project and is not affiliated with, endorsed by, or supported by Control D.
+- Sensitive capability: the integration can modify Control D policy, so your Home Assistant security posture matters.
+- Redacted diagnostics: diagnostics are designed to remain useful without exposing sensitive data directly.
+- Cloud-backed integration: this is a `cloud_polling` integration, not a local Control D control plane.
+
+If your Home Assistant instance is exposed or compromised, DNS policy changes could be triggered through this integration. Protect Home Assistant accordingly with sound account, remote-access, and permission practices.
 
 ## 🔒 Security and support posture
 
