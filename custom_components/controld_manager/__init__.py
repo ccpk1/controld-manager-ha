@@ -34,7 +34,7 @@ from .models import (
 from .services import async_register_services
 
 ControlDManagerConfigEntry = ConfigEntry[ControlDManagerRuntime]
-CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)  # pylint: disable=invalid-name
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:

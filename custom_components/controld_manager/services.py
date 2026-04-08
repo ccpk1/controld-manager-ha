@@ -851,10 +851,12 @@ async def _async_load_rules_for_resolution(
             for profile_pk in profile_pks
         )
     )
+
+    # pylint: disable=too-many-lines
     return {
         profile_pk: (
-            integration_manager._normalize_rule_groups(detail.groups),
-            integration_manager._normalize_rules(detail.groups, detail.rules),
+            integration_manager.normalize_live_rule_groups(detail.groups),
+            integration_manager.normalize_live_rules(detail.groups, detail.rules),
         )
         for profile_pk, detail in zip(profile_pks, profile_details, strict=True)
     }

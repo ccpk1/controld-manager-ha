@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-controld-manager"
-version = "0.1.0"
-description = "Home Assistant custom integration scaffold for Control D Manager"
+version = "1.0.0"
+description = "Home Assistant custom integration for Control D Manager"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = []

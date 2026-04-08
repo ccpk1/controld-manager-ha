@@ -191,6 +191,21 @@ class IntegrationManager(BaseManager):
                 text_lines.append(f"{filter_row.filter_pk}, {filter_row.name}")
         return items, "\n".join(text_lines)
 
+    def normalize_live_rule_groups(
+        self,
+        groups_payload: tuple[dict[str, Any], ...],
+    ) -> dict[str, ControlDRuleGroup]:
+        """Return normalized rule-group rows for read-only live resolution."""
+        return self._normalize_rule_groups(groups_payload)
+
+    def normalize_live_rules(
+        self,
+        groups_payload: tuple[dict[str, Any], ...],
+        rules_payload: tuple[dict[str, Any], ...],
+    ) -> dict[str, ControlDRule]:
+        """Return normalized rule rows for read-only live resolution."""
+        return self._normalize_rules(groups_payload, rules_payload)
+
     async def _async_build_service_catalog(
         self, profile_pks: frozenset[str]
     ) -> tuple[list[JsonValueType], str]:

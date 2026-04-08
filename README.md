@@ -2,7 +2,7 @@
 [![Quality Gates](https://img.shields.io/github/actions/workflow/status/ccpk1/controld-manager-ha/lint-validation.yaml?branch=main&label=Quality%20Gates)](https://github.com/ccpk1/controld-manager-ha/actions/workflows/lint-validation.yaml)
 [![License](https://img.shields.io/static/v1?label=License&message=GPL-3.0&color=1E88E5&labelColor=555)](https://github.com/ccpk1/controld-manager-ha/blob/main/LICENSE)
 [![HACS Custom](https://img.shields.io/static/v1?label=HACS&message=custom&color=1E88E5&labelColor=555)](https://github.com/custom-components/hacs)
-[![Version](https://img.shields.io/static/v1?label=Version&message=0.1.0&color=1E88E5&labelColor=555)](https://github.com/ccpk1/controld-manager-ha)
+[![Version](https://img.shields.io/static/v1?label=Version&message=1.0.0&color=1E88E5&labelColor=555)](https://github.com/ccpk1/controld-manager-ha)
 [![Stars](https://img.shields.io/github/stars/ccpk1/controld-manager-ha?color=1E88E5&labelColor=555)](https://github.com/ccpk1/controld-manager-ha/stargazers)
 
 ![Control D Manager for Home Assistant](https://github.com/ccpk1/controld-manager-ha/blob/main/docs/assets/3-1%20Logo%20Rectangle%402x.png)
