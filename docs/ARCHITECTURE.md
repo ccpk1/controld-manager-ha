@@ -170,6 +170,14 @@ Required posture:
 
 Rationale: analytics and configuration data have different freshness requirements and should not share one oversized poll path.
 
+Current implementation note:
+
+- today the integration only runs one active configuration-sync poller
+- that poller currently fetches `/users`, `/profiles`, `/devices?last_activity=1`, the global profile-option catalog, and per-profile detail payloads for filters, external filters, options, default rule, and any enabled service or rule surfaces
+- the saved `profile_analytics` and `endpoint_analytics` interval values remain runtime placeholders only; they are not backed by separate pollers yet and should not be treated as active behavior
+- the only clearly supportable split from the currently proven API surface is an endpoint-activity poller built around `/devices?last_activity=1`, because endpoint last-activity and router-client inventory change faster than rules, options, and catalogs
+- a separate profile-analytics poller should not be enabled until the repository proves a real analytics endpoint or payload family that is distinct from the current configuration inventory reads
+
 ## Entity architecture
 
 The initial entity surface must stay conservative and high value.

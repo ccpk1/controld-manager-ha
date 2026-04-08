@@ -150,3 +150,121 @@ async def test_options_flow_edit_profile_exposes_external_filters_and_hides_auto
     assert field_names[-2] == "endpoint_sensors_enabled"
     assert field_names[-1] == "endpoint_inactivity_threshold_minutes"
     assert "auto_enable_service_switches" not in field_names
+
+
+async def test_reauth_flow_updates_api_token(hass) -> None:
+    """The reauth flow should update the stored API token."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "old-token", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.controld_manager.config_flow.ControlDAPIClient.async_get_instance_identity",
+        new=AsyncMock(
+            return_value=ControlDUser(
+                instance_id="user-123",
+                account_pk="pk-1",
+                display_name="Control D Home",
+            )
+        ),
+    ):
+        result = await entry.start_reauth_flow(hass)
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "reauth_confirm"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_API_TOKEN: "new-token"}
+        )
+
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_API_TOKEN] == "new-token"
+
+
+async def test_reauth_flow_rejects_different_instance(hass) -> None:
+    """The reauth flow should abort when the token belongs to another instance."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "old-token", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.controld_manager.config_flow.ControlDAPIClient.async_get_instance_identity",
+        new=AsyncMock(
+            return_value=ControlDUser(
+                instance_id="user-999",
+                account_pk="pk-9",
+                display_name="Other Home",
+            )
+        ),
+    ):
+        result = await entry.start_reauth_flow(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_API_TOKEN: "other-token"}
+        )
+
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "wrong_account"
+
+
+async def test_reconfigure_flow_updates_api_token(hass) -> None:
+    """The reconfigure flow should validate and update the stored API token."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "old-token", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.controld_manager.config_flow.ControlDAPIClient.async_get_instance_identity",
+        new=AsyncMock(
+            return_value=ControlDUser(
+                instance_id="user-123",
+                account_pk="pk-1",
+                display_name="Control D Home",
+            )
+        ),
+    ):
+        result = await entry.start_reconfigure_flow(hass)
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "reconfigure"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_API_TOKEN: "new-token"}
+        )
+
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data[CONF_API_TOKEN] == "new-token"
+
+
+async def test_options_flow_integration_settings_only_exposes_active_poller(
+    hass,
+) -> None:
+    """The integration settings form should only expose active polling controls."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+
+    flow = ControlDManagerOptionsFlow(entry)
+    flow.hass = hass
+
+    result = await flow.async_step_integration_settings()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert isinstance(schema, vol.Schema)
+    field_names = [marker.schema for marker in schema.schema]
+    assert field_names == ["configuration_sync_interval_minutes"]

@@ -4710,10 +4710,23 @@ async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> N
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
 
     assert diagnostics["entry"][CONF_API_TOKEN] == "**REDACTED**"
-    assert diagnostics["runtime"] == {
-        "instance_id": "user-123",
+    assert diagnostics["options"] == {}
+    assert diagnostics["runtime"]["instance_id"] == "user-123"
+    assert diagnostics["runtime"]["refresh_intervals"] == {
+        "configuration_sync_minutes": 15,
+        "profile_analytics_minutes": 5,
+        "endpoint_analytics_minutes": 5,
+    }
+    assert diagnostics["runtime"]["registry_summary"] == {
         "profile_count": 2,
         "endpoint_count": 3,
         "discovered_endpoint_count": 2,
         "router_client_count": 1,
+        "service_category_count": 0,
+        "filter_profile_count": 2,
+        "service_profile_count": 2,
+        "rule_profile_count": 2,
+        "option_profile_count": 2,
     }
+    assert diagnostics["runtime"]["profiles"]["profile-1"]["name"] == "Primary"
+    assert diagnostics["runtime"]["profiles"]["profile-1"]["filter_count"] == 5

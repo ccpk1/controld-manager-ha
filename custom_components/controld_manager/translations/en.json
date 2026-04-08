@@ -7,6 +7,20 @@
         "data": {
           "api_token": "API token"
         }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect to Control D",
+        "description": "Enter a new Control D API token for this existing config entry.",
+        "data": {
+          "api_token": "API token"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Control D",
+        "description": "Enter a Control D API token and confirm that it still belongs to this same Control D instance.",
+        "data": {
+          "api_token": "API token"
+        }
       }
     },
     "error": {
@@ -16,7 +30,8 @@
     },
     "abort": {
       "already_configured": "This Control D instance is already configured.",
-      "not_implemented": "Control D Manager is currently a scaffold-only repository. The production config flow has not been implemented yet."
+      "not_implemented": "Control D Manager is currently a scaffold-only repository. The production config flow has not been implemented yet.",
+      "wrong_account": "The provided API token belongs to a different Control D instance."
     }
   },
   "options": {
@@ -59,14 +74,10 @@
       "integration_settings": {
         "title": "Integration settings",
         "data": {
-          "configuration_sync_interval_minutes": "Configuration sync interval (minutes)",
-          "profile_analytics_interval_minutes": "Profile analytics interval (minutes)",
-          "endpoint_analytics_interval_minutes": "Endpoint analytics interval (minutes)"
+          "configuration_sync_interval_minutes": "Configuration sync interval (minutes)"
         },
         "data_description": {
-          "configuration_sync_interval_minutes": "How often to fetch structural changes such as new rules and services. Default: 15.",
-          "profile_analytics_interval_minutes": "How often to fetch high-level query and block counts. Default: 5.",
-          "endpoint_analytics_interval_minutes": "How often to fetch granular device-level telemetry. Default: 5."
+          "configuration_sync_interval_minutes": "How often to fetch the currently implemented Control D inventory and configuration data, including profiles, endpoints, filters, options, default rules, and any enabled service or rule catalogs. Default: 15."
         }
       }
     }

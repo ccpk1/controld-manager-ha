@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import timedelta
 from typing import Any, ClassVar, Self
@@ -28,14 +29,12 @@ from .const import (
     CONF_ALLOWED_SERVICE_CATEGORIES,
     CONF_API_TOKEN,
     CONF_CONFIGURATION_SYNC_INTERVAL_MINUTES,
-    CONF_ENDPOINT_ANALYTICS_INTERVAL_MINUTES,
     CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
     CONF_ENDPOINT_SENSORS_ENABLED,
     CONF_ENTRY_NAME,
     CONF_EXPOSE_EXTERNAL_FILTERS,
     CONF_EXPOSED_CUSTOM_RULES,
     CONF_MANAGED_IN_HOME_ASSISTANT,
-    CONF_PROFILE_ANALYTICS_INTERVAL_MINUTES,
     DEFAULT_TITLE,
     DOMAIN,
     MAX_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
@@ -59,11 +58,11 @@ from .models import (
 
 
 async def _async_validate_input(
-    flow: ControlDManagerConfigFlow, user_input: dict[str, Any]
+    config_flow: ControlDManagerConfigFlow, api_token: str
 ) -> ControlDUser:
-    """Validate config-flow user input against the Control D API."""
-    session = async_get_clientsession(flow.hass)
-    client = ControlDAPIClient(user_input[CONF_API_TOKEN], session)
+    """Validate one API token against the Control D API."""
+    session = async_get_clientsession(config_flow.hass)
+    client = ControlDAPIClient(api_token, session)
     return await client.async_get_instance_identity()
 
 
@@ -94,19 +93,59 @@ class ControlDManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             return DEFAULT_TITLE
         return f"{DEFAULT_TITLE} {entry_count + 1}"
 
+    async def _async_handle_token_submit(
+        self, api_token: str, *, reauth: bool, reconfigure: bool
+    ) -> ConfigFlowResult | None:
+        """Validate one submitted API token and finish the flow if valid."""
+        user = await _async_validate_input(self, api_token)
+        await self.async_set_unique_id(user.instance_id)
+
+        if reauth:
+            self._abort_if_unique_id_mismatch(reason="wrong_account")
+            return self.async_update_reload_and_abort(
+                self._get_reauth_entry(),
+                data_updates={CONF_API_TOKEN: api_token},
+            )
+
+        if reconfigure:
+            self._abort_if_unique_id_mismatch(reason="wrong_account")
+            return self.async_update_reload_and_abort(
+                self._get_reconfigure_entry(),
+                data_updates={CONF_API_TOKEN: api_token},
+            )
+
+        self._abort_if_unique_id_configured()
+        title = self._get_entry_title()
+        return self.async_create_entry(
+            title=title,
+            data={CONF_API_TOKEN: api_token, CONF_ENTRY_NAME: title},
+        )
+
+    def _async_show_token_form(
+        self, step_id: str, errors: dict[str, str]
+    ) -> ConfigFlowResult:
+        """Show one token-entry form."""
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=STEP_USER_DATA_SCHEMA,
+            errors=errors,
+        )
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Authenticate once and create one entry per Control D instance."""
         if user_input is None:
-            return self.async_show_form(
-                step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors={}
-            )
+            return self._async_show_token_form("user", {})
 
         errors: dict[str, str] = {}
 
         try:
-            user = await _async_validate_input(self, user_input)
+            result = await self._async_handle_token_submit(
+                user_input[CONF_API_TOKEN],
+                reauth=False,
+                reconfigure=False,
+            )
         except ControlDApiAuthError:
             errors["base"] = TRANS_KEY_INVALID_AUTH
         except ControlDApiConnectionError:
@@ -114,17 +153,69 @@ class ControlDManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         except ControlDApiResponseError, ValueError:
             errors["base"] = TRANS_KEY_UNKNOWN
         else:
-            await self.async_set_unique_id(user.instance_id)
-            self._abort_if_unique_id_configured()
-            title = self._get_entry_title()
-            return self.async_create_entry(
-                title=title,
-                data={**user_input, CONF_ENTRY_NAME: title},
-            )
+            if result is not None:
+                return result
 
-        return self.async_show_form(
-            step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
-        )
+        return self._async_show_token_form("user", errors)
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """Handle initiation of reauthentication."""
+        del entry_data
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm and process a token reauthentication."""
+        if user_input is None:
+            return self._async_show_token_form("reauth_confirm", {})
+
+        errors: dict[str, str] = {}
+        try:
+            result = await self._async_handle_token_submit(
+                user_input[CONF_API_TOKEN],
+                reauth=True,
+                reconfigure=False,
+            )
+        except ControlDApiAuthError:
+            errors["base"] = TRANS_KEY_INVALID_AUTH
+        except ControlDApiConnectionError:
+            errors["base"] = TRANS_KEY_CANNOT_CONNECT
+        except ControlDApiResponseError, ValueError:
+            errors["base"] = TRANS_KEY_UNKNOWN
+        else:
+            if result is not None:
+                return result
+
+        return self._async_show_token_form("reauth_confirm", errors)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Reconfigure the existing Control D instance credentials."""
+        if user_input is None:
+            return self._async_show_token_form("reconfigure", {})
+
+        errors: dict[str, str] = {}
+        try:
+            result = await self._async_handle_token_submit(
+                user_input[CONF_API_TOKEN],
+                reauth=False,
+                reconfigure=True,
+            )
+        except ControlDApiAuthError:
+            errors["base"] = TRANS_KEY_INVALID_AUTH
+        except ControlDApiConnectionError:
+            errors["base"] = TRANS_KEY_CANNOT_CONNECT
+        except ControlDApiResponseError, ValueError:
+            errors["base"] = TRANS_KEY_UNKNOWN
+        else:
+            if result is not None:
+                return result
+
+        return self._async_show_token_form("reconfigure", errors)
 
 
 class ControlDManagerOptionsFlow(OptionsFlow):
@@ -345,12 +436,6 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                 configuration_sync_interval=timedelta(
                     minutes=user_input[CONF_CONFIGURATION_SYNC_INTERVAL_MINUTES]
                 ),
-                profile_analytics_interval=timedelta(
-                    minutes=user_input[CONF_PROFILE_ANALYTICS_INTERVAL_MINUTES]
-                ),
-                endpoint_analytics_interval=timedelta(
-                    minutes=user_input[CONF_ENDPOINT_ANALYTICS_INTERVAL_MINUTES]
-                ),
             )
             await self._async_apply_updated_options()
             return await self.async_step_init()
@@ -363,34 +448,6 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                         CONF_CONFIGURATION_SYNC_INTERVAL_MINUTES,
                         default=int(
                             self._options.configuration_sync_interval.total_seconds()
-                            // 60
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=int(MIN_REFRESH_INTERVAL.total_seconds() // 60),
-                            max=int(MAX_REFRESH_INTERVAL.total_seconds() // 60),
-                            mode=selector.NumberSelectorMode.BOX,
-                            step=1,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_PROFILE_ANALYTICS_INTERVAL_MINUTES,
-                        default=int(
-                            self._options.profile_analytics_interval.total_seconds()
-                            // 60
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=int(MIN_REFRESH_INTERVAL.total_seconds() // 60),
-                            max=int(MAX_REFRESH_INTERVAL.total_seconds() // 60),
-                            mode=selector.NumberSelectorMode.BOX,
-                            step=1,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_ENDPOINT_ANALYTICS_INTERVAL_MINUTES,
-                        default=int(
-                            self._options.endpoint_analytics_interval.total_seconds()
                             // 60
                         ),
                     ): selector.NumberSelector(

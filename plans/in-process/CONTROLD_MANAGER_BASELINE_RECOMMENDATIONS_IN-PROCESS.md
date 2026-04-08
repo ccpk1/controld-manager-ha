@@ -310,6 +310,28 @@ Latest Phase 6 status update:
 - the user guide and service metadata now document create and delete rule
 	targeting, duplicate-hostname rejection, grouped-rule creation, and the
 	current backend limitation around rule comment persistence
+- config flow now includes explicit reauthentication and reconfiguration paths
+	for API-token replacement, and both flows verify that the submitted token
+	still belongs to the same immutable Control D instance before updating the
+	entry
+- runtime refresh auth failures now raise Home Assistant reauth signals instead
+	of being downgraded to generic update failures, which restores the expected
+	credential-repair lifecycle for expired or replaced tokens
+- the account menu now has a clean credential lifecycle: reauthentication
+	repairs expired or replaced tokens in place, and reconfiguration lets you
+	revalidate the same Control D instance without deleting the entry
+- diagnostics now report refresh intervals, live sync-status fields,
+	registry-summary counts, and per-profile policy scope while still redacting
+	entry secrets
+- the user-facing guide now documents the current credential-repair path,
+	diagnostics scope, and the single active polling control
+- coordinator refresh failures now log one unavailable transition and one
+	recovery transition instead of repeating the same outage log on every failed
+	poll
+- the integration settings form now exposes only the active configuration-sync
+	interval and bounds it to 5 through 60 minutes; the saved
+	profile-analytics and endpoint-analytics intervals remain runtime
+	placeholders until separate pollers are actually implemented
 - focused and full-repository validation now pass for the current slice,
 	including `ruff`, `mypy`, and `pytest tests/ -v`
 
@@ -323,6 +345,11 @@ Next recommended Phase 6 slice:
 - decide whether the first follow-on options slice should prioritize
 	service-only support for additional proven advanced options or move selected
 	controls into entity exposure once their read semantics are fully closed
+- polling-split analysis is closed for this slice: keep one
+	configuration-sync poller for profiles, filters, options, rules, and
+	catalogs, and only consider a later second endpoint-activity poller around
+	`/devices?last_activity=1`; do not ship a separate profile-analytics poller
+	until a distinct analytics endpoint or payload family is actually proven
 
 Phase 5 required research closeouts before code for that specific surface starts:
 

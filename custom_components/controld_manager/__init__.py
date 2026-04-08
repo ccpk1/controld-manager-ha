@@ -4,15 +4,11 @@ from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 
 from .api import (
-    ControlDApiAuthError,
     ControlDAPIClient,
-    ControlDApiConnectionError,
-    ControlDApiResponseError,
 )
 from .const import (
     CONF_API_TOKEN,
@@ -88,12 +84,7 @@ async def async_setup_entry(
     coordinator = ControlDManagerDataUpdateCoordinator(hass, entry, runtime)
     runtime.coordinator = coordinator
 
-    try:
-        await coordinator.async_config_entry_first_refresh()
-    except ControlDApiAuthError as err:
-        raise ConfigEntryAuthFailed("Control D authentication failed") from err
-    except (ControlDApiConnectionError, ControlDApiResponseError) as err:
-        raise ConfigEntryNotReady("Unable to initialize Control D runtime") from err
+    await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = runtime
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

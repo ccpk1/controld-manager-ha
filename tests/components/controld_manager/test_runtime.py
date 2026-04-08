@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from aiohttp import ClientSession
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.update_coordinator import UpdateFailed
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.controld_manager.api.client import ControlDAPIClient
+from custom_components.controld_manager.api.exceptions import (
+    ControlDApiAuthError,
+    ControlDApiConnectionError,
+)
 from custom_components.controld_manager.config_flow import ControlDManagerOptionsFlow
 from custom_components.controld_manager.const import CONF_API_TOKEN, DOMAIN
 from custom_components.controld_manager.managers import (
@@ -494,6 +502,114 @@ async def test_setup_entry_creates_entry_scoped_runtime(hass) -> None:
     assert runtime.sync_status.consecutive_failed_refreshes == 0
 
 
+async def test_coordinator_refresh_raises_auth_failed_for_reauth(hass) -> None:
+    """Auth failures during refresh should trigger Home Assistant reauth."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value"},
+        unique_id="user-123",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_sample_inventory()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(return_value=ControlDProfileDetailPayload()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    runtime = entry.runtime_data
+    with (
+        patch.object(
+            runtime.client,
+            "async_get_inventory",
+            new=AsyncMock(side_effect=ControlDApiAuthError("bad token")),
+        ),
+        pytest.raises(ConfigEntryAuthFailed),
+    ):
+        await runtime.active_coordinator._async_update_data()
+
+
+async def test_coordinator_logs_unavailable_once_and_recovery(hass, caplog) -> None:
+    """Connection failures should log once, then log recovery on success."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value"},
+        unique_id="user-123",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_sample_inventory()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(return_value=ControlDProfileDetailPayload()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    runtime = entry.runtime_data
+    caplog.set_level(logging.INFO)
+    with (
+        patch.object(
+            runtime.client,
+            "async_get_inventory",
+            new=AsyncMock(
+                side_effect=[
+                    ControlDApiConnectionError("offline-1"),
+                    ControlDApiConnectionError("offline-2"),
+                    _sample_inventory(),
+                ]
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_detail",
+            new=AsyncMock(return_value=ControlDProfileDetailPayload()),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_option_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        for _ in range(2):
+            with pytest.raises(UpdateFailed):
+                await runtime.active_coordinator._async_update_data()
+        await runtime.active_coordinator._async_update_data()
+
+    unavailable_logs = [
+        record.message
+        for record in caplog.records
+        if "API is unavailable" in record.message
+    ]
+    recovery_logs = [
+        record.message
+        for record in caplog.records
+        if "API is back online" in record.message
+    ]
+    assert len(unavailable_logs) == 1
+    assert len(recovery_logs) == 1
+
+
 async def test_options_flow_saves_typed_profile_policy(hass) -> None:
     """The options flow should persist compact per-profile policy settings."""
     entry = MockConfigEntry(
@@ -574,15 +690,13 @@ async def test_options_flow_saves_typed_profile_policy(hass) -> None:
             flow_id,
             {
                 "configuration_sync_interval_minutes": 20,
-                "profile_analytics_interval_minutes": 6,
-                "endpoint_analytics_interval_minutes": 7,
             },
         )
 
     assert result["type"] == "menu"
     assert entry.options["configuration_sync_interval_minutes"] == 20
-    assert entry.options["profile_analytics_interval_minutes"] == 6
-    assert entry.options["endpoint_analytics_interval_minutes"] == 7
+    assert entry.options["profile_analytics_interval_minutes"] == 5
+    assert entry.options["endpoint_analytics_interval_minutes"] == 5
     assert entry.options["profile_policies"]["profile-1"] == {
         "managed_in_home_assistant": True,
         "expose_external_filters": True,

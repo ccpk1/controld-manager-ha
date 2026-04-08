@@ -34,6 +34,23 @@ This guide reflects the current implemented behavior in this repository.
 If authentication succeeds, Home Assistant creates one config entry for that
 Control D instance.
 
+## Credential updates and repair
+
+If your Control D API token is rotated, revoked, or expires, the integration
+now raises a normal Home Assistant reauthentication request instead of staying
+in a generic failed-refresh state.
+
+Use these entry actions when needed:
+
+- Reconfigure
+	Revalidates the existing config entry against the same Control D instance.
+- Reauthenticate
+	Repairs the stored API token in place after Home Assistant detects an auth
+	failure during refresh.
+
+Both paths verify that the submitted token still belongs to the same immutable
+Control D instance before the entry is updated.
+
 ## Options flow
 
 After setup, open the integration options. The main menu has two paths:
@@ -75,14 +92,27 @@ so the service-category and custom-rule exposure decisions stay grouped
 together.
 
 ### Integration settings
-This form controls refresh cadence only.
+This form controls the currently active refresh cadence.
 
 - Configuration sync interval (minutes)
-	Controls how often structural account data is refreshed.
-- Profile analytics interval (minutes)
-	Reserved for higher-level analytics refresh cadence.
-- Endpoint analytics interval (minutes)
-	Reserved for endpoint telemetry refresh cadence.
+	Controls how often the integration refreshes the currently implemented
+	Control D inventory and configuration data. The allowed range is 5 to 60
+	minutes.
+
+The integration does not currently expose separate polling controls for
+endpoint activity or profile analytics because those are not separate runtime
+pollers yet.
+
+## Diagnostics and availability
+
+Home Assistant diagnostics for a Control D config entry include redacted entry
+data plus a runtime summary of refresh intervals, sync status, registry counts,
+and per-profile policy scope.
+
+When the refresh path fails repeatedly, the integration records one unavailable
+transition and one recovery transition instead of logging the same outage on
+every poll. The Account Status entity still reflects the live health of the
+refresh path.
 
 ## Devices and entities
 

@@ -34,16 +34,16 @@ rules:
   config-entry-unloading: done
   docs-data-update: todo
   entity-unavailable: done
-  log-when-unavailable: todo
+  log-when-unavailable: done
   parallel-updates: done
-  reauthentication-flow: todo
-  reconfigure-flow: todo
+  reauthentication-flow: done
+  reconfigure-flow: done
 
   # Gold
   devices: done
   diagnostics:
     status: done
-    comment: A placeholder diagnostics surface exists and will need expansion once runtime data exists.
+    comment: Diagnostics now include refresh state, registry summary, and per-profile policy scope with redaction.
   discovery:
     status: exempt
     comment: No discovery contract has been defined for this cloud integration.

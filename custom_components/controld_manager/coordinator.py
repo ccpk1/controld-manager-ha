@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import (
@@ -40,6 +41,29 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
         )
         self._runtime = runtime
         self._refresh_trigger = "scheduled"
+        self._unavailable_logged = False
+
+    def _raise_update_failure(
+        self,
+        message: str,
+        err: Exception,
+        *,
+        auth_failed: bool = False,
+    ) -> ControlDRegistry:
+        """Record one refresh failure and raise the Home Assistant-facing error."""
+        sync_status = self._runtime.sync_status
+        sync_status.last_refresh_error = message
+        sync_status.consecutive_failed_refreshes += 1
+        if not self.last_update_success:
+            self.async_update_listeners()
+
+        if not auth_failed and not self._unavailable_logged:
+            LOGGER.info("The API is unavailable: %s", message)
+            self._unavailable_logged = True
+
+        if auth_failed:
+            raise ConfigEntryAuthFailed(message) from err
+        raise UpdateFailed(message) from err
 
     async def async_run_manual_refresh(self) -> None:
         """Run an on-demand refresh and label it as manual."""
@@ -121,35 +145,33 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
                 )
             registry = self._runtime.managers.integration.build_registry(inventory)
         except ControlDApiAuthError as err:
-            sync_status.last_refresh_error = "Control D authentication failed"
-            sync_status.consecutive_failed_refreshes += 1
-            if not self.last_update_success:
-                self.async_update_listeners()
-            raise UpdateFailed("Control D authentication failed") from err
-        except ControlDApiConnectionError as err:
-            sync_status.last_refresh_error = "Unable to reach the Control D API"
-            sync_status.consecutive_failed_refreshes += 1
-            if not self.last_update_success:
-                self.async_update_listeners()
-            raise UpdateFailed("Unable to reach the Control D API") from err
-        except ControlDApiResponseError as err:
-            sync_status.last_refresh_error = (
-                "Unexpected response from the Control D API"
+            return self._raise_update_failure(
+                "Control D authentication failed",
+                err,
+                auth_failed=True,
             )
-            sync_status.consecutive_failed_refreshes += 1
-            if not self.last_update_success:
-                self.async_update_listeners()
-            raise UpdateFailed("Unexpected response from the Control D API") from err
+        except ControlDApiConnectionError as err:
+            return self._raise_update_failure(
+                "Unable to reach the Control D API",
+                err,
+            )
+        except ControlDApiResponseError as err:
+            return self._raise_update_failure(
+                "Unexpected response from the Control D API",
+                err,
+            )
         except ValueError as err:
-            sync_status.last_refresh_error = "Control D inventory normalization failed"
-            sync_status.consecutive_failed_refreshes += 1
-            if not self.last_update_success:
-                self.async_update_listeners()
-            raise UpdateFailed("Control D inventory normalization failed") from err
+            return self._raise_update_failure(
+                "Control D inventory normalization failed",
+                err,
+            )
         finally:
             sync_status.refresh_in_progress = False
 
         self._runtime.registry = registry
+        if self._unavailable_logged:
+            LOGGER.info("The API is back online")
+            self._unavailable_logged = False
         sync_status.last_successful_refresh = datetime.now(UTC)
         sync_status.last_refresh_error = None
         sync_status.consecutive_failed_refreshes = 0
