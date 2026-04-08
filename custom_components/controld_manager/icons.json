@@ -35,14 +35,14 @@
       "profile_service": {
         "default": "mdi:application-cog",
         "state": {
-          "Off": "mdi:application-off-outline",
-          "Blocked": "mdi:application-remove-outline",
-          "Bypassed": "mdi:application-check-outline",
-          "Redirected": "mdi:transit-connection-variant"
+          "Off": "mdi:cog-off-outline",
+          "Blocked": "mdi:cog-stop",
+          "Bypassed": "mdi:cog-play",
+          "Redirected": "mdi:airplane-cog"
         }
       },
       "profile_default_rule": {
-        "default": "mdi:shield-cog",
+        "default": "mdi:shield-edit",
         "state": {
           "Blocking": "mdi:shield-remove",
           "Bypassing": "mdi:shield-check",
@@ -104,6 +104,12 @@
     },
     "set_service_state": {
       "service": "mdi:application-cog"
+    },
+    "set_option_state": {
+      "service": "mdi:tune"
+    },
+    "set_default_rule_state": {
+      "service": "mdi:shield-edit"
     },
     "get_catalog": {
       "service": "mdi:format-list-bulleted"

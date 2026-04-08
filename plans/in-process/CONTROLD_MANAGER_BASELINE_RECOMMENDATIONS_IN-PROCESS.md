@@ -162,8 +162,9 @@ Remaining follow-on scope after the current slice:
 - broader advanced profile options remain intentionally partial and should stay
 	in a follow-on slice until their read and write semantics are fully closed
 - `ecs_subnet` remains intentionally excluded from entity exposure
-- TTL-style options remain intentionally limited to advanced toggle behavior
-	rather than editable numeric controls
+- TTL-style options remain intentionally limited to toggle entities, while the
+	shared option service may still supply explicit numeric values where the
+	browser-backed contract is already proven
 - the next implementation phase should focus on the shared service layer,
 	including renaming profile pause or resume terminology to Control D-aligned
 	enable profile and disable profile behavior
@@ -193,7 +194,7 @@ Remaining follow-on scope after the current slice:
 - [x] Define one shared target-resolution helper path for services so every
 	service can safely resolve exactly one loaded config entry and one or more
 	profiles without duplicating logic.
-- [ ] Keep routine entity actions on native Home Assistant entity services and
+- [x] Keep routine entity actions on native Home Assistant entity services and
 	add only a small set of integration services where they provide real value,
 	such as bulk targeting, profile-wide actions, or operations that are not a
 	natural fit for a single entity.
@@ -258,6 +259,56 @@ Current Phase 6 service posture:
 	root `icon.png` and `logo.png` plus the complete
 	`custom_components/controld_manager/brand/` bundle for light, dark, and `@2x`
 		variants
+
+Latest Phase 6 status update:
+
+- rule entities already expose `expires_at` and `expired`, and expired-rule
+	interaction remains a reconciliation path rather than a dedicated service
+	error path
+- engineering and user documentation now record that rule comment updates do
+	not persist reliably and appear to be a backend limitation, not an
+	integration-only defect
+- custom integration translation assets now cover `profile_service` state text
+	for `Off`, `Blocked`, `Bypassed`, and `Redirected`, which unblocks
+	translation-backed service icons from `icons.json`
+- invalid MDI icon names discovered during the service-icon audit have been
+	replaced with valid catalog entries, and the icon set should now remain
+	translation-driven instead of runtime hard-coded
+- entity translation keys now follow centralized `TRANS_KEY_ENTITY_*`
+	constants instead of inline string literals across the active platform files
+- shared instance and profile entity bases no longer pre-set `_attr_name =
+	None`, which restores Home Assistant's normal translation-key naming path for
+	device-attached entities such as the paused profile switch
+- the last open service-posture review item is now closed and the repository
+	explicitly keeps the existing custom services because they provide bulk
+	targeting, hidden-item targeting, or richer mutation semantics than a single
+	entity action
+- `set_option_state` now ships as the bulk option-write surface, including
+	select-style off or on behavior, raw-value or label resolution for supported
+	selects, and numeric TTL writes for the proven `ttl_blck`, `ttl_spff`, and
+	`ttl_pass` field options
+- `set_default_rule_state` now ships as the bulk default-rule mutation surface
+	for `Blocking`, `Bypassing`, and `Redirecting`
+- `b_resp` is intentionally limited to the proven values `0.0.0.0 / ::`,
+	`NXDOMAIN`, and `REFUSED`, while `Custom` and `Branded` remain blocked until
+	their full write and read semantics are intentionally implemented
+- `ecs_subnet` is intentionally limited to service-path support for `No ECS`,
+	`Auto`, and explicit off behavior, while `Custom` remains blocked in product
+	code until the repository chooses to implement its extra `custom_value`
+	contract
+- focused and full-repository validation now pass for the current slice,
+	including `ruff`, `mypy`, and `pytest tests/ -v`
+
+Next recommended Phase 6 slice:
+
+- treat custom-rule create and delete services as unblocked follow-on work,
+	because the browser-backed contract is already recorded in
+	`docs/ENGINEERING_FINDINGS.md`; when implemented, they should reuse the same
+	rule-mutation helper path as `set_rule_state` wherever the shared hostname,
+	action, comment, and TTL logic overlaps
+- decide whether the first follow-on options slice should prioritize
+	service-only support for additional proven advanced options or move selected
+	controls into entity exposure once their read semantics are fully closed
 
 Phase 5 required research closeouts before code for that specific surface starts:
 

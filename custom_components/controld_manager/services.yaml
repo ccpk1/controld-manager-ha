@@ -234,6 +234,96 @@ set_service_state:
       selector:
         text:
 
+set_option_state:
+  name: Set option state
+  description: Set one or more Control D profile options across the selected profiles. Use Enabled for toggle-style options, or to turn select-style options off and on with their default value when available, otherwise the first available choice. Use Value when you need to choose a specific select-style option value or set a numeric TTL-style field option.
+  fields:
+    profile_id:
+      required: false
+      example: |
+        ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0", "9f2a6c4e1b7d43a8a0c5e2f1d9b6c3a7"]
+      selector:
+        device:
+          multiple: true
+          filter:
+            - integration: controld_manager
+              model: Profile
+    profile_name:
+      required: false
+      example: |
+        ["Primary", "Kids"]
+      selector:
+        text:
+    option_id:
+      required: false
+      example: |
+        ["safesearch", "ai_malware"]
+      selector:
+        text:
+    option_name:
+      required: false
+      example: |
+        ["Safe Search", "AI Malware Filter"]
+      selector:
+        text:
+    enabled:
+      required: false
+      selector:
+        boolean:
+    value:
+      required: false
+      example: "20"
+      selector:
+        text:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
+set_default_rule_state:
+  name: Set default rule state
+  description: Set the Control D default-rule behavior to Blocking, Bypassing, or Redirecting across the selected profiles.
+  fields:
+    profile_id:
+      required: false
+      example: |
+        ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0", "9f2a6c4e1b7d43a8a0c5e2f1d9b6c3a7"]
+      selector:
+        device:
+          multiple: true
+          filter:
+            - integration: controld_manager
+              model: Profile
+    profile_name:
+      required: false
+      example: |
+        ["Primary", "Kids"]
+      selector:
+        text:
+    mode:
+      required: true
+      example: "Bypassing"
+      selector:
+        select:
+          options:
+            - "Blocking"
+            - "Bypassing"
+            - "Redirecting"
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
 get_catalog:
   name: Get catalog
   description: Return a copyable catalog of filters, services, rules, or profile options for the selected Control D scope.

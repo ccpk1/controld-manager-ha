@@ -234,6 +234,15 @@ class ControlDProfileOption:
                 return choice.value
         return None
 
+    def choice_value_for_input(self, candidate: str) -> str | None:
+        """Return the upstream value for one label or raw upstream value."""
+        if candidate == "Off":
+            return None
+        for choice in self.choices:
+            if choice.label == candidate or choice.value == candidate:
+                return choice.value
+        return None
+
 
 @dataclass(slots=True, frozen=True)
 class ControlDDefaultRule:

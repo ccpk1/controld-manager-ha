@@ -150,14 +150,23 @@
     "enable_profiles_failed": {
       "message": "Unable to enable the targeted Control D profiles."
     },
+    "set_default_rules_failed": {
+      "message": "Unable to update the selected Control D default rule settings."
+    },
     "set_filters_failed": {
       "message": "Unable to update the targeted Control D filters."
+    },
+    "set_options_failed": {
+      "message": "Unable to update the selected Control D profile options."
     },
     "set_rules_failed": {
       "message": "Unable to update the targeted Control D rules."
     },
     "rule_mutation_required": {
       "message": "Provide at least one rule mutation field such as Enabled, Mode, Comment, Cancel expiration, Expiration duration, or Expire at."
+    },
+    "option_mutation_required": {
+      "message": "Provide a compatible mutation for the selected Control D profile options."
     },
     "set_services_failed": {
       "message": "Unable to update the targeted Control D services."
@@ -405,6 +414,70 @@
         }
       }
     },
+    "set_option_state": {
+      "name": "Set option state",
+      "description": "Set one or more Control D profile options across the selected profiles. Use Enabled for toggle-style options, or to turn select-style options off and on with their default value when available, otherwise the first available choice. Use Value when you need to choose a specific select-style option value.",
+      "fields": {
+        "profile_id": {
+          "name": "Select a profile",
+          "description": "Required unless you provide Profile names. Select one or more managed Control D profiles by ID. If Profile IDs and Profile names are both provided, Profile IDs take precedence."
+        },
+        "profile_name": {
+          "name": "Profile names",
+          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids."
+        },
+        "option_id": {
+          "name": "Option IDs",
+          "description": "Required unless you provide Option names. Enter one or more raw Control D option IDs, such as safesearch,ai_malware. If Option IDs and Option names are both provided, Option IDs take precedence."
+        },
+        "option_name": {
+          "name": "Option names",
+          "description": "Required unless you provide Option IDs. Enter one or more user-facing Control D option titles, separated by commas, such as Safe Search,AI Malware Filter."
+        },
+        "enabled": {
+          "name": "Enabled",
+          "description": "Optional. Use this for toggle-style options, or to turn select-style options off and on with their default value when available, otherwise the first available choice."
+        },
+        "value": {
+          "name": "Value",
+          "description": "Optional. Use this when targeting select-style options and you need an explicit value. Enter the exact Home Assistant option label, such as Off, Standard, or Aggressive."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "set_default_rule_state": {
+      "name": "Set default rule state",
+      "description": "Set the Control D default-rule behavior to Blocking, Bypassing, or Redirecting across the selected profiles.",
+      "fields": {
+        "profile_id": {
+          "name": "Select a profile",
+          "description": "Required unless you provide Profile names. Select one or more managed Control D profiles by ID. If Profile IDs and Profile names are both provided, Profile IDs take precedence."
+        },
+        "profile_name": {
+          "name": "Profile names",
+          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Set the selected profiles to Blocking, Bypassing, or Redirecting as their default query action."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
     "get_catalog": {
       "name": "Get catalog",
       "description": "Return a copyable catalog of filters, services, rules, or profile options for the selected Control D scope.",
@@ -510,6 +583,12 @@
         }
       },
       "profile_service": {
+        "state": {
+          "Off": "Off",
+          "Blocked": "Blocked",
+          "Bypassed": "Bypassed",
+          "Redirected": "Redirected"
+        },
         "state_attributes": {
           "purpose": {
             "name": "Purpose",
@@ -558,7 +637,7 @@
     },
     "switch": {
       "paused": {
-        "name": "Disable",
+        "name": "Disable (Temporary)",
         "state_attributes": {
           "purpose": {
             "name": "Purpose",

@@ -37,13 +37,18 @@ from custom_components.controld_manager.const import (
     SERVICE_FIELD_FILTER_NAME,
     SERVICE_FIELD_MINUTES,
     SERVICE_FIELD_MODE,
+    SERVICE_FIELD_OPTION_ID,
+    SERVICE_FIELD_OPTION_NAME,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
     SERVICE_FIELD_RULE_IDENTITY,
     SERVICE_FIELD_SERVICE_ID,
     SERVICE_FIELD_SERVICE_NAME,
+    SERVICE_FIELD_VALUE,
     SERVICE_GET_CATALOG,
+    SERVICE_SET_DEFAULT_RULE_STATE,
     SERVICE_SET_FILTER_STATE,
+    SERVICE_SET_OPTION_STATE,
     SERVICE_SET_RULE_STATE,
     SERVICE_SET_SERVICE_STATE,
 )
@@ -126,6 +131,22 @@ OPTION_CATALOG = [
         "description": "DNS record TTL (in seconds) when blocking.",
         "type": "field",
         "default_value": 10,
+        "info_url": "https://docs.controld.com/docs/ttl-overrides",
+    },
+    {
+        "PK": "ttl_spff",
+        "title": "Redirect TTL",
+        "description": "DNS record TTL (in seconds) when redirecting.",
+        "type": "field",
+        "default_value": 20,
+        "info_url": "https://docs.controld.com/docs/ttl-overrides",
+    },
+    {
+        "PK": "ttl_pass",
+        "title": "Bypass TTL",
+        "description": "DNS record TTL (in seconds) when bypassing.",
+        "type": "field",
+        "default_value": 300,
         "info_url": "https://docs.controld.com/docs/ttl-overrides",
     },
     {
@@ -401,6 +422,7 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert hass.states.get(endpoint_count_entity_id).name == "Account Endpoint count"
     assert hass.states.get(profile_count_entity_id).name == "Account Profile count"
     assert hass.states.get(sync_button_entity_id).name == "Account Sync now"
+    assert hass.states.get(pause_switch_entity_id).name == "Primary Disable (Temporary)"
     assert (
         hass.states.get(status_entity_id).attributes["last_successful_refresh"]
         is not None
@@ -2571,6 +2593,658 @@ async def test_set_service_state_rejects_entity_targets(hass) -> None:
             },
             blocking=True,
         )
+
+
+async def test_set_option_state_supports_toggle_option_id(hass) -> None:
+    """The option service should resolve toggle options by raw Control D key."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_option = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_OPTION_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: ["Primary", "Secondary"],
+            SERVICE_FIELD_OPTION_ID: "safesearch",
+            SERVICE_FIELD_ENABLED: True,
+        },
+        blocking=True,
+    )
+
+    assert runtime.client.async_set_profile_option.await_count == 2
+    assert all(
+        call.args[1] == "safesearch"
+        and call.kwargs["enabled"] is True
+        and call.kwargs["value"] is None
+        for call in runtime.client.async_set_profile_option.await_args_list
+    )
+
+
+async def test_set_option_state_supports_select_option_name(hass) -> None:
+    """The option service should resolve select options by user-facing title."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    profile_device = dr.async_get(hass).async_get_device(
+        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    )
+    assert profile_device is not None
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_option = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_OPTION_STATE,
+        {
+            SERVICE_FIELD_PROFILE_ID: [profile_device.id],
+            SERVICE_FIELD_OPTION_NAME: ["ai malware filter"],
+            SERVICE_FIELD_VALUE: "Aggressive",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_option.assert_awaited_once_with(
+        "profile-1",
+        "ai_malware",
+        enabled=True,
+        value="0.5",
+    )
+
+
+async def test_set_option_state_supports_turning_select_option_off(hass) -> None:
+    """The option service should allow select-style options to be disabled."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_option = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_OPTION_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_OPTION_ID: "ai_malware",
+            SERVICE_FIELD_ENABLED: False,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_option.assert_awaited_once_with(
+        "profile-1",
+        "ai_malware",
+        enabled=False,
+        value=None,
+    )
+
+
+async def test_set_option_state_supports_select_option_default_enable(hass) -> None:
+    """The option service should re-enable select options with a fallback value."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_option = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+    runtime.registry.options_by_profile["profile-1"]["ai_malware"] = replace(
+        runtime.registry.options_by_profile["profile-1"]["ai_malware"],
+        current_value_key=None,
+    )
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_OPTION_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_OPTION_ID: "ai_malware",
+            SERVICE_FIELD_ENABLED: True,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_option.assert_awaited_once_with(
+        "profile-1",
+        "ai_malware",
+        enabled=True,
+        value="0.9",
+    )
+
+
+async def test_set_option_state_supports_ecs_subnet_value(hass) -> None:
+    """The option service should support the proven ECS select values."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_option = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_OPTION_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_OPTION_ID: "ecs_subnet",
+            SERVICE_FIELD_VALUE: "Auto",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_option.assert_awaited_once_with(
+        "profile-1",
+        "ecs_subnet",
+        enabled=True,
+        value="1",
+    )
+
+
+async def test_set_option_state_supports_proven_block_response_value(hass) -> None:
+    """The option service should support the proven block response values."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_option = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_OPTION_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_OPTION_ID: "b_resp",
+            SERVICE_FIELD_VALUE: "NXDOMAIN",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_option.assert_awaited_once_with(
+        "profile-1",
+        "b_resp",
+        enabled=True,
+        value="3",
+    )
+
+
+async def test_set_option_state_supports_raw_block_response_value(hass) -> None:
+    """The option service should also accept raw upstream select values."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_option = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_OPTION_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_OPTION_ID: "b_resp",
+            SERVICE_FIELD_VALUE: "5",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_option.assert_awaited_once_with(
+        "profile-1",
+        "b_resp",
+        enabled=True,
+        value="5",
+    )
+
+
+async def test_set_option_state_supports_raw_ecs_subnet_value(hass) -> None:
+    """The option service should accept raw upstream ECS values too."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_option = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_OPTION_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_OPTION_ID: "ecs_subnet",
+            SERVICE_FIELD_VALUE: "1",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_option.assert_awaited_once_with(
+        "profile-1",
+        "ecs_subnet",
+        enabled=True,
+        value="1",
+    )
+
+
+async def test_set_option_state_supports_turning_ecs_subnet_off(hass) -> None:
+    """The option service should allow ECS subnet to be disabled."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_option = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_OPTION_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_OPTION_ID: "ecs_subnet",
+            SERVICE_FIELD_ENABLED: False,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_option.assert_awaited_once_with(
+        "profile-1",
+        "ecs_subnet",
+        enabled=False,
+        value=None,
+    )
+
+
+async def test_set_option_state_rejects_unimplemented_block_response_values(
+    hass,
+) -> None:
+    """The option service should reject unresolved block response branches."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_OPTION_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_OPTION_ID: "b_resp",
+                SERVICE_FIELD_VALUE: "Custom",
+            },
+            blocking=True,
+        )
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_OPTION_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_OPTION_ID: "b_resp",
+                SERVICE_FIELD_VALUE: "Branded",
+            },
+            blocking=True,
+        )
+
+
+async def test_set_option_state_rejects_unproven_ecs_subnet_value(hass) -> None:
+    """The option service should reject the unresolved ECS Custom value."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_OPTION_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_OPTION_ID: "ecs_subnet",
+                SERVICE_FIELD_VALUE: "Custom",
+            },
+            blocking=True,
+        )
+
+
+async def test_set_option_state_supports_numeric_field_value(hass) -> None:
+    """The option service should allow explicit numeric values for TTL fields."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_option = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_OPTION_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_OPTION_ID: "ttl_blck",
+            SERVICE_FIELD_VALUE: 20,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_option.assert_awaited_once_with(
+        "profile-1",
+        "ttl_blck",
+        enabled=True,
+        value="20",
+    )
+
+
+@pytest.mark.parametrize(
+    ("option_id", "seconds"),
+    (("ttl_spff", 25), ("ttl_pass", 600)),
+)
+async def test_set_option_state_supports_other_numeric_ttl_fields(
+    hass, option_id: str, seconds: int
+) -> None:
+    """The option service should support the other numeric TTL fields."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_option = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_OPTION_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_OPTION_ID: option_id,
+            SERVICE_FIELD_VALUE: seconds,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_option.assert_awaited_once_with(
+        "profile-1",
+        option_id,
+        enabled=True,
+        value=str(seconds),
+    )
+
+
+async def test_set_option_state_rejects_numeric_field_value_when_disabled(hass) -> None:
+    """The option service should reject conflicting disable plus value writes."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_OPTION_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_OPTION_ID: "ttl_spff",
+                SERVICE_FIELD_ENABLED: False,
+                SERVICE_FIELD_VALUE: 20,
+            },
+            blocking=True,
+        )
+
+
+async def test_set_option_state_prefers_option_ids_over_names(hass) -> None:
+    """The option service should use raw option IDs before names."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_option = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_OPTION_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_OPTION_ID: ["safesearch"],
+            SERVICE_FIELD_OPTION_NAME: ["not-a-real-option"],
+            SERVICE_FIELD_ENABLED: False,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_option.assert_awaited_once_with(
+        "profile-1",
+        "safesearch",
+        enabled=False,
+        value=None,
+    )
+
+
+async def test_set_option_state_requires_mutation_field(hass) -> None:
+    """The option service should require Enabled or Value."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_OPTION_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_OPTION_ID: ["safesearch"],
+            },
+            blocking=True,
+        )
+
+
+async def test_set_option_state_rejects_unknown_option_name(hass) -> None:
+    """The option service should reject an unknown option title."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_OPTION_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_OPTION_NAME: "not-a-real-option",
+                SERVICE_FIELD_ENABLED: True,
+            },
+            blocking=True,
+        )
+
+
+async def test_set_default_rule_state_updates_targeted_profiles(hass) -> None:
+    """The default-rule service should bulk update the selected profiles."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_default_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_DEFAULT_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: ["Primary", "Secondary"],
+            SERVICE_FIELD_MODE: "Redirecting",
+        },
+        blocking=True,
+    )
+
+    assert runtime.client.async_set_profile_default_rule.await_count == 2
+    assert all(
+        call.kwargs["action_do"] == 3 and call.kwargs["via"] == "LOCAL"
+        for call in runtime.client.async_set_profile_default_rule.await_args_list
+    )
+
+
+async def test_set_default_rule_state_prefers_config_entry_id_over_name(hass) -> None:
+    """The default-rule service should use config_entry_id before entry name."""
+    entry_one = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-one", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry_two = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-two", "entry_name": "Control D Cabin"},
+        unique_id="user-456",
+        title="Control D Cabin",
+    )
+    entry_one.add_to_hass(hass)
+    entry_two.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(
+                side_effect=[
+                    _inventory("user-123", "profile-1"),
+                    _inventory("user-456", "profile-1"),
+                ]
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry_one.entry_id)
+        await hass.async_block_till_done()
+        if entry_two.state is ConfigEntryState.NOT_LOADED:
+            assert await hass.config_entries.async_setup(entry_two.entry_id)
+            await hass.async_block_till_done()
+
+    entry_one.runtime_data.client.async_set_profile_default_rule = AsyncMock()
+    entry_one.runtime_data.coordinator.async_refresh = AsyncMock()
+    entry_two.runtime_data.client.async_set_profile_default_rule = AsyncMock()
+    entry_two.runtime_data.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_DEFAULT_RULE_STATE,
+        {
+            "config_entry_id": entry_one.entry_id,
+            "config_entry_name": "Control D Cabin",
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_MODE: "Blocking",
+        },
+        blocking=True,
+    )
+
+    entry_one.runtime_data.client.async_set_profile_default_rule.assert_awaited_once()
+    entry_two.runtime_data.client.async_set_profile_default_rule.assert_not_awaited()
 
 
 async def test_set_rule_state_supports_raw_rule_identity(hass) -> None:

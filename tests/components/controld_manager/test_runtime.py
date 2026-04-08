@@ -52,6 +52,7 @@ OPTION_CATALOG = (
         "default_value": {
             "0": "0.0.0.0 / ::",
             "3": "NXDOMAIN",
+            "5": "REFUSED",
         },
         "info_url": "https://docs.controld.com/docs/blocked-query-response",
     },
@@ -62,6 +63,30 @@ OPTION_CATALOG = (
         "type": "field",
         "default_value": 10,
         "info_url": "https://docs.controld.com/docs/ttl-overrides",
+    },
+    {
+        "PK": "ttl_spff",
+        "title": "Redirect TTL",
+        "description": "DNS record TTL (in seconds) when redirecting.",
+        "type": "field",
+        "default_value": 20,
+        "info_url": "https://docs.controld.com/docs/ttl-overrides",
+    },
+    {
+        "PK": "ttl_pass",
+        "title": "Bypass TTL",
+        "description": "DNS record TTL (in seconds) when bypassing.",
+        "type": "field",
+        "default_value": 300,
+        "info_url": "https://docs.controld.com/docs/ttl-overrides",
+    },
+    {
+        "PK": "ecs_subnet",
+        "title": "EDNS Client Subnet",
+        "description": "Override the EDNS Client Subnet for this profile.",
+        "type": "dropdown",
+        "default_value": ["No ECS", "Auto", "Custom"],
+        "info_url": "https://docs.controld.com/docs/ecs-custom-subnet",
     },
 )
 
@@ -184,6 +209,7 @@ def test_integration_manager_preserves_filter_fallback_and_service_modes() -> No
                 options=(
                     {"PK": "safesearch", "value": 1},
                     {"PK": "ai_malware", "value": 0.9},
+                    {"PK": "ecs_subnet", "value": 1},
                     {"PK": "ttl_blck", "value": 11},
                 ),
                 default_rule={"do": 1, "status": 1},
@@ -220,6 +246,8 @@ def test_integration_manager_preserves_filter_fallback_and_service_modes() -> No
     service_row = registry.services_by_profile["profile-1"]["truthsocial"]
     default_rule_row = registry.default_rules_by_profile["profile-1"]
     option_row = registry.options_by_profile["profile-1"]["ai_malware"]
+    block_response_row = registry.options_by_profile["profile-1"]["b_resp"]
+    ecs_row = registry.options_by_profile["profile-1"]["ecs_subnet"]
     toggle_row = registry.options_by_profile["profile-1"]["safesearch"]
     ttl_row = registry.options_by_profile["profile-1"]["ttl_blck"]
     assert filter_row.effective_level_slug == "porn"
@@ -227,6 +255,14 @@ def test_integration_manager_preserves_filter_fallback_and_service_modes() -> No
     assert service_row.current_mode == "Blocked"
     assert default_rule_row.current_mode == "Bypassing"
     assert option_row.current_select_option == "Minimal"
+    assert block_response_row.select_options == (
+        "Off",
+        "0.0.0.0 / ::",
+        "NXDOMAIN",
+        "REFUSED",
+    )
+    assert ecs_row.entity_kind == "select"
+    assert ecs_row.select_options == ("Off", "No ECS", "Auto")
     assert toggle_row.is_enabled is True
     assert ttl_row.entity_kind == "toggle"
     assert ttl_row.default_value_key == "10"

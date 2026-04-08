@@ -589,12 +589,25 @@ class IntegrationManager(BaseManager):
         payload: dict[str, Any],
     ) -> tuple[ControlDProfileOptionChoice, ...]:
         """Normalize selectable choices for one option payload."""
+        option_pk = payload.get("PK")
         default_value = payload.get("default_value")
         if isinstance(default_value, dict):
+            if option_pk == "b_resp":
+                return tuple(
+                    ControlDProfileOptionChoice(value=str(value), label=str(label))
+                    for value, label in default_value.items()
+                    if value in {"0", "3", "5"} and isinstance(label, str)
+                )
             return tuple(
                 ControlDProfileOptionChoice(value=str(value), label=str(label))
                 for value, label in default_value.items()
                 if isinstance(label, str)
+            )
+        if option_pk == "ecs_subnet" and isinstance(default_value, list):
+            return tuple(
+                ControlDProfileOptionChoice(value=str(index), label=label)
+                for index, label in enumerate(default_value[:2])
+                if isinstance(label, str) and label
             )
         return ()
 

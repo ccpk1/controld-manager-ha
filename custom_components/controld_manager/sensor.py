@@ -22,6 +22,9 @@ from .const import (
     ATTR_STATS_ENDPOINT,
     PURPOSE_INSTANCE_STATUS,
     PURPOSE_INSTANCE_SUMMARY,
+    TRANS_KEY_ENTITY_ENDPOINT_COUNT,
+    TRANS_KEY_ENTITY_PROFILE_COUNT,
+    TRANS_KEY_ENTITY_STATUS,
 )
 from .entity import ControlDManagerInstanceEntity
 from .models import ControlDManagerRuntime
@@ -72,7 +75,7 @@ class ControlDManagerStatusSensor(ControlDManagerInstanceEntity, SensorEntity):
     """Expose the current account and polling status."""
 
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_translation_key = "status"
+    _attr_translation_key = TRANS_KEY_ENTITY_STATUS
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _purpose = PURPOSE_INSTANCE_STATUS
 
@@ -129,7 +132,7 @@ class ControlDManagerStatusSensor(ControlDManagerInstanceEntity, SensorEntity):
 class ControlDManagerProfileCountSensor(ControlDManagerInstanceEntity, SensorEntity):
     """Expose the current number of discovered profiles."""
 
-    _attr_translation_key = "profile_count"
+    _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_COUNT
     _purpose = PURPOSE_INSTANCE_SUMMARY
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
@@ -146,7 +149,7 @@ class ControlDManagerProfileCountSensor(ControlDManagerInstanceEntity, SensorEnt
 class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEntity):
     """Expose the current number of discovered endpoints."""
 
-    _attr_translation_key = "endpoint_count"
+    _attr_translation_key = TRANS_KEY_ENTITY_ENDPOINT_COUNT
     _purpose = PURPOSE_INSTANCE_SUMMARY
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:

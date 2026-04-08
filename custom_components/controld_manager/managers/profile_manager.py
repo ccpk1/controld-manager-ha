@@ -413,6 +413,111 @@ class ProfileManager(BaseManager):
 
         self._schedule_runtime_refresh()
 
+    async def async_set_profile_options_state(
+        self,
+        profile_options: dict[str, frozenset[str]],
+        *,
+        enabled: bool | None,
+        value: str | None,
+    ) -> None:
+        """Update one or more profile options across targeted profiles."""
+        updated_options: list[
+            tuple[str, str, ControlDProfileOption, bool, str | None, str | None]
+        ] = []
+
+        for profile_pk, option_pks in profile_options.items():
+            for option_pk in option_pks:
+                option_row = self._option_row(profile_pk, option_pk)
+                if option_row.entity_kind == "toggle":
+                    if (
+                        option_row.option_type == "field"
+                        and option_row.option_pk in {"ttl_blck", "ttl_spff", "ttl_pass"}
+                        and value is not None
+                    ):
+                        next_enabled = True if enabled is None else enabled
+                        updated_options.append(
+                            (
+                                profile_pk,
+                                option_pk,
+                                option_row,
+                                next_enabled,
+                                value,
+                                value,
+                            )
+                        )
+                        continue
+                    assert enabled is not None
+                    payload_value, next_value_key = self._toggle_option_write_payload(
+                        option_row,
+                        enabled,
+                    )
+                    updated_options.append(
+                        (
+                            profile_pk,
+                            option_pk,
+                            option_row,
+                            enabled,
+                            payload_value,
+                            next_value_key,
+                        )
+                    )
+                    continue
+
+                if value is not None:
+                    selected_value = option_row.choice_value_for_input(value)
+                elif enabled is False:
+                    selected_value = None
+                else:
+                    selected_value = option_row.default_value_key
+                    if selected_value is None and option_row.choices:
+                        selected_value = option_row.choices[0].value
+                updated_options.append(
+                    (
+                        profile_pk,
+                        option_pk,
+                        option_row,
+                        selected_value is not None,
+                        selected_value,
+                        selected_value,
+                    )
+                )
+
+        await asyncio.gather(
+            *(
+                self.runtime.client.async_set_profile_option(
+                    profile_pk,
+                    option_pk,
+                    enabled=next_enabled,
+                    value=payload_value,
+                )
+                for (
+                    profile_pk,
+                    option_pk,
+                    _,
+                    next_enabled,
+                    payload_value,
+                    _,
+                ) in updated_options
+            )
+        )
+
+        for (
+            profile_pk,
+            option_pk,
+            option_row,
+            _,
+            _,
+            next_value_key,
+        ) in updated_options:
+            self._update_cached_option(
+                profile_pk,
+                option_pk,
+                option_row,
+                current_value_key=next_value_key,
+            )
+
+        self._schedule_runtime_refresh()
+
     async def async_set_profile_option_toggle(
         self, profile_pk: str, option_pk: str, enabled: bool
     ) -> None:
@@ -472,6 +577,38 @@ class ProfileManager(BaseManager):
             action_do=action_do,
             via=via,
         )
+        self._schedule_runtime_refresh()
+
+    async def async_set_default_rules_mode(
+        self, profile_pks: frozenset[str], mode: str
+    ) -> None:
+        """Set the default-rule mode across one or more targeted profiles."""
+        action_do, via = default_rule_action_from_mode(mode)
+        updated_default_rules: list[tuple[str, ControlDDefaultRule]] = [
+            (profile_pk, self._default_rule_row(profile_pk))
+            for profile_pk in profile_pks
+        ]
+
+        await asyncio.gather(
+            *(
+                self.runtime.client.async_set_profile_default_rule(
+                    profile_pk,
+                    action_do=action_do,
+                    via=via,
+                )
+                for profile_pk, _ in updated_default_rules
+            )
+        )
+
+        for profile_pk, default_rule_row in updated_default_rules:
+            self._update_cached_default_rule(
+                profile_pk,
+                default_rule_row,
+                enabled=True,
+                action_do=action_do,
+                via=via,
+            )
+
         self._schedule_runtime_refresh()
 
     async def async_set_rule_group_mode(

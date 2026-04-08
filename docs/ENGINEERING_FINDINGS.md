@@ -1790,26 +1790,31 @@ Observed writes and responses:
 - `PUT /profiles/{profile_id}/options/ecs_subnet`
   - `{"status":1,"value":"0"}` -> response `{"PK":"ecs_subnet","value":0}`
   - `{"status":1,"value":"1"}` -> response `{"PK":"ecs_subnet","value":1}`
+  - `{"status":1,"value":"2","custom_value":"1.1.1.1/24|a:b:c:d:e:f::/56"}`
+    -> browser-backed write captured for the `Custom` branch
   - `{"status":0}` -> response `{"PK":"ecs_subnet","value":0}`
 
 Observed consequence:
 
 - the `ecs_subnet` option is definitively part of the enabled-plus-value family
-- two upstream value mappings are now strongly indicated against the catalog
+- three upstream value mappings are now strongly indicated against the catalog
   label order:
   - `0 -> No ECS`
   - `1 -> Auto`
+  - `2 -> Custom`
+- the `Custom` branch requires an additional `custom_value` payload field
+  carrying the IPv4 and IPv6 CIDR pair as one pipe-delimited string
 - the disabled response currently collapses back to `value = 0`, which means
   the read model still needs repository-owned interpretation for `Off` versus
   `No ECS`
 
 Working interpretation:
 
-- `ecs_subnet` is close to implementation as an advanced select, but it still
-  has one unresolved edge:
+- `ecs_subnet` is now write-closed enough for service-path support of `No ECS`,
+  `Auto`, and the `Custom` branch when a caller can supply the required
+  `custom_value`
+- the remaining unresolved edge is on the read side:
   - whether `Off` is distinct from `No ECS` in the effective read model
-  - the write or read value for the remaining `Custom` catalog option is still
-    unproven
 - current product direction is to keep `ecs_subnet` out of entity exposure for
   now rather than ship a partially ambiguous control
 
@@ -2043,9 +2048,9 @@ These findings are strong enough to convert several planning topics from theory 
 - whether any remaining main profile-options controls still rely on uncaptured
   sibling endpoints beyond the now-proven `GET /profiles/{profile_id}/default`
   and `GET /profiles/{profile_id}/options`
-- what allowed values and disabled-state semantics exist for `ecs_subnet`,
-  where `0` and `1` are now proven but the remaining `Custom` mapping and
-  `Off` semantics are still incomplete
+- what disabled-state semantics exist for `ecs_subnet`, where the write-side
+  values `0`, `1`, and `2` are now proven but `Off` versus `No ECS` remains
+  incomplete on the read path
 - whether the sibling TTL-style options (`ttl_spff`, `ttl_pass`) follow the
   same enabled numeric-field contract now proven for `ttl_blck`
 - whether missing entries from `GET /profiles/{profile_id}/options` mean
@@ -2073,5 +2078,5 @@ These findings are strong enough to convert several planning topics from theory 
 12. Capture the direct blocked-card total query and one endpoint or profile sample where phishing is non-zero so the repository can confirm the exact `Benign Blocks` denominator and the full security-category mapping.
 13. Capture the remaining dedicated profile-option endpoints from the same web page so the repository can decide which controls belong in the next follow-on implementation slice and which should stay deferred.
 14. Capture one more `GET /profiles/{profile_id}/options` sample where a known toggle is off and one dropdown is unset so the repository can determine the semantics of missing entries in the sparse state list.
-15. Capture the remaining `ecs_subnet` `Custom` mapping and one sparse-state sample where the option is absent so the repository can close the `Off` versus `No ECS` interpretation.
+15. Capture one sparse-state sample where `ecs_subnet` is absent so the repository can close the `Off` versus `No ECS` interpretation on the read path.
 16. Capture the same enable and read behavior for `ttl_spff` and `ttl_pass` so the repository can confirm whether all TTL options share the numeric-field contract now proven for `ttl_blck`.

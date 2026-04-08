@@ -58,7 +58,6 @@ class ControlDManagerInstanceEntity(ControlDManagerEntity):
         self, config_entry: ConfigEntry[ControlDManagerRuntime], entity_key: str
     ) -> None:
         """Initialize an instance-scoped entity."""
-        self._attr_name = None
         super().__init__(config_entry, "instance", "system", entity_key)
 
     @property
@@ -78,7 +77,6 @@ class ControlDManagerProfileEntity(ControlDManagerEntity):
     ) -> None:
         """Initialize a profile-scoped entity."""
         self._profile_pk = profile_pk
-        self._attr_name = None
         super().__init__(config_entry, "profile", profile_pk, entity_key)
 
     @property

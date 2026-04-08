@@ -10,7 +10,12 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN, PURPOSE_INSTANCE_ACTION, TRANS_KEY_MANUAL_SYNC_FAILED
+from .const import (
+    DOMAIN,
+    PURPOSE_INSTANCE_ACTION,
+    TRANS_KEY_ENTITY_SYNC,
+    TRANS_KEY_MANUAL_SYNC_FAILED,
+)
 from .entity import ControlDManagerInstanceEntity
 from .models import ControlDManagerRuntime
 
@@ -66,7 +71,7 @@ def _build_button_entity(
 class ControlDManagerSyncButton(ControlDManagerInstanceEntity, ButtonEntity):
     """Run an on-demand account sync."""
 
-    _attr_translation_key = "sync"
+    _attr_translation_key = TRANS_KEY_ENTITY_SYNC
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _purpose = PURPOSE_INSTANCE_ACTION
 

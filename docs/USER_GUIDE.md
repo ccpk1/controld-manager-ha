@@ -1,5 +1,11 @@
 # Control D Manager user guide
 
+> [!WARNING]
+> First-release disclaimer: redirect-related controls have not been validated
+> end to end yet. Redirect modes and redirect-capable options may not work
+> reliably in this first release, so treat them as provisional until they have
+> been fully tested against live Control D behavior.
+
 ## Overview
 
 Control D Manager is a Home Assistant custom integration for managing one Control D
@@ -35,8 +41,6 @@ After setup, open the integration options. The main menu has two paths:
 - Configure a profile
 - Integration settings
 
-### Configure a profile
-
 This flow starts with a live profile selector and then opens one profile policy
 form for the selected profile.
 
@@ -70,9 +74,7 @@ The endpoint controls are intentionally kept at the bottom of the profile form
 so the service-category and custom-rule exposure decisions stay grouped
 together.
 
-
 ### Integration settings
-
 This form controls refresh cadence only.
 
 - Configuration sync interval (minutes)
@@ -236,7 +238,9 @@ The integration currently registers these Home Assistant services:
 
 - `controld_manager.disable_profile`
 - `controld_manager.enable_profile`
+- `controld_manager.set_default_rule_state`
 - `controld_manager.set_filter_state`
+- `controld_manager.set_option_state`
 - `controld_manager.set_rule_state`
 - `controld_manager.set_service_state`
 - `controld_manager.get_catalog`
@@ -292,6 +296,99 @@ Manual examples:
 	`profile_id: ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0"]`
 	`filter_name: ["Ads & Trackers"]`
 	`enabled: true`
+
+### Default rule state service
+
+`controld_manager.set_default_rule_state` updates the default query behavior
+for one or more selected profiles.
+
+- select profiles with `profile_id` or `profile_name`
+- `profile_id` wins if both profile selectors are provided
+- `config_entry_id` and `config_entry_name` remain optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+- `mode` is required and supports `Blocking`, `Bypassing`, and `Redirecting`
+
+Manual examples:
+
+- set one profile to redirect unmatched queries by default:
+	`profile_name: ["Primary"]`
+	`mode: "Redirecting"`
+
+### Option state service
+
+`controld_manager.set_option_state` updates one or more Control D profile
+options across the selected profiles.
+
+- select profiles with `profile_id` or `profile_name`
+- `profile_id` wins if both profile selectors are provided
+- select options with `option_id` or `option_name`
+- `option_id` wins if both option selectors are provided
+- `config_entry_id` and `config_entry_name` remain optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+- use `enabled` for toggle-style options such as Safe Search
+- for select-style options such as AI Malware Filter:
+	`enabled: false` turns the option off
+- for select-style options such as AI Malware Filter:
+	`enabled: true` turns the option back on using the upstream default value
+	when available, otherwise the first available level
+- `b_resp` is service-capable for the currently proven values `0.0.0.0 / ::`,
+	`NXDOMAIN`, and `REFUSED`
+- `ecs_subnet` is service-capable for the currently proven values `No ECS` and
+	`Auto`, and `enabled: false` turns it off
+- for numeric TTL-style field options such as Block TTL:
+	`value` sets the number of seconds and implies `enabled: true`
+- for numeric TTL-style field options such as Block TTL:
+	use `enabled: false` with no `value` to turn the option off
+- use `value` when you want a specific select-style option value instead of the
+	default
+- for supported select-style options, `value` may be either the Home Assistant
+	label or the raw upstream option value
+
+Manual examples:
+
+- turn AI Malware Filter off:
+	`profile_name: ["Primary"]`
+	`option_id: ["ai_malware"]`
+	`enabled: false`
+- turn AI Malware Filter back on using the default or first available level:
+	`profile_name: ["Primary"]`
+	`option_id: ["ai_malware"]`
+	`enabled: true`
+- set AI Malware Filter to a specific level:
+	`profile_name: ["Primary"]`
+	`option_id: ["ai_malware"]`
+	`value: "Aggressive"`
+- set Block Response to NXDOMAIN:
+	`profile_name: ["Primary"]`
+	`option_id: ["b_resp"]`
+	`value: "NXDOMAIN"`
+- set Block Response by raw upstream value:
+	`profile_name: ["Primary"]`
+	`option_id: ["b_resp"]`
+	`value: "5"`
+- `Custom` and `Branded` remain unsupported for Block Response until their
+	full implementation path is intentionally added
+- set EDNS Client Subnet to Auto:
+	`profile_name: ["Primary"]`
+	`option_id: ["ecs_subnet"]`
+	`value: "Auto"`
+- set EDNS Client Subnet by raw upstream value:
+	`profile_name: ["Primary"]`
+	`option_id: ["ecs_subnet"]`
+	`value: "1"`
+- turn EDNS Client Subnet off:
+	`profile_name: ["Primary"]`
+	`option_id: ["ecs_subnet"]`
+	`enabled: false`
+- `Custom` remains unsupported until its upstream mapping is captured
+- set Block TTL to 20 seconds:
+	`profile_name: ["Primary"]`
+	`option_id: ["ttl_blck"]`
+	`value: 20`
+- turn Block TTL off:
+	`profile_name: ["Primary"]`
+	`option_id: ["ttl_blck"]`
+	`enabled: false`
 
 ### Rule state service
 

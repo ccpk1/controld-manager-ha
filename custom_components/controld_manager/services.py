@@ -42,13 +42,18 @@ from .const import (
     SERVICE_FIELD_FILTER_NAME,
     SERVICE_FIELD_MINUTES,
     SERVICE_FIELD_MODE,
+    SERVICE_FIELD_OPTION_ID,
+    SERVICE_FIELD_OPTION_NAME,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
     SERVICE_FIELD_RULE_IDENTITY,
     SERVICE_FIELD_SERVICE_ID,
     SERVICE_FIELD_SERVICE_NAME,
+    SERVICE_FIELD_VALUE,
     SERVICE_GET_CATALOG,
+    SERVICE_SET_DEFAULT_RULE_STATE,
     SERVICE_SET_FILTER_STATE,
+    SERVICE_SET_OPTION_STATE,
     SERVICE_SET_RULE_STATE,
     SERVICE_SET_SERVICE_STATE,
     TRANS_KEY_CONFIG_ENTRY_NAME_AMBIGUOUS,
@@ -58,12 +63,16 @@ from .const import (
     TRANS_KEY_DISABLE_PROFILES_FAILED,
     TRANS_KEY_ENABLE_PROFILES_FAILED,
     TRANS_KEY_MULTIPLE_ENTRIES_LOADED,
+    TRANS_KEY_OPTION_MUTATION_REQUIRED,
+    TRANS_KEY_OPTION_VALUE_UNSUPPORTED,
     TRANS_KEY_PROFILE_TARGET_AMBIGUOUS,
     TRANS_KEY_PROFILE_TARGET_NOT_FOUND,
     TRANS_KEY_PROFILE_TARGET_REQUIRED,
     TRANS_KEY_RULE_MUTATION_REQUIRED,
     TRANS_KEY_SERVICE_MODE_REJECTED,
+    TRANS_KEY_SET_DEFAULT_RULES_FAILED,
     TRANS_KEY_SET_FILTERS_FAILED,
+    TRANS_KEY_SET_OPTIONS_FAILED,
     TRANS_KEY_SET_RULES_FAILED,
     TRANS_KEY_SET_SERVICES_FAILED,
     TRANS_KEY_WRONG_INTEGRATION_ENTRY,
@@ -77,6 +86,7 @@ from .models import (
 from .service_selectors import (
     _normalize_name,
     _resolve_selected_filter_pks,
+    _resolve_selected_option_pks,
     _resolve_selected_rule_identities,
     _resolve_selected_service_pks,
 )
@@ -112,6 +122,11 @@ _FILTER_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
 _SERVICE_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
     vol.Optional(SERVICE_FIELD_SERVICE_ID): vol.Any(cv.string, [cv.string]),
     vol.Optional(SERVICE_FIELD_SERVICE_NAME): vol.Any(cv.string, [cv.string]),
+}
+
+_OPTION_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
+    vol.Optional(SERVICE_FIELD_OPTION_ID): vol.Any(cv.string, [cv.string]),
+    vol.Optional(SERVICE_FIELD_OPTION_NAME): vol.Any(cv.string, [cv.string]),
 }
 
 _RULE_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
@@ -154,6 +169,26 @@ SET_SERVICE_STATE_SERVICE_SCHEMA = vol.Schema(
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         **_SERVICE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Required(SERVICE_FIELD_MODE): vol.In(service_mode_options()),
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+SET_OPTION_STATE_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        **_OPTION_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        vol.Optional(SERVICE_FIELD_ENABLED): cv.boolean,
+        vol.Optional(SERVICE_FIELD_VALUE): vol.Any(cv.string, cv.positive_int),
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+SET_DEFAULT_RULE_STATE_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        vol.Required(SERVICE_FIELD_MODE): vol.In(
+            ("Blocking", "Bypassing", "Redirecting")
+        ),
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
@@ -226,6 +261,24 @@ class ResolvedServiceServiceTarget:
     service_rows_by_profile: dict[str, dict[str, ControlDService]] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedOptionServiceTarget:
+    """Resolved service target for a profile-option mutation."""
+
+    entry: ControlDManagerConfigEntry
+    profile_options: dict[str, frozenset[str]]
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedRuleMutation:
+    """Normalized mutation values for a rule-state service call."""
+
+    enabled: bool | None
+    mode: str | None
+    comment: str | None
+    ttl: int | None
+
+
 async def async_register_services(hass: HomeAssistant) -> None:
     """Register shared Control D services."""
 
@@ -292,42 +345,16 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def async_handle_set_rule_state(call: ServiceCall) -> None:
         """Enable or disable one or more targeted Control D rules."""
-        enabled = call.data.get(SERVICE_FIELD_ENABLED)
-        mode = call.data.get(SERVICE_FIELD_MODE)
-        comment = call.data.get(SERVICE_FIELD_COMMENT)
-        cancel_expiration = call.data.get(SERVICE_FIELD_CANCEL_EXPIRATION, False)
-        expiration_duration = call.data.get(SERVICE_FIELD_EXPIRATION_DURATION)
-        expire_at = call.data.get(SERVICE_FIELD_EXPIRE_AT)
-        expires_at: int | None = None
-        if cancel_expiration:
-            expires_at = -1
-        elif expiration_duration is not None:
-            expires_at = int((dt_util.utcnow() + expiration_duration).timestamp())
-        if not cancel_expiration and expire_at is not None:
-            expires_at = int(dt_util.as_utc(expire_at).timestamp())
-
-        if (
-            enabled is None
-            and mode is None
-            and comment is None
-            and not cancel_expiration
-            and expiration_duration is None
-            and expire_at is None
-        ):
-            raise ServiceValidationError(
-                "Provide at least one rule mutation field",
-                translation_domain=DOMAIN,
-                translation_key=TRANS_KEY_RULE_MUTATION_REQUIRED,
-            )
+        mutation = _parse_rule_mutation(call)
         resolved_target = _resolve_rule_service_target(hass, call)
         try:
             profile_manager = resolved_target.entry.runtime_data.managers.profile
             await profile_manager.async_set_rules_state(
                 resolved_target.profile_rules,
-                enabled=enabled,
-                mode=mode,
-                ttl=expires_at,
-                comment=comment,
+                enabled=mutation.enabled,
+                mode=mutation.mode,
+                ttl=mutation.ttl,
+                comment=mutation.comment,
             )
         except (
             ControlDApiAuthError,
@@ -353,6 +380,54 @@ async def async_register_services(hass: HomeAssistant) -> None:
             ControlDApiConnectionError,
         ) as err:
             raise _ha_error(TRANS_KEY_SET_SERVICES_FAILED) from err
+
+    async def async_handle_set_option_state(call: ServiceCall) -> None:
+        """Set one or more targeted Control D options across selected profiles."""
+        enabled = call.data.get(SERVICE_FIELD_ENABLED)
+        value = call.data.get(SERVICE_FIELD_VALUE)
+        resolved_target = _resolve_option_service_target(hass, call)
+        normalized_value = _validate_option_mutation(
+            resolved_target.entry,
+            resolved_target.profile_options,
+            enabled=enabled,
+            value=value,
+        )
+        try:
+            profile_manager = resolved_target.entry.runtime_data.managers.profile
+            await profile_manager.async_set_profile_options_state(
+                resolved_target.profile_options,
+                enabled=enabled,
+                value=normalized_value,
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_SET_OPTIONS_FAILED) from err
+
+    async def async_handle_set_default_rule_state(call: ServiceCall) -> None:
+        """Set the default-rule mode across one or more targeted profiles."""
+        resolved_target = _resolve_profile_service_target(
+            hass,
+            call,
+            allow_entity_ids=False,
+            allow_profile_names=True,
+            profile_device_field=SERVICE_FIELD_PROFILE_ID,
+            require_profile_selector=True,
+        )
+        try:
+            profile_manager = resolved_target.entry.runtime_data.managers.profile
+            await profile_manager.async_set_default_rules_mode(
+                resolved_target.profile_pks,
+                call.data[SERVICE_FIELD_MODE],
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_SET_DEFAULT_RULES_FAILED) from err
 
     async def async_handle_get_catalog(call: ServiceCall) -> ServiceResponse:
         """Return a typed catalog response for one config entry scope."""
@@ -402,6 +477,20 @@ async def async_register_services(hass: HomeAssistant) -> None:
             SERVICE_SET_SERVICE_STATE,
             async_handle_set_service_state,
             schema=SET_SERVICE_STATE_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_OPTION_STATE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_OPTION_STATE,
+            async_handle_set_option_state,
+            schema=SET_OPTION_STATE_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_DEFAULT_RULE_STATE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_DEFAULT_RULE_STATE,
+            async_handle_set_default_rule_state,
+            schema=SET_DEFAULT_RULE_STATE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_GET_CATALOG):
         hass.services.async_register(
@@ -457,6 +546,188 @@ def _resolve_catalog_service_target(
         profile_pks=resolved_profiles.profile_pks,
         catalog_type=catalog_type,
     )
+
+
+def _resolve_option_service_target(
+    hass: HomeAssistant, call: ServiceCall
+) -> ResolvedOptionServiceTarget:
+    """Resolve an option mutation target across one or more profiles."""
+    resolved_profiles = _resolve_profile_service_target(
+        hass,
+        call,
+        allow_entity_ids=False,
+        allow_profile_names=True,
+        profile_device_field=SERVICE_FIELD_PROFILE_ID,
+        require_profile_selector=True,
+    )
+    requested_option_ids = _ensure_name_list(call.data.get(SERVICE_FIELD_OPTION_ID))
+    requested_option_names = _ensure_name_list(call.data.get(SERVICE_FIELD_OPTION_NAME))
+    profile_options = _resolve_selected_option_pks(
+        resolved_profiles.entry,
+        resolved_profiles.profile_pks,
+        requested_option_ids=requested_option_ids,
+        requested_option_titles=requested_option_names,
+    )
+    return ResolvedOptionServiceTarget(
+        entry=resolved_profiles.entry,
+        profile_options=profile_options,
+    )
+
+
+def _parse_rule_mutation(call: ServiceCall) -> ParsedRuleMutation:
+    """Normalize the supported rule-mutation fields for service handlers."""
+    enabled = call.data.get(SERVICE_FIELD_ENABLED)
+    mode = call.data.get(SERVICE_FIELD_MODE)
+    comment = call.data.get(SERVICE_FIELD_COMMENT)
+    cancel_expiration = call.data.get(SERVICE_FIELD_CANCEL_EXPIRATION, False)
+    expiration_duration = call.data.get(SERVICE_FIELD_EXPIRATION_DURATION)
+    expire_at = call.data.get(SERVICE_FIELD_EXPIRE_AT)
+    expires_at: int | None = None
+    if cancel_expiration:
+        expires_at = -1
+    elif expiration_duration is not None:
+        expires_at = int((dt_util.utcnow() + expiration_duration).timestamp())
+    if not cancel_expiration and expire_at is not None:
+        expires_at = int(dt_util.as_utc(expire_at).timestamp())
+
+    if (
+        enabled is None
+        and mode is None
+        and comment is None
+        and not cancel_expiration
+        and expiration_duration is None
+        and expire_at is None
+    ):
+        raise ServiceValidationError(
+            "Provide at least one rule mutation field",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_RULE_MUTATION_REQUIRED,
+        )
+
+    return ParsedRuleMutation(
+        enabled=enabled,
+        mode=mode,
+        comment=comment,
+        ttl=expires_at,
+    )
+
+
+def _validate_option_mutation(
+    entry: ControlDManagerConfigEntry,
+    profile_options: dict[str, frozenset[str]],
+    *,
+    enabled: bool | None,
+    value: str | int | None,
+) -> str | None:
+    """Validate that the requested option mutation fits the targeted options."""
+    if enabled is None and value is None:
+        raise ServiceValidationError(
+            "Provide at least one option mutation field",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_OPTION_MUTATION_REQUIRED,
+        )
+
+    normalized_value: str | None = None
+
+    for profile_pk, option_pks in profile_options.items():
+        for option_pk in option_pks:
+            option_row = entry.runtime_data.registry.options_by_profile[profile_pk][
+                option_pk
+            ]
+            if option_row.option_type == "field" and option_row.option_pk in {
+                "ttl_blck",
+                "ttl_spff",
+                "ttl_pass",
+            }:
+                if value is not None:
+                    if enabled is False:
+                        raise ServiceValidationError(
+                            (
+                                "The selected numeric Control D options do not "
+                                "accept Value when Enabled is false"
+                            ),
+                            translation_domain=DOMAIN,
+                            translation_key=TRANS_KEY_OPTION_MUTATION_REQUIRED,
+                        )
+                    normalized_value = _normalize_field_option_value(value)
+                    continue
+                if enabled is None:
+                    raise ServiceValidationError(
+                        (
+                            "The selected numeric Control D options require "
+                            "Enabled or Value"
+                        ),
+                        translation_domain=DOMAIN,
+                        translation_key=TRANS_KEY_OPTION_MUTATION_REQUIRED,
+                    )
+                continue
+            if option_row.entity_kind == "toggle":
+                if enabled is None:
+                    raise ServiceValidationError(
+                        (
+                            "The selected toggle-style Control D options require "
+                            "the Enabled field"
+                        ),
+                        translation_domain=DOMAIN,
+                        translation_key=TRANS_KEY_OPTION_MUTATION_REQUIRED,
+                    )
+                continue
+            if option_row.entity_kind == "select":
+                if value is None:
+                    if enabled is False:
+                        continue
+                    if enabled is True and (
+                        option_row.default_value_key is not None or option_row.choices
+                    ):
+                        continue
+                    raise ServiceValidationError(
+                        (
+                            "The selected select-style Control D options require "
+                            "the Value field unless you are turning them off or "
+                            "re-enabling them with the default value"
+                        ),
+                        translation_domain=DOMAIN,
+                        translation_key=TRANS_KEY_OPTION_MUTATION_REQUIRED,
+                    )
+                if option_row.choice_value_for_input(str(value)) is None:
+                    raise ServiceValidationError(
+                        "The selected Control D option value is not supported",
+                        translation_domain=DOMAIN,
+                        translation_key=TRANS_KEY_OPTION_VALUE_UNSUPPORTED,
+                    )
+                continue
+            raise ServiceValidationError(
+                (
+                    "The selected Control D options do not support Home "
+                    "Assistant mutations"
+                ),
+                translation_domain=DOMAIN,
+                translation_key=TRANS_KEY_OPTION_MUTATION_REQUIRED,
+            )
+
+    if normalized_value is not None:
+        return normalized_value
+    return str(value) if isinstance(value, int) else value
+
+
+def _normalize_field_option_value(value: str | int) -> str:
+    """Normalize one numeric field-option value from a service payload."""
+    normalized_value = str(value).strip()
+    try:
+        numeric_value = int(normalized_value)
+    except ValueError as err:
+        raise ServiceValidationError(
+            "The selected Control D option value is not supported",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_OPTION_VALUE_UNSUPPORTED,
+        ) from err
+    if numeric_value <= 0:
+        raise ServiceValidationError(
+            "The selected Control D option value is not supported",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_OPTION_VALUE_UNSUPPORTED,
+        )
+    return str(numeric_value)
 
 
 def _resolve_rule_service_target(

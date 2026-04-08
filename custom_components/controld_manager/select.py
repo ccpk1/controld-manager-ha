@@ -25,6 +25,11 @@ from .const import (
     TRANS_KEY_DEFAULT_RULE_MODE_UNSUPPORTED,
     TRANS_KEY_DEFAULT_RULE_NOT_FOUND,
     TRANS_KEY_DEFAULT_RULE_UPDATE_FAILED,
+    TRANS_KEY_ENTITY_PROFILE_DEFAULT_RULE,
+    TRANS_KEY_ENTITY_PROFILE_FILTER_MODE,
+    TRANS_KEY_ENTITY_PROFILE_OPTION,
+    TRANS_KEY_ENTITY_PROFILE_RULE_GROUP,
+    TRANS_KEY_ENTITY_PROFILE_SERVICE,
     TRANS_KEY_FILTER_MODE_UNSUPPORTED,
     TRANS_KEY_FILTER_MODE_UPDATE_FAILED,
     TRANS_KEY_FILTER_NOT_FOUND,
@@ -119,7 +124,7 @@ class ControlDManagerProfileFilterModeSelect(
 ):
     """Select surface for modal profile filters."""
 
-    _attr_translation_key = "profile_filter_mode"
+    _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_FILTER_MODE
     _purpose = PURPOSE_PROFILE_FILTER_MODE
 
     def __init__(
@@ -206,7 +211,7 @@ class ControlDManagerProfileServiceModeSelect(
 ):
     """Select surface for one dynamically exposed service."""
 
-    _attr_translation_key = "profile_service"
+    _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_SERVICE
     _purpose = PURPOSE_PROFILE_SERVICE
 
     def __init__(
@@ -281,7 +286,7 @@ class ControlDManagerProfileDefaultRuleSelect(
 ):
     """Select surface for one profile default rule."""
 
-    _attr_translation_key = "profile_default_rule"
+    _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_DEFAULT_RULE
     _purpose = PURPOSE_PROFILE_DEFAULT_RULE
 
     def __init__(
@@ -342,7 +347,7 @@ class ControlDManagerProfileDefaultRuleSelect(
 class ControlDManagerProfileRuleGroupSelect(ControlDManagerProfileEntity, SelectEntity):
     """Select surface for one exposed profile rule folder."""
 
-    _attr_translation_key = "profile_rule_group"
+    _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_RULE_GROUP
     _purpose = PURPOSE_PROFILE_RULE_GROUP
 
     def __init__(
@@ -412,7 +417,7 @@ class ControlDManagerProfileRuleGroupSelect(ControlDManagerProfileEntity, Select
 class ControlDManagerProfileOptionSelect(ControlDManagerProfileEntity, SelectEntity):
     """Select surface for one profile option."""
 
-    _attr_translation_key = "profile_option"
+    _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_OPTION
     _purpose = PURPOSE_PROFILE_OPTION
 
     def __init__(

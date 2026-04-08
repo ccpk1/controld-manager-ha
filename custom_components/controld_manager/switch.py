@@ -39,6 +39,10 @@ from .const import (
     TRANS_KEY_ENABLE_OPTION_FAILED,
     TRANS_KEY_ENABLE_PROFILE_FAILED,
     TRANS_KEY_ENABLE_RULE_FAILED,
+    TRANS_KEY_ENTITY_PAUSED,
+    TRANS_KEY_ENTITY_PROFILE_FILTER,
+    TRANS_KEY_ENTITY_PROFILE_OPTION,
+    TRANS_KEY_ENTITY_PROFILE_RULE,
 )
 from .entity import ControlDManagerProfileEntity
 from .models import (
@@ -107,7 +111,7 @@ def _build_switch_entity(
 class ControlDManagerProfilePausedSwitch(ControlDManagerProfileEntity, SwitchEntity):
     """Switch surface for the documented profile disable state."""
 
-    _attr_translation_key = "paused"
+    _attr_translation_key = TRANS_KEY_ENTITY_PAUSED
     _purpose = PURPOSE_PROFILE_PAUSE
 
     def __init__(
@@ -115,7 +119,6 @@ class ControlDManagerProfilePausedSwitch(ControlDManagerProfileEntity, SwitchEnt
     ) -> None:
         """Initialize the profile paused switch."""
         super().__init__(config_entry, profile_pk, "paused")
-        self._attr_name = "Disable"
 
     @property
     def is_on(self) -> bool:
@@ -174,7 +177,7 @@ class ControlDManagerProfilePausedSwitch(ControlDManagerProfileEntity, SwitchEnt
 class ControlDManagerProfileFilterSwitch(ControlDManagerProfileEntity, SwitchEntity):
     """Switch surface for one auto-created profile filter."""
 
-    _attr_translation_key = "profile_filter"
+    _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_FILTER
     _purpose = PURPOSE_PROFILE_FILTER
 
     def __init__(
@@ -256,7 +259,7 @@ class ControlDManagerProfileFilterSwitch(ControlDManagerProfileEntity, SwitchEnt
 class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntity):
     """Switch surface for one explicitly selected rule."""
 
-    _attr_translation_key = "profile_rule"
+    _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_RULE
     _purpose = PURPOSE_PROFILE_RULE
 
     def __init__(
@@ -362,7 +365,7 @@ class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntit
 class ControlDManagerProfileOptionSwitch(ControlDManagerProfileEntity, SwitchEntity):
     """Switch surface for one toggle-style profile option."""
 
-    _attr_translation_key = "profile_option"
+    _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_OPTION
     _purpose = PURPOSE_PROFILE_OPTION
 
     def __init__(
