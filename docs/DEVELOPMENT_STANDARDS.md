@@ -329,7 +329,7 @@ Critical rules:
 
 - service handlers must resolve one explicit config-entry scope
 - validate entry scope and loaded state before mutation calls
-- service target resolution must accept `entity_id`, `device_id`, and `config_entry_id` as first-class selectors
+- service target resolution must accept `config_entry_id` as a first-class selector and use the clearest explicit target model for the controlled surface, whether that is a typed service field, `device_id`, `entity_id`, or another integration-specific selector
 - service handlers must validate Home Assistant-facing input and then delegate to manager methods
 - services must reject ambiguous or mixed-instance targets with specific, translation-ready exceptions
 - paired disable and enable profile services should follow the Firewalla Local pattern: explicit target field, explicit timing validation, and translation-ready conflict errors for incompatible inputs

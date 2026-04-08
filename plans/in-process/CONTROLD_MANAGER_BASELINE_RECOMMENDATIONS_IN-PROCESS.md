@@ -317,21 +317,12 @@ Phase 6 standards audit note:
 
 - the current service surface is translation-ready, manager-owned, multi-entry
 	safe, and aligned with the repository's layer and terminology rules
-- one architecture gap remains open relative to
-	`docs/DEVELOPMENT_STANDARDS.md`: some profile-scoped custom services still
-	require explicit profile selectors instead of accepting first-class generic
-	`entity_id` and `device_id` targets; this should remain tracked as follow-on
-	service-target work rather than being treated as already complete
 
 Next recommended Phase 6 slice:
 
 - decide whether the first follow-on options slice should prioritize
 	service-only support for additional proven advanced options or move selected
 	controls into entity exposure once their read semantics are fully closed
-- decide whether to add one shared first-class `entity_id` and `device_id`
-	selector family for profile-scoped custom services so the runtime surface can
-	close the remaining service-target standards gap without reintroducing
-	duplicated service-resolution logic
 
 Phase 5 required research closeouts before code for that specific surface starts:
 

@@ -408,8 +408,8 @@
           "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids."
         },
         "hostname": {
-          "name": "Hostnames",
-          "description": "Required. Enter one or more hostnames to create as Control D rules, separated by commas, such as example.org,example.net."
+          "name": "Domains",
+          "description": "Required. Enter one or more Domain Names to create as Control D rules, separated by commas, such as example.org,example.net."
         },
         "rule_group_id": {
           "name": "Rule group ID",
