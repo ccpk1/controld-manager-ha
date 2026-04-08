@@ -788,10 +788,10 @@
       },
       "profile_service": {
         "state": {
-          "Off": "Off",
-          "Blocked": "Blocked",
-          "Bypassed": "Bypassed",
-          "Redirected": "Redirected"
+          "off": "Off",
+          "blocked": "Blocked",
+          "bypassed": "Bypassed",
+          "redirected": "Redirected"
         },
         "state_attributes": {
           "purpose": {
@@ -803,6 +803,11 @@
         }
       },
       "profile_default_rule": {
+        "state": {
+          "blocking": "Blocking",
+          "bypassing": "Bypassing",
+          "redirecting": "Redirecting"
+        },
         "state_attributes": {
           "purpose": {
             "name": "Purpose",

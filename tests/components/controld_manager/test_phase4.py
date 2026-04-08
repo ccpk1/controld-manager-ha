@@ -617,7 +617,7 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
         hass.states.get(ads_filter_entity_id).name == "Primary Filters / Ads & Trackers"
     )
     assert hass.states.get(ads_mode_entity_id).state == "Relaxed"
-    assert hass.states.get(default_rule_entity_id).state == "Bypassing"
+    assert hass.states.get(default_rule_entity_id).state == "bypassing"
 
 
 async def test_profile_analytics_sensors_are_created_for_each_profile(hass) -> None:
@@ -939,8 +939,8 @@ async def test_filter_and_service_selects_update_expected_modes(hass) -> None:
     assert rule_group_entity_id is None
     assert ai_malware_option_entity_id is not None
     assert hass.states.get(ads_mode_entity_id).state == "Relaxed"
-    assert hass.states.get(service_entity_id).state == "Bypassed"
-    assert hass.states.get(default_rule_entity_id).state == "Bypassing"
+    assert hass.states.get(service_entity_id).state == "bypassed"
+    assert hass.states.get(default_rule_entity_id).state == "bypassing"
     assert hass.states.get(ai_malware_option_entity_id).state == "Minimal"
 
     with (
@@ -979,7 +979,7 @@ async def test_filter_and_service_selects_update_expected_modes(hass) -> None:
             "select_option",
             {
                 ATTR_ENTITY_ID: default_rule_entity_id,
-                ATTR_OPTION: "Redirecting",
+                ATTR_OPTION: "redirecting",
             },
             blocking=True,
         )
@@ -997,18 +997,18 @@ async def test_filter_and_service_selects_update_expected_modes(hass) -> None:
             "select_option",
             {
                 ATTR_ENTITY_ID: service_entity_id,
-                ATTR_OPTION: "Blocked",
+                ATTR_OPTION: "blocked",
             },
             blocking=True,
         )
 
     async_set_filter_mode.assert_awaited_once_with("profile-1", "ads", "ads_medium")
-    async_set_default_rule_mode.assert_awaited_once_with("profile-1", "Redirecting")
+    async_set_default_rule_mode.assert_awaited_once_with("profile-1", "redirecting")
     async_set_profile_option_select.assert_awaited_once_with(
         "profile-1", "ai_malware", "Aggressive"
     )
     async_set_service_mode.assert_awaited_once_with(
-        "profile-1", "amazonmusic", "Blocked"
+        "profile-1", "amazonmusic", "blocked"
     )
 
 

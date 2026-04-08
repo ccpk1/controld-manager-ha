@@ -300,8 +300,8 @@ def test_integration_manager_preserves_filter_fallback_and_service_modes() -> No
     ttl_row = registry.options_by_profile["profile-1"]["ttl_blck"]
     assert filter_row.effective_level_slug == "porn"
     assert filter_row.effective_level_title == "Relaxed"
-    assert service_row.current_mode == "Blocked"
-    assert default_rule_row.current_mode == "Bypassing"
+    assert service_row.current_mode == "blocked"
+    assert default_rule_row.current_mode == "bypassing"
     assert option_row.current_select_option == "Minimal"
     assert block_response_row.select_options == (
         "Off",

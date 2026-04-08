@@ -19,6 +19,7 @@ from ..models import (
     ControlDService,
     build_rule_identity,
     default_rule_action_from_mode,
+    normalize_service_mode,
     rule_action_do_from_key,
     rule_group_action_from_mode,
 )
@@ -232,13 +233,14 @@ class ProfileManager(BaseManager):
         service_row: ControlDService,
     ) -> tuple[bool, int]:
         """Translate one Home Assistant service mode into upstream fields."""
-        enabled = mode != "Off"
+        normalized_mode = normalize_service_mode(mode)
+        enabled = normalized_mode != "off"
         action_do = service_row.action_do
-        if mode == "Blocked":
+        if normalized_mode == "blocked":
             action_do = 0
-        elif mode == "Bypassed":
+        elif normalized_mode == "bypassed":
             action_do = 1
-        elif mode == "Redirected":
+        elif normalized_mode == "redirected":
             action_do = 2
         return enabled, action_do
 

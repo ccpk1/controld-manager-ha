@@ -45,6 +45,29 @@ if TYPE_CHECKING:
     )
 
 
+SERVICE_MODE_OFF = "off"
+SERVICE_MODE_BLOCKED = "blocked"
+SERVICE_MODE_BYPASSED = "bypassed"
+SERVICE_MODE_REDIRECTED = "redirected"
+
+SERVICE_MODE_LABELS: dict[str, str] = {
+    SERVICE_MODE_OFF: "Off",
+    SERVICE_MODE_BLOCKED: "Blocked",
+    SERVICE_MODE_BYPASSED: "Bypassed",
+    SERVICE_MODE_REDIRECTED: "Redirected",
+}
+
+DEFAULT_RULE_MODE_BLOCKING = "blocking"
+DEFAULT_RULE_MODE_BYPASSING = "bypassing"
+DEFAULT_RULE_MODE_REDIRECTING = "redirecting"
+
+DEFAULT_RULE_MODE_LABELS: dict[str, str] = {
+    DEFAULT_RULE_MODE_BLOCKING: "Blocking",
+    DEFAULT_RULE_MODE_BYPASSING: "Bypassing",
+    DEFAULT_RULE_MODE_REDIRECTING: "Redirecting",
+}
+
+
 @dataclass(slots=True, frozen=True)
 class ControlDUser:
     """Normalized Control D instance identity and metadata."""
@@ -583,17 +606,37 @@ class ControlDEndpointInventoryStats:
 
 
 def service_mode_from_action_do(action_do: int) -> str:
-    """Translate a Control D service action code into a UI mode label."""
+    """Translate a Control D service action code into a stable mode key."""
     return {
-        0: "Blocked",
-        1: "Bypassed",
-        2: "Redirected",
-    }.get(action_do, "Bypassed")
+        0: SERVICE_MODE_BLOCKED,
+        1: SERVICE_MODE_BYPASSED,
+        2: SERVICE_MODE_REDIRECTED,
+    }.get(action_do, SERVICE_MODE_BYPASSED)
 
 
 def service_mode_options() -> tuple[str, ...]:
-    """Return the supported Home Assistant service-mode options."""
-    return ("Off", "Blocked", "Bypassed", "Redirected")
+    """Return the supported entity state keys for service-mode selects."""
+    return (
+        SERVICE_MODE_OFF,
+        SERVICE_MODE_BLOCKED,
+        SERVICE_MODE_BYPASSED,
+        SERVICE_MODE_REDIRECTED,
+    )
+
+
+def service_mode_labels() -> tuple[str, ...]:
+    """Return the supported service-call labels for service modes."""
+    return tuple(SERVICE_MODE_LABELS[mode] for mode in service_mode_options())
+
+
+def normalize_service_mode(mode: str) -> str:
+    """Normalize a service mode label or key into a stable key."""
+    normalized = mode.strip().lower()
+    if normalized in SERVICE_MODE_LABELS:
+        return normalized
+
+    label_map = {label.lower(): key for key, label in SERVICE_MODE_LABELS.items()}
+    return label_map[normalized]
 
 
 def rule_action_key_from_action_do(action_do: int) -> str:
@@ -617,27 +660,47 @@ def rule_action_label_from_action_do(action_do: int) -> str:
 def default_rule_mode_from_action(
     action_do: int, enabled: bool, via: str | None
 ) -> str:
-    """Translate a Control D default-rule action into a UI mode label."""
+    """Translate a Control D default-rule action into a stable mode key."""
     del enabled, via
     return {
-        0: "Blocking",
-        1: "Bypassing",
-        3: "Redirecting",
-    }.get(action_do, "Blocking")
+        0: DEFAULT_RULE_MODE_BLOCKING,
+        1: DEFAULT_RULE_MODE_BYPASSING,
+        3: DEFAULT_RULE_MODE_REDIRECTING,
+    }.get(action_do, DEFAULT_RULE_MODE_BLOCKING)
 
 
 def default_rule_action_from_mode(mode: str) -> tuple[int, str | None]:
-    """Translate a UI mode label into the Control D default-rule payload."""
+    """Translate a mode label or key into the Control D default-rule payload."""
+    normalized = normalize_default_rule_mode(mode)
     return {
-        "Blocking": (0, None),
-        "Bypassing": (1, None),
-        "Redirecting": (3, "LOCAL"),
-    }[mode]
+        DEFAULT_RULE_MODE_BLOCKING: (0, None),
+        DEFAULT_RULE_MODE_BYPASSING: (1, None),
+        DEFAULT_RULE_MODE_REDIRECTING: (3, "LOCAL"),
+    }[normalized]
 
 
 def default_rule_mode_options() -> tuple[str, ...]:
-    """Return the supported Home Assistant default-rule options."""
-    return ("Blocking", "Bypassing", "Redirecting")
+    """Return the supported entity state keys for default-rule selects."""
+    return (
+        DEFAULT_RULE_MODE_BLOCKING,
+        DEFAULT_RULE_MODE_BYPASSING,
+        DEFAULT_RULE_MODE_REDIRECTING,
+    )
+
+
+def default_rule_mode_labels() -> tuple[str, ...]:
+    """Return the supported service-call labels for default-rule modes."""
+    return tuple(DEFAULT_RULE_MODE_LABELS[mode] for mode in default_rule_mode_options())
+
+
+def normalize_default_rule_mode(mode: str) -> str:
+    """Normalize a default-rule mode label or key into a stable key."""
+    normalized = mode.strip().lower()
+    if normalized in DEFAULT_RULE_MODE_LABELS:
+        return normalized
+
+    label_map = {label.lower(): key for key, label in DEFAULT_RULE_MODE_LABELS.items()}
+    return label_map[normalized]
 
 
 def rule_group_mode_from_action(action_do: int | None, enabled: bool) -> str:

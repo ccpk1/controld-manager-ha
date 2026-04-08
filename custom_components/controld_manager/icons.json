@@ -60,18 +60,18 @@
       "profile_service": {
         "default": "mdi:application-cog",
         "state": {
-          "Off": "mdi:cog-off-outline",
-          "Blocked": "mdi:cog-stop",
-          "Bypassed": "mdi:cog-play",
-          "Redirected": "mdi:airplane-cog"
+          "off": "mdi:cog-off-outline",
+          "blocked": "mdi:cog-stop",
+          "bypassed": "mdi:cog-play",
+          "redirected": "mdi:airplane-cog"
         }
       },
       "profile_default_rule": {
         "default": "mdi:shield-edit",
         "state": {
-          "Blocking": "mdi:shield-remove",
-          "Bypassing": "mdi:shield-check",
-          "Redirecting": "mdi:transit-connection-variant"
+          "blocking": "mdi:shield-remove",
+          "bypassing": "mdi:shield-check",
+          "redirecting": "mdi:transit-connection-variant"
         }
       },
       "profile_rule_group": {

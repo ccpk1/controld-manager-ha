@@ -94,8 +94,9 @@ from .const import (
 from .models import (
     ControlDManagerRuntime,
     ControlDService,
+    default_rule_mode_labels,
     rule_action_options,
-    service_mode_options,
+    service_mode_labels,
 )
 from .service_selectors import (
     _normalize_name,
@@ -187,7 +188,7 @@ SET_SERVICE_STATE_SERVICE_SCHEMA = vol.Schema(
     {
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         **_SERVICE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
-        vol.Required(SERVICE_FIELD_MODE): vol.In(service_mode_options()),
+        vol.Required(SERVICE_FIELD_MODE): vol.In(service_mode_labels()),
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
@@ -205,9 +206,7 @@ SET_OPTION_STATE_SERVICE_SCHEMA = vol.Schema(
 SET_DEFAULT_RULE_STATE_SERVICE_SCHEMA = vol.Schema(
     {
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
-        vol.Required(SERVICE_FIELD_MODE): vol.In(
-            ("Blocking", "Bypassing", "Redirecting")
-        ),
+        vol.Required(SERVICE_FIELD_MODE): vol.In(default_rule_mode_labels()),
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
