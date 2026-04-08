@@ -5,7 +5,7 @@
 [![Version](https://img.shields.io/static/v1?label=Version&message=0.1.0&color=1E88E5&labelColor=555)](https://github.com/ccpk1/controld-manager-ha)
 [![Stars](https://img.shields.io/github/stars/ccpk1/controld-manager-ha?color=1E88E5&labelColor=555)](https://github.com/ccpk1/controld-manager-ha/stargazers)
 
-![Control D Manager for Home Assistant](<https://github.com/ccpk1/controld-manager-ha/tree/main/docs/assets/3-1 Logo Rectangle@2x.png>)
+![Control D Manager for Home Assistant](https://github.com/ccpk1/controld-manager-ha/blob/main/docs/assets/3-1%20Logo%20Rectangle%402x.png)
 
 > Cloud-smart Home Assistant control for Control D DNS. Profile-driven, automation-first, and designed to keep your entity registry focused instead of flooded.
 
@@ -19,9 +19,16 @@ That matters because a good Home Assistant integration should do more than mirro
 
 Control D is also **unusually strong as a homelab foundation**. If you already use `ctrld` on a firewall or router, Control D makes it much easier to segment policy by VLAN, client, or profile without resorting to brittle scripts and manual workarounds. That broader ecosystem is a big part of why this integration exists: the service is already flexible enough to deserve a Home Assistant layer that can actually keep up with it.
 
+## 📷 Screenshots
+
+![Hero1](https://github.com/ccpk1/controld-manager-ha/blob/main/docs/assets/Integration_Hero.png)
+
+![Hero2](https://github.com/ccpk1/controld-manager-ha/blob/main/docs/assets/Integration_Hero2.png)
+
 ## Table of contents
 
 - 💡 [Why Control D?](#why-control-d)
+- 📷 [Screenshots](#screenshots)
 - 🏆 [The platinum-quality approach](#the-platinum-quality-approach)
 - ✨ [What it enables](#what-it-enables)
 - ❤️ [Support the project](#support-the-project)
