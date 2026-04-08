@@ -89,15 +89,14 @@ Required review discipline:
 
 ## Open questions or external dependencies
 
-- How should the runtime normalize attached-profile sibling fields such as `profile`, `profile2`, and possible future variants while keeping organization cases open?
 - What mutation rate limits, write consistency guarantees, and rollback behavior apply when one service targets multiple profiles or the whole instance?
 - Does the API support bulk operations natively, or will the integration need manager-level fan-out across multiple profile targets?
 - Should billing product and analytics-region metadata remain diagnostics-only, or should some of it surface on the instance system device?
-- Should profile disable or enable behavior and any later policy-level disable
-	behavior ultimately share one service family with typed target resolution, or
-	should profile, filter, and service service surfaces remain separate?
-- What immutable typed identity should be stored for grouped-rule selections so folders and rule rows survive renames cleanly?
-- Should the endpoint activity threshold be stored only per profile, or should the options flow also support an entry-wide default that profiles may inherit?
+- Which account-, profile-, and endpoint-level statistics belong in default
+	sensors versus capped attributes or diagnostics-only output?
+- How should `stats_endpoint` and other analytics-region metadata surface:
+	instance attributes, dedicated sensors, diagnostics-only output, or a mixed
+	model?
 
 ## Phase summary table
 
@@ -108,7 +107,7 @@ Required review discipline:
 | 3 | Complete | Build the entry-scoped runtime and lifecycle managers | `custom_components/controld_manager/__init__.py`, `custom_components/controld_manager/coordinator.py`, `custom_components/controld_manager/managers/`, `custom_components/controld_manager/entity.py` | One config entry owns one runtime with manager-backed device and entity lifecycle control |
 | 4 | Complete | Add conservative entities, shared services, and later add-on evaluation | platform files, `services.yaml`, translations, tests, optional supporting notes | Stable profile devices, endpoint entities, shared service targeting, and documented late-phase add-on decisions |
 | 5 | Complete | Add scalable per-profile options policy and high-cardinality profile surfaces | `config_flow.py`, `models.py`, manager layer, platform files, translations, tests, plan docs | Menu-driven options flow, per-profile inclusion and exposure policy, auto-created filters, category-driven service exposure, typed rule selection, and endpoint-status threshold support |
-| 6 | In progress | Add a shared mutation-service layer with Control D terminology and multi-entry-safe targeting | `__init__.py`, `services.yaml`, `const.py`, manager helpers, translations, tests, plan docs | A small reusable service family supports flexible profile-scoped actions without one custom service per entity type |
+| 6 | Complete | Add a shared mutation-service layer with Control D terminology and multi-entry-safe targeting | `__init__.py`, `services.yaml`, `const.py`, manager helpers, translations, tests, plan docs | Shared mutation services, reauth and reconfigure flows, expanded diagnostics, and cleaned availability logging now ship with multi-entry-safe targeting |
 
 ## Immediate implementation kickoff
 
@@ -159,15 +158,16 @@ Current status update:
 
 Remaining follow-on scope after the current slice:
 
-- broader advanced profile options remain intentionally partial and should stay
-	in a follow-on slice until their read and write semantics are fully closed
+- the advanced profile-option surface is now mostly shipped; remaining option
+	work is narrow polish rather than a large unfinished platform area
 - `ecs_subnet` remains intentionally excluded from entity exposure
 - TTL-style options remain intentionally limited to toggle entities, while the
 	shared option service may still supply explicit numeric values where the
 	browser-backed contract is already proven
-- the next implementation phase should focus on the shared service layer,
-	including renaming profile pause or resume terminology to Control D-aligned
-	enable profile and disable profile behavior
+- grouped-rule follow-on service expansion is explicitly deferred for now
+- the main remaining product gap is analytics and telemetry presentation:
+	account-, profile-, and endpoint-level stats, sensors, and carefully scoped
+	attributes
 
 ### Phase 5: Add scalable per-profile options policy and high-cardinality profile surfaces
 
@@ -340,28 +340,26 @@ Phase 6 standards audit note:
 - the current service surface is translation-ready, manager-owned, multi-entry
 	safe, and aligned with the repository's layer and terminology rules
 
-Next recommended Phase 6 slice:
+Next recommended follow-on slice:
 
-- decide whether the first follow-on options slice should prioritize
-	service-only support for additional proven advanced options or move selected
-	controls into entity exposure once their read semantics are fully closed
-- polling-split analysis is closed for this slice: keep one
-	configuration-sync poller for profiles, filters, options, rules, and
-	catalogs, and only consider a later second endpoint-activity poller around
-	`/devices?last_activity=1`; do not ship a separate profile-analytics poller
-	until a distinct analytics endpoint or payload family is actually proven
+- prioritize account-, profile-, and endpoint-level analytics surfaces,
+	including which values should be default sensors, which should stay as capped
+	attributes, and which should remain diagnostics-only
+- keep grouped-rule service expansion deferred for now
+- polling-split work is explicitly deferred for now: keep one
+	configuration-sync poller for profiles, filters, options, rules, catalogs,
+	and endpoint activity, and do not start any split-poller implementation until
+	a later initiative reopens that decision with fresh API evidence
 
 Phase 5 required research closeouts before code for that specific surface starts:
 
-- prove the best persisted typed identity for grouped rules
 - confirm whether endpoint status remains timestamp-derived or gains a stronger upstream signal
 
 Additional follow-on work discovered after Phase 5 completion:
 
-- main profile-option controls from the full Control D profile page remain
-	partially unimplemented and should be treated as a separate detail-driven
-	follow-on slice, beginning with the dedicated default-rule endpoint
-	`/profiles/{profile_id}/default`
+- the remaining gap is no longer broad profile-option coverage; it is mainly
+	analytics and telemetry presentation on top of the runtime data now proven in
+	the repository
 - browser-backed captures now also prove a second dedicated family under
 	`/profiles/{profile_id}/options/{option_key}` with at least three payload
 	shapes: boolean toggles, enabled-plus-value controls, and unresolved TTL-style
@@ -379,19 +377,17 @@ Additional follow-on work discovered after Phase 5 completion:
 	`GET /profiles/{profile_id}/default`, and the repository now implements that
 	surface as the first always-on profile-option select
 
-Current approved execution target for that slice:
+Current approved execution target for the next slice:
 
-- ship a small always-on option surface first:
-	- Default Rule select
-	- AI Malware Filter select
-	- Safe Search toggle
-	- Restricted Youtube toggle
-- add a per-profile advanced-options flag in the edit-profile form
-- create the remaining profile-option entities only when that flag is enabled,
-	and register those additional entities as disabled by default
+- ship a conservative analytics surface first:
+	- account-level stats and metadata that are already stable enough for sensors
+		or capped attributes
+	- profile-level summary stats where scope and meaning are already proven
+	- endpoint-level telemetry only where the upstream scope is explicit and does
+		not create high-cardinality churn
 - keep `ecs_subnet` out of entity exposure for now
-- surface TTL options only as advanced toggles, not as editable numeric
-	controls
+- keep TTL options as advanced toggles rather than editable numeric entities
+- keep grouped-rule service expansion deferred until a later initiative
 
 ## Per-phase details with checkboxes
 
