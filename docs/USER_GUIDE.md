@@ -126,6 +126,14 @@ Current account entities:
 - Status
 - Profile count
 - Endpoint count
+- Total queries
+- Blocked queries
+- Bypassed queries
+- Redirected queries
+
+Each managed profile device also exposes the same four analytics sensors for
+that profile, using the same rolling last day reporting window as the Control D
+statistics page.
 - Sync now
 
 ### Profile devices
@@ -179,9 +187,15 @@ Current Status attributes may include:
 Profile count shows how many Control D profiles are currently discovered for the
 account.
 
+This sensor uses the unit `profiles` so Home Assistant can show that the value
+is a current count of discovered profiles rather than an unlabeled raw number.
+
 ### Endpoint count
 
 Endpoint count shows the current protected endpoint total.
+
+This sensor uses the unit `endpoints` so Home Assistant can show that the value
+is a current count of protected endpoints rather than an unlabeled raw number.
 
 This total is intentionally broader than the number of standalone endpoint
 entities because it includes:
@@ -201,6 +215,44 @@ data currently used by the integration.
 
 Use this when you have made recent changes in Control D and do not want to wait
 for the next scheduled refresh.
+
+### Total queries
+
+Total queries shows the current account-level query total for the rolling last
+day window used by the Control D statistics page.
+
+This total is the scoped aggregate formed from the blocked, bypassed, and
+redirected action buckets for the same reporting window.
+
+### Blocked queries
+
+Blocked queries shows the current account-level blocked bucket for the same
+reporting window.
+
+### Bypassed queries
+
+Bypassed queries shows the current account-level bypassed bucket for the same
+reporting window.
+
+### Redirected queries
+
+Redirected queries shows the current account-level redirected bucket for the
+same reporting window.
+
+Current notes for these first-release analytics sensors:
+
+- they request a rolling last-day account-level reporting window, then expose
+	the UTC-normalized window returned by the Control D analytics API
+- they use the unit `queries` so Home Assistant can show that these values are
+	counts of DNS queries for the current reporting window
+- the total is computed from the same scoped blocked, bypassed, and redirected
+	buckets shown in the dashboard-style action model, rather than from the raw
+	unsliced aggregate count endpoint alone
+- the returned analytics start and end times are exposed as state attributes
+- blocked query ratio is still not exposed because the action-bucket counts are
+	more stable and informative for the first account analytics surface
+- these sensors are best-effort telemetry and do not affect the core inventory
+	refresh path if the analytics endpoint is temporarily unavailable
 
 ## Profile controls
 

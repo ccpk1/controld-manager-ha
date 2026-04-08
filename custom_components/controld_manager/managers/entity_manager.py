@@ -121,11 +121,25 @@ class EntityManager(BaseManager):
             set(self.runtime.registry.profiles)
         )
         if platform == "sensor":
-            return {
+            sensor_keys = {
                 "instance::status",
                 "instance::profile_count",
                 "instance::endpoint_count",
+                "instance::total_queries",
+                "instance::blocked_queries",
+                "instance::bypassed_queries",
+                "instance::redirected_queries",
             }
+            for profile_pk in included_profiles:
+                sensor_keys.update(
+                    {
+                        f"profile::{profile_pk}::total_queries",
+                        f"profile::{profile_pk}::blocked_queries",
+                        f"profile::{profile_pk}::bypassed_queries",
+                        f"profile::{profile_pk}::redirected_queries",
+                    }
+                )
+            return sensor_keys
         if platform == "button":
             return {"instance::sync"}
         if platform == "binary_sensor":

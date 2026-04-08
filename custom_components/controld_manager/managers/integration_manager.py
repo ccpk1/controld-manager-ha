@@ -57,6 +57,7 @@ class IntegrationManager(BaseManager):
         )
         registry = ControlDRegistry(
             user=self._normalize_user(inventory.user),
+            account_analytics=inventory.account_analytics,
             endpoint_inventory=self._endpoint_manager.summarize_inventory(
                 inventory.devices, endpoints
             ),

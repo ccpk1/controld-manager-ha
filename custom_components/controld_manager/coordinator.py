@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import (
     ControlDApiAuthError,
@@ -73,6 +75,63 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
             await self.async_refresh()
         finally:
             self._refresh_trigger = previous_trigger
+
+    async def _async_refresh_analytics(
+        self, registry: ControlDRegistry
+    ) -> ControlDRegistry:
+        """Refresh account and profile analytics for the current registry."""
+        user = registry.user
+        if user is None or user.stats_endpoint is None:
+            return registry
+
+        local_now = dt_util.now()
+        start_time = dt_util.as_utc(local_now - timedelta(days=1))
+        end_time = dt_util.as_utc(local_now)
+        included_profile_pks = sorted(
+            self._runtime.options.included_profile_pks(set(registry.profiles))
+        )
+
+        try:
+            results = await asyncio.gather(
+                self._runtime.client.async_get_account_analytics(
+                    user.stats_endpoint,
+                    start_time=start_time,
+                    end_time=end_time,
+                ),
+                *(
+                    self._runtime.client.async_get_profile_analytics(
+                        user.stats_endpoint,
+                        profile_pk,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                    for profile_pk in included_profile_pks
+                ),
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+            ValueError,
+        ) as err:
+            LOGGER.debug("Unable to refresh Control D analytics: %s", err)
+            return replace(
+                registry,
+                account_analytics=self._runtime.registry.account_analytics,
+                profile_analytics_by_profile=(
+                    self._runtime.registry.profile_analytics_by_profile
+                ),
+            )
+
+        account_analytics = results[0]
+        profile_analytics_by_profile = dict(
+            zip(included_profile_pks, results[1:], strict=True)
+        )
+        return replace(
+            registry,
+            account_analytics=account_analytics,
+            profile_analytics_by_profile=profile_analytics_by_profile,
+        )
 
     async def _async_update_data(self) -> ControlDRegistry:
         """Fetch and normalize the current Control D inventory snapshot."""
@@ -167,6 +226,8 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
             )
         finally:
             sync_status.refresh_in_progress = False
+
+        registry = await self._async_refresh_analytics(registry)
 
         self._runtime.registry = registry
         if self._unavailable_logged:

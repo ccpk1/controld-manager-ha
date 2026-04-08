@@ -60,6 +60,7 @@ from custom_components.controld_manager.diagnostics import (
     async_get_config_entry_diagnostics,
 )
 from custom_components.controld_manager.models import (
+    ControlDAccountAnalytics,
     ControlDInventoryPayload,
     ControlDOptions,
     ControlDProfileDetailPayload,
@@ -169,6 +170,7 @@ def _inventory(instance_id: str, owning_profile_pk: str) -> ControlDInventoryPay
     secondary_profile_pk = (
         "profile-2" if owning_profile_pk == "profile-1" else "profile-1"
     )
+
     return ControlDInventoryPayload(
         user={
             "id": instance_id,
@@ -205,6 +207,43 @@ def _inventory(instance_id: str, owning_profile_pk: str) -> ControlDInventoryPay
     )
 
 
+def _account_analytics() -> ControlDAccountAnalytics:
+    """Return representative account analytics for entity tests."""
+    return ControlDAccountAnalytics(
+        total_queries=57826,
+        blocked_queries=8100,
+        bypassed_queries=49700,
+        redirected_queries=26,
+        blocked_queries_ratio=14.007541243557913,
+        start_time=datetime(2026, 4, 7, tzinfo=UTC),
+        end_time=datetime(2026, 4, 8, tzinfo=UTC),
+    )
+
+
+def _profile_analytics(profile_pk: str) -> ControlDAccountAnalytics:
+    """Return representative profile analytics for entity tests."""
+    if profile_pk == "profile-1":
+        return ControlDAccountAnalytics(
+            total_queries=57123,
+            blocked_queries=8000,
+            bypassed_queries=49100,
+            redirected_queries=23,
+            blocked_queries_ratio=14.003466905102324,
+            start_time=datetime(2026, 4, 7, tzinfo=UTC),
+            end_time=datetime(2026, 4, 8, tzinfo=UTC),
+        )
+
+    return ControlDAccountAnalytics(
+        total_queries=703,
+        blocked_queries=100,
+        bypassed_queries=600,
+        redirected_queries=3,
+        blocked_queries_ratio=14.224751066856332,
+        start_time=datetime(2026, 4, 7, tzinfo=UTC),
+        end_time=datetime(2026, 4, 8, tzinfo=UTC),
+    )
+
+
 async def _async_setup_entry(
     hass, entry: MockConfigEntry, inventory: ControlDInventoryPayload
 ) -> None:
@@ -214,6 +253,18 @@ async def _async_setup_entry(
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
             new=AsyncMock(return_value=inventory),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
         ),
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
@@ -365,6 +416,21 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     endpoint_count_entity_id = entity_registry.async_get_entity_id(
         "sensor", DOMAIN, "user-123::instance::system::endpoint_count"
     )
+    total_queries_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::instance::system::total_queries"
+    )
+    blocked_queries_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::instance::system::blocked_queries"
+    )
+    bypassed_queries_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::instance::system::bypassed_queries"
+    )
+    redirected_queries_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::instance::system::redirected_queries"
+    )
+    blocked_queries_ratio_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::instance::system::blocked_queries_ratio"
+    )
     status_entity_id = entity_registry.async_get_entity_id(
         "sensor", DOMAIN, "user-123::instance::system::status"
     )
@@ -407,6 +473,11 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
 
     assert profile_count_entity_id is not None
     assert endpoint_count_entity_id is not None
+    assert total_queries_entity_id is not None
+    assert blocked_queries_entity_id is not None
+    assert bypassed_queries_entity_id is not None
+    assert redirected_queries_entity_id is not None
+    assert blocked_queries_ratio_entity_id is None
     assert status_entity_id is not None
     assert sync_button_entity_id is not None
     assert pause_switch_entity_id is not None
@@ -421,10 +492,35 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert service_entity_id is None
     assert hass.states.get(profile_count_entity_id).state == "2"
     assert hass.states.get(endpoint_count_entity_id).state == "3"
+    assert (
+        hass.states.get(profile_count_entity_id).attributes["unit_of_measurement"]
+        == "profiles"
+    )
+    assert (
+        hass.states.get(endpoint_count_entity_id).attributes["unit_of_measurement"]
+        == "endpoints"
+    )
+    assert hass.states.get(total_queries_entity_id).state == "57826"
+    assert hass.states.get(blocked_queries_entity_id).state == "8100"
+    assert hass.states.get(bypassed_queries_entity_id).state == "49700"
+    assert hass.states.get(redirected_queries_entity_id).state == "26"
+    assert (
+        hass.states.get(total_queries_entity_id).attributes["unit_of_measurement"]
+        == "queries"
+    )
     assert hass.states.get(status_entity_id).state == "healthy"
     assert hass.states.get(status_entity_id).name == "Account Status"
     assert hass.states.get(endpoint_count_entity_id).name == "Account Endpoint count"
     assert hass.states.get(profile_count_entity_id).name == "Account Profile count"
+    assert hass.states.get(total_queries_entity_id).name == "Account Total queries"
+    assert hass.states.get(blocked_queries_entity_id).name == "Account Blocked queries"
+    assert (
+        hass.states.get(bypassed_queries_entity_id).name == "Account Bypassed queries"
+    )
+    assert (
+        hass.states.get(redirected_queries_entity_id).name
+        == "Account Redirected queries"
+    )
     assert hass.states.get(sync_button_entity_id).name == "Account Sync now"
     assert hass.states.get(pause_switch_entity_id).name == "Primary Disable (Temporary)"
     assert (
@@ -435,6 +531,20 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
         hass.states.get(status_entity_id).attributes["consecutive_failed_refreshes"]
         == 0
     )
+    assert (
+        hass.states.get(total_queries_entity_id).attributes["analytics_start_time"]
+        is not None
+    )
+    assert (
+        hass.states.get(total_queries_entity_id).attributes["analytics_end_time"]
+        is not None
+    )
+    assert hass.states.get(ai_malware_option_entity_id).state == "Minimal"
+    assert hass.states.get(safe_search_entity_id).state == "on"
+    assert hass.states.get(restricted_youtube_entity_id).state == "off"
+    adult_mode_entry = entity_registry.async_get(adult_mode_entity_id)
+    assert adult_mode_entry is not None
+    assert adult_mode_entry.disabled_by is not None
     assert "last_refresh_error" not in hass.states.get(status_entity_id).attributes
     assert "router_client_count" not in hass.states.get(status_entity_id).attributes
 
@@ -458,12 +568,58 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     )
     assert hass.states.get(ads_mode_entity_id).state == "Relaxed"
     assert hass.states.get(default_rule_entity_id).state == "Bypassing"
-    assert hass.states.get(ai_malware_option_entity_id).state == "Minimal"
-    assert hass.states.get(safe_search_entity_id).state == "on"
-    assert hass.states.get(restricted_youtube_entity_id).state == "off"
-    adult_mode_entry = entity_registry.async_get(adult_mode_entity_id)
-    assert adult_mode_entry is not None
-    assert adult_mode_entry.disabled_by is not None
+
+
+async def test_profile_analytics_sensors_are_created_for_each_profile(hass) -> None:
+    """Each managed profile should expose the scoped analytics sensor set."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    profile_total_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::profile::profile-1::total_queries"
+    )
+    profile_blocked_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::profile::profile-1::blocked_queries"
+    )
+    profile_bypassed_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::profile::profile-1::bypassed_queries"
+    )
+    profile_redirected_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::profile::profile-1::redirected_queries"
+    )
+    secondary_total_entity_id = entity_registry.async_get_entity_id(
+        "sensor", DOMAIN, "user-123::profile::profile-2::total_queries"
+    )
+
+    assert profile_total_entity_id is not None
+    assert profile_blocked_entity_id is not None
+    assert profile_bypassed_entity_id is not None
+    assert profile_redirected_entity_id is not None
+    assert secondary_total_entity_id is not None
+    assert hass.states.get(profile_total_entity_id).state == "57123"
+    assert hass.states.get(profile_blocked_entity_id).state == "8000"
+    assert hass.states.get(profile_bypassed_entity_id).state == "49100"
+    assert hass.states.get(profile_redirected_entity_id).state == "23"
+    assert hass.states.get(secondary_total_entity_id).state == "703"
+    assert (
+        hass.states.get(profile_total_entity_id).attributes["unit_of_measurement"]
+        == "queries"
+    )
+    assert hass.states.get(profile_total_entity_id).name == "Primary Total queries"
+    assert (
+        hass.states.get(profile_total_entity_id).attributes["analytics_start_time"]
+        is not None
+    )
+    assert (
+        hass.states.get(profile_total_entity_id).attributes["analytics_end_time"]
+        is not None
+    )
 
 
 async def test_phase5_policy_enabled_entities_are_created_and_attached(hass) -> None:

@@ -26,6 +26,21 @@
       },
       "endpoint_count": {
         "default": "mdi:devices"
+      },
+      "total_queries": {
+        "default": "mdi:counter"
+      },
+      "blocked_queries": {
+        "default": "mdi:shield-remove"
+      },
+      "bypassed_queries": {
+        "default": "mdi:shield-check"
+      },
+      "redirected_queries": {
+        "default": "mdi:transit-connection-variant"
+      },
+      "blocked_queries_ratio": {
+        "default": "mdi:percent-outline"
       }
     },
     "select": {

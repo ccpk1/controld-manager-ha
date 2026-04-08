@@ -675,6 +675,65 @@
             }
           }
         }
+      },
+      "total_queries": {
+        "name": "Total queries",
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_instance_analytics": "Shows account-level query analytics for the current Control D reporting window",
+              "purpose_profile_analytics": "Shows profile-level query analytics for the current Control D reporting window"
+            }
+          }
+        }
+      },
+      "blocked_queries": {
+        "name": "Blocked queries",
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_instance_analytics": "Shows account-level query analytics for the current Control D reporting window",
+              "purpose_profile_analytics": "Shows profile-level query analytics for the current Control D reporting window"
+            }
+          }
+        }
+      },
+      "bypassed_queries": {
+        "name": "Bypassed queries",
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_instance_analytics": "Shows account-level query analytics for the current Control D reporting window",
+              "purpose_profile_analytics": "Shows profile-level query analytics for the current Control D reporting window"
+            }
+          }
+        }
+      },
+      "redirected_queries": {
+        "name": "Redirected queries",
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_instance_analytics": "Shows account-level query analytics for the current Control D reporting window",
+              "purpose_profile_analytics": "Shows profile-level query analytics for the current Control D reporting window"
+            }
+          }
+        }
+      },
+      "blocked_queries_ratio": {
+        "name": "Blocked queries ratio",
+        "state_attributes": {
+          "purpose": {
+            "name": "Purpose",
+            "state": {
+              "purpose_instance_analytics": "Shows account-level query analytics for the current Control D reporting window"
+            }
+          }
+        }
       }
     },
     "select": {

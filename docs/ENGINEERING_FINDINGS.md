@@ -1212,11 +1212,12 @@ Combined with the earlier trigger-value sample and screenshot:
 
 Engineering consequence:
 
-- `v2/statistic/count` appears to be the aggregate total companion to the more detailed `v2/statistic/count/triggerValue` endpoint
-- this makes a conservative summary analytics model much more realistic: a profile can likely expose total activity plus a small number of breakdown attributes or secondary sensors without requiring full dashboard scraping
+- `v2/statistic/count` is not the user-facing card total by itself; the dashboard summary model is the scoped aggregate of blocked, bypassed, and redirected buckets for the selected scope and period
+- live compare now confirms the dashboard default period behaves like a rolling last day window rather than a local-calendar-day window
+- this makes a conservative profile summary sensor model realistic: each profile can expose total, blocked, bypassed, and redirected query sensors without requiring full dashboard scraping
 - `srcCountry[]` is now proven as part of the request contract for at least one dashboard summary view, so country scoping may be a first-class analytics filter rather than incidental UI state
 - the server again normalizes the requested time window, which reinforces that Home Assistant should treat the returned period as authoritative metadata for any surfaced analytics state
-- the screenshot now gives a stronger observed mapping between the dashboard cards and the analytics endpoints, but bypassed and redirected still need direct API samples before those cards can be modeled confidently
+- redirected analytics are proven on `action[]=3`; the integration currently combines `action[]=2` and `action[]=3` for redirected totals as a documented working assumption until direct analytics-side evidence closes the remaining `action[]=2` gap
 
 ## Profile analytics domain findings
 
@@ -1408,9 +1409,49 @@ Derived observations:
 
 Engineering consequence:
 
-- the top cards are probably derived from a fuller blocked-total calculation than the visible first-page lists alone
+- the top cards should be treated as one scoped action partition where blocked,
+  bypassed, and redirected sum back to the scoped total
+- the blocked card is derived from a fuller blocked-total calculation than the
+  visible first-page lists alone
 - the visible ranked rows should be treated as partial top-N breakdowns, not as the authoritative full blocked total
 - the integration should not compute blocked totals by summing visible ranked analytics rows
+
+### Account-scoped current-page total versus raw aggregate count
+
+A later account-scoped browser capture clarified the part that earlier summary
+sections described too loosely.
+
+Observed account-scoped sample:
+
+- raw `v2/statistic/count` request for the active local-day window returned
+  `88831`
+- the same dashboard page showed:
+  - blocked `8.1K (13.9%)`
+  - bypassed `49.7K (86%)`
+  - redirected `26`
+  - total `57.8K`
+
+Working interpretation:
+
+- the raw unsliced `v2/statistic/count` result is broader than the dashboard
+  top-card model for that page
+- the dashboard `Total` card is the scoped aggregate of the blocked,
+  bypassed, and redirected buckets for the same page scope
+- the visible card values are rounded, so exact bucket totals must be read from
+  the underlying count responses rather than reconstructed from the displayed
+  text alone
+
+Engineering consequence:
+
+- the repository should not treat bare `v2/statistic/count` as dashboard-total
+  parity unless the same page scope has also been proven
+- for the current account analytics surface, the safer working model is:
+  - `Blocked = scoped action=blocked count`
+  - `Bypassed = scoped action=bypassed count`
+  - `Redirected = scoped action=redirected count`
+  - `Total = Blocked + Bypassed + Redirected`
+- the small earlier reconstruction gap was about rounded UI text and truncated
+  top-N lists, not about the action-bucket partition model itself being wrong
 
 ### Benign Blocks definition and derivation
 
@@ -1564,6 +1605,22 @@ Working interpretation:
   default-rule mode shown in the web UI
 - the currently captured write set proves active-mode writes, but it does not
   yet prove whether a disabled or status-zero state exists for this surface
+
+Additional implementation consequence:
+
+- a later dashboard-backed redirected query proved that analytics-side
+  redirected traffic uses `action[]=3`
+- analytics action values should not be assumed to match write-side `do`
+  values one-for-one just because both surfaces talk about blocked, bypassed,
+  or redirected behavior
+- current working assumption for the integration is that redirected analytics
+  should combine `action[]=2` and `action[]=3`
+- rationale: `action[]=3` is proven for SafeSearch or local-resolution style
+  redirect traffic, while `action[]=2` is still likely to represent the more
+  traditional paid redirect behavior even though that exact analytics view has
+  not yet been captured directly
+- this combined redirected-family assumption should be revisited once a direct
+  browser capture proves the exact `action[]=2` semantics on the analytics side
 
 ### Dedicated option endpoint write families
 

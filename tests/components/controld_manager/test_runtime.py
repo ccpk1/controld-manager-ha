@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 from aiohttp import ClientSession
@@ -29,6 +29,7 @@ from custom_components.controld_manager.managers import (
     ProfileManager,
 )
 from custom_components.controld_manager.models import (
+    ControlDAccountAnalytics,
     ControlDInventoryPayload,
     ControlDOptions,
     ControlDProfileDetailPayload,
@@ -134,6 +135,43 @@ def _sample_inventory() -> ControlDInventoryPayload:
                 "parent_device": {"device_id": "router-1"},
             },
         ),
+    )
+
+
+def _sample_account_analytics() -> ControlDAccountAnalytics:
+    """Return representative account analytics for runtime tests."""
+    return ControlDAccountAnalytics(
+        total_queries=82268,
+        blocked_queries=9950,
+        bypassed_queries=72318,
+        redirected_queries=0,
+        blocked_queries_ratio=12.094617591287014,
+        start_time=datetime(2026, 4, 7, tzinfo=UTC),
+        end_time=datetime(2026, 4, 8, tzinfo=UTC),
+    )
+
+
+def _sample_profile_analytics(profile_pk: str) -> ControlDAccountAnalytics:
+    """Return representative profile analytics for runtime tests."""
+    if profile_pk == "profile-1":
+        return ControlDAccountAnalytics(
+            total_queries=78033,
+            blocked_queries=9678,
+            bypassed_queries=68355,
+            redirected_queries=0,
+            blocked_queries_ratio=12.402957209903248,
+            start_time=datetime(2026, 4, 7, tzinfo=UTC),
+            end_time=datetime(2026, 4, 8, tzinfo=UTC),
+        )
+
+    return ControlDAccountAnalytics(
+        total_queries=1235,
+        blocked_queries=120,
+        bypassed_queries=1110,
+        redirected_queries=5,
+        blocked_queries_ratio=9.716599190283401,
+        start_time=datetime(2026, 4, 7, tzinfo=UTC),
+        end_time=datetime(2026, 4, 8, tzinfo=UTC),
     )
 
 
@@ -478,6 +516,18 @@ async def test_setup_entry_creates_entry_scoped_runtime(hass) -> None:
             new=AsyncMock(return_value=_sample_inventory()),
         ),
         patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_sample_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: (
+                    _sample_profile_analytics(profile_pk)
+                )
+            ),
+        ),
+        patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
             new=AsyncMock(return_value=ControlDProfileDetailPayload()),
         ),
@@ -494,6 +544,19 @@ async def test_setup_entry_creates_entry_scoped_runtime(hass) -> None:
     assert runtime.instance_id == "user-123"
     assert runtime.registry.user is not None
     assert runtime.registry.user.account_pk == "account-pk"
+    assert runtime.registry.account_analytics is not None
+    assert runtime.registry.account_analytics.total_queries == 82268
+    assert runtime.registry.account_analytics.blocked_queries == 9950
+    assert runtime.registry.account_analytics.bypassed_queries == 72318
+    assert runtime.registry.account_analytics.redirected_queries == 0
+    assert (
+        runtime.registry.profile_analytics_by_profile["profile-1"].total_queries
+        == 78033
+    )
+    assert (
+        runtime.registry.profile_analytics_by_profile["profile-2"].redirected_queries
+        == 5
+    )
     assert runtime.managers.integration.runtime is runtime
     assert runtime.managers.profile.runtime is runtime
     assert runtime.coordinator is not None
@@ -515,6 +578,18 @@ async def test_coordinator_refresh_raises_auth_failed_for_reauth(hass) -> None:
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
             new=AsyncMock(return_value=_sample_inventory()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_sample_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: (
+                    _sample_profile_analytics(profile_pk)
+                )
+            ),
         ),
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
@@ -540,6 +615,74 @@ async def test_coordinator_refresh_raises_auth_failed_for_reauth(hass) -> None:
         await runtime.active_coordinator._async_update_data()
 
 
+async def test_coordinator_requests_last_day_analytics_window(hass) -> None:
+    """Account and profile analytics should use the rolling last-day window."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value"},
+        unique_id="user-123",
+    )
+    entry.add_to_hass(hass)
+
+    analytics_mock = AsyncMock(return_value=_sample_account_analytics())
+    profile_analytics_mock = AsyncMock(
+        side_effect=lambda _endpoint, profile_pk, **_kwargs: _sample_profile_analytics(
+            profile_pk
+        )
+    )
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_sample_inventory()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=analytics_mock,
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=profile_analytics_mock,
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(return_value=ControlDProfileDetailPayload()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.coordinator.dt_util.now",
+            return_value=datetime(2026, 4, 8, 13, 0, 0, tzinfo=UTC),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    analytics_mock.assert_awaited_once_with(
+        "america",
+        start_time=datetime(2026, 4, 7, 13, 0, 0, tzinfo=UTC),
+        end_time=datetime(2026, 4, 8, 13, 0, 0, tzinfo=UTC),
+    )
+    profile_analytics_mock.assert_has_awaits(
+        [
+            call(
+                "america",
+                "profile-1",
+                start_time=datetime(2026, 4, 7, 13, 0, 0, tzinfo=UTC),
+                end_time=datetime(2026, 4, 8, 13, 0, 0, tzinfo=UTC),
+            ),
+            call(
+                "america",
+                "profile-2",
+                start_time=datetime(2026, 4, 7, 13, 0, 0, tzinfo=UTC),
+                end_time=datetime(2026, 4, 8, 13, 0, 0, tzinfo=UTC),
+            ),
+        ]
+    )
+
+
 async def test_coordinator_logs_unavailable_once_and_recovery(hass, caplog) -> None:
     """Connection failures should log once, then log recovery on success."""
     entry = MockConfigEntry(
@@ -553,6 +696,18 @@ async def test_coordinator_logs_unavailable_once_and_recovery(hass, caplog) -> N
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
             new=AsyncMock(return_value=_sample_inventory()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_sample_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: (
+                    _sample_profile_analytics(profile_pk)
+                )
+            ),
         ),
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",

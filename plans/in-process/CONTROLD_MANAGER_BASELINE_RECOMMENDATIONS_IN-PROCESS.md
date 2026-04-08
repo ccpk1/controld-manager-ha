@@ -165,9 +165,21 @@ Remaining follow-on scope after the current slice:
 	shared option service may still supply explicit numeric values where the
 	browser-backed contract is already proven
 - grouped-rule follow-on service expansion is explicitly deferred for now
-- the main remaining product gap is analytics and telemetry presentation:
-	account-, profile-, and endpoint-level stats, sensors, and carefully scoped
-	attributes
+- the account and profile analytics summary slice is now implemented:
+	- account device sensors for `Total queries`, `Blocked queries`,
+	  `Bypassed queries`, and `Redirected queries`
+	- managed-profile sensors for the same four scoped analytics values
+	- rolling last-day analytics window alignment with the Control D statistics
+	  page default behavior
+	- standard Home Assistant sensor metadata for count-style surfaces:
+	  `profiles`, `endpoints`, and `queries` units with `measurement`
+	  state class
+- the remaining analytics work is now narrower:
+	- endpoint-level analytics exposure
+	- deciding which ranked analytics surfaces should become capped attributes or
+	  remain diagnostics-only
+	- deciding whether blocked-query ratio should stay hidden or ship later as a
+	  secondary summary sensor
 
 ### Phase 5: Add scalable per-profile options policy and high-cardinality profile surfaces
 
@@ -332,6 +344,12 @@ Latest Phase 6 status update:
 	interval and bounds it to 5 through 60 minutes; the saved
 	profile-analytics and endpoint-analytics intervals remain runtime
 	placeholders until separate pollers are actually implemented
+- account and profile analytics summary sensors now ship with a
+	dashboard-aligned rolling last-day window and explicit blocked, bypassed,
+	and redirected bucket totals
+- account summary count and analytics sensors now expose standard Home
+	Assistant unit metadata so the frontend can show what each value measures:
+	`profiles`, `endpoints`, and `queries`
 - focused and full-repository validation now pass for the current slice,
 	including `ruff`, `mypy`, and `pytest tests/ -v`
 
@@ -342,9 +360,16 @@ Phase 6 standards audit note:
 
 Next recommended follow-on slice:
 
-- prioritize account-, profile-, and endpoint-level analytics surfaces,
-	including which values should be default sensors, which should stay as capped
-	attributes, and which should remain diagnostics-only
+- prioritize endpoint-level analytics surfaces next, now that account and
+	profile summary analytics are in place
+- decide which higher-cardinality analytics views should become capped
+	attributes versus diagnostics-only output:
+	- top domains
+	- top services
+	- top filters
+	- source countries
+- revisit whether blocked-query ratio belongs in the default entity model or
+	should remain excluded in favor of the four explicit action-bucket sensors
 - keep grouped-rule service expansion deferred for now
 - polling-split work is explicitly deferred for now: keep one
 	configuration-sync poller for profiles, filters, options, rules, catalogs,
@@ -379,15 +404,42 @@ Additional follow-on work discovered after Phase 5 completion:
 
 Current approved execution target for the next slice:
 
-- ship a conservative analytics surface first:
-	- account-level stats and metadata that are already stable enough for sensors
-		or capped attributes
-	- profile-level summary stats where scope and meaning are already proven
-	- endpoint-level telemetry only where the upstream scope is explicit and does
-		not create high-cardinality churn
+- keep the current conservative analytics surface for account and profile
+	summary sensors as shipped
+- extend analytics carefully at the endpoint level only where the upstream
+	scope is explicit and does not create high-cardinality churn
+- keep ranked analytics outputs out of one-entity-per-row models; prefer capped
+	attributes or diagnostics when those views are exposed later
 - keep `ecs_subnet` out of entity exposure for now
 - keep TTL options as advanced toggles rather than editable numeric entities
 - keep grouped-rule service expansion deferred until a later initiative
+
+Detailed remaining analytics and telemetry work:
+
+- endpoint summary analytics:
+	- decide the initial endpoint analytics entity set
+	- validate naming, ownership, and attachment rules for endpoint analytics
+	  entities against the existing endpoint model
+	- confirm whether endpoint analytics should stay on the current coordinator
+	  path or wait for a true split poller
+- ranked analytics presentation:
+	- confirm which ranked views are stable enough for capped attributes
+	- keep partial top-N lists out of any logic that implies full totals
+	- preserve diagnostics-only posture where friendly-name mapping or scope is
+	  still not closed
+- analytics contract refinement:
+	- close the remaining `action[]=2` redirected-family assumption when a direct
+	  browser-backed analytics capture exists
+	- revisit whether `srcCountry[]` should ever become user-configurable or stay
+	  fixed to the observed page defaults for the default sensor set
+	- document any endpoint-specific differences from the account and profile
+	  rolling last-day model if they appear during implementation
+- poller architecture follow-up:
+	- decide whether the saved `profile_analytics` and `endpoint_analytics`
+	  intervals should become real separate refresh paths or be removed as unused
+	  placeholders
+	- if split pollers are introduced later, prove they deliver meaningful value
+	  instead of duplicating data already refreshed by `configuration_sync`
 
 ## Per-phase details with checkboxes
 

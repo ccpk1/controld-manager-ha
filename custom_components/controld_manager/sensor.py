@@ -4,13 +4,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory
+from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import HomeAssistant, callback
 
 from .const import (
     ATTR_ACCOUNT_STATUS,
+    ATTR_ANALYTICS_END_TIME,
+    ATTR_ANALYTICS_START_TIME,
     ATTR_CONSECUTIVE_FAILED_REFRESHES,
     ATTR_DISCOVERED_ENDPOINT_COUNT,
     ATTR_LAST_REFRESH_ATTEMPT,
@@ -20,14 +26,21 @@ from .const import (
     ATTR_REFRESH_IN_PROGRESS,
     ATTR_ROUTER_CLIENT_COUNT,
     ATTR_STATS_ENDPOINT,
+    PURPOSE_INSTANCE_ANALYTICS,
     PURPOSE_INSTANCE_STATUS,
     PURPOSE_INSTANCE_SUMMARY,
+    PURPOSE_PROFILE_ANALYTICS,
+    TRANS_KEY_ENTITY_BLOCKED_QUERIES,
+    TRANS_KEY_ENTITY_BLOCKED_QUERIES_RATIO,
+    TRANS_KEY_ENTITY_BYPASSED_QUERIES,
     TRANS_KEY_ENTITY_ENDPOINT_COUNT,
     TRANS_KEY_ENTITY_PROFILE_COUNT,
+    TRANS_KEY_ENTITY_REDIRECTED_QUERIES,
     TRANS_KEY_ENTITY_STATUS,
+    TRANS_KEY_ENTITY_TOTAL_QUERIES,
 )
-from .entity import ControlDManagerInstanceEntity
-from .models import ControlDManagerRuntime
+from .entity import ControlDManagerInstanceEntity, ControlDManagerProfileEntity
+from .models import ControlDAccountAnalytics, ControlDManagerRuntime
 
 if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -62,12 +75,37 @@ def _build_sensor_entity(
     config_entry: ConfigEntry[ControlDManagerRuntime], key: str
 ) -> SensorEntity:
     """Build one sensor entity from the entity-manager key."""
+    if key.startswith("profile::"):
+        scope, profile_pk, sensor_key = key.split("::", 2)
+        del scope
+        if sensor_key == "total_queries":
+            return ControlDManagerProfileTotalQueriesSensor(config_entry, profile_pk)
+        if sensor_key == "blocked_queries":
+            return ControlDManagerProfileBlockedQueriesSensor(config_entry, profile_pk)
+        if sensor_key == "bypassed_queries":
+            return ControlDManagerProfileBypassedQueriesSensor(config_entry, profile_pk)
+        if sensor_key == "redirected_queries":
+            return ControlDManagerProfileRedirectedQueriesSensor(
+                config_entry, profile_pk
+            )
+        raise ValueError(f"Unsupported Control D profile sensor key {key!r}")
+
     if key == "instance::profile_count":
         return ControlDManagerProfileCountSensor(config_entry)
     if key == "instance::endpoint_count":
         return ControlDManagerEndpointCountSensor(config_entry)
     if key == "instance::status":
         return ControlDManagerStatusSensor(config_entry)
+    if key == "instance::total_queries":
+        return ControlDManagerTotalQueriesSensor(config_entry)
+    if key == "instance::blocked_queries":
+        return ControlDManagerBlockedQueriesSensor(config_entry)
+    if key == "instance::bypassed_queries":
+        return ControlDManagerBypassedQueriesSensor(config_entry)
+    if key == "instance::redirected_queries":
+        return ControlDManagerRedirectedQueriesSensor(config_entry)
+    if key == "instance::blocked_queries_ratio":
+        return ControlDManagerBlockedQueriesRatioSensor(config_entry)
     raise ValueError(f"Unsupported Control D sensor key {key!r}")
 
 
@@ -133,6 +171,8 @@ class ControlDManagerProfileCountSensor(ControlDManagerInstanceEntity, SensorEnt
     """Expose the current number of discovered profiles."""
 
     _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_COUNT
+    _attr_native_unit_of_measurement = "profiles"
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _purpose = PURPOSE_INSTANCE_SUMMARY
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
@@ -150,6 +190,8 @@ class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEn
     """Expose the current number of discovered endpoints."""
 
     _attr_translation_key = TRANS_KEY_ENTITY_ENDPOINT_COUNT
+    _attr_native_unit_of_measurement = "endpoints"
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _purpose = PURPOSE_INSTANCE_SUMMARY
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
@@ -177,3 +219,331 @@ class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEn
             }
         )
         return attributes
+
+
+class ControlDManagerAccountAnalyticsSensor(
+    ControlDManagerInstanceEntity, SensorEntity
+):
+    """Base sensor for account-level analytics summary values."""
+
+    _purpose = PURPOSE_INSTANCE_ANALYTICS
+    _attr_native_unit_of_measurement = "queries"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def available(self) -> bool:
+        """Return whether analytics data is currently available."""
+        return super().available and self.runtime.registry.account_analytics is not None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Return the analytics reporting window when available."""
+        attributes = super().extra_state_attributes or {}
+        analytics = self.runtime.registry.account_analytics
+        if analytics is None:
+            return attributes
+        if analytics.start_time is not None:
+            attributes[ATTR_ANALYTICS_START_TIME] = analytics.start_time
+        if analytics.end_time is not None:
+            attributes[ATTR_ANALYTICS_END_TIME] = analytics.end_time
+        return attributes
+
+
+class ControlDManagerTotalQueriesSensor(ControlDManagerAccountAnalyticsSensor):
+    """Expose the current account-level total query count."""
+
+    _attr_translation_key = TRANS_KEY_ENTITY_TOTAL_QUERIES
+
+    def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
+        """Initialize the total-queries sensor."""
+        super().__init__(config_entry, "total_queries")
+        self._attr_name = "Total queries"
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the current total query count for the reporting window."""
+        analytics = self.runtime.registry.account_analytics
+        if analytics is None:
+            return None
+        return analytics.total_queries
+
+
+class ControlDManagerBlockedQueriesSensor(ControlDManagerAccountAnalyticsSensor):
+    """Expose the current account-level blocked query count."""
+
+    _attr_translation_key = TRANS_KEY_ENTITY_BLOCKED_QUERIES
+
+    def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
+        """Initialize the blocked-queries sensor."""
+        super().__init__(config_entry, "blocked_queries")
+        self._attr_name = "Blocked queries"
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def available(self) -> bool:
+        """Return whether a proven blocked-query total is available."""
+        analytics = self.runtime.registry.account_analytics
+        return (
+            super().available
+            and analytics is not None
+            and analytics.blocked_queries is not None
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the current blocked query count for the reporting window."""
+        analytics = self.runtime.registry.account_analytics
+        if analytics is None or analytics.blocked_queries is None:
+            return None
+        return analytics.blocked_queries
+
+
+class ControlDManagerBypassedQueriesSensor(ControlDManagerAccountAnalyticsSensor):
+    """Expose the current account-level bypassed query count."""
+
+    _attr_translation_key = TRANS_KEY_ENTITY_BYPASSED_QUERIES
+
+    def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
+        """Initialize the bypassed-queries sensor."""
+        super().__init__(config_entry, "bypassed_queries")
+        self._attr_name = "Bypassed queries"
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def available(self) -> bool:
+        """Return whether a proven bypassed-query total is available."""
+        analytics = self.runtime.registry.account_analytics
+        return (
+            super().available
+            and analytics is not None
+            and analytics.bypassed_queries is not None
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the current bypassed query count for the reporting window."""
+        analytics = self.runtime.registry.account_analytics
+        if analytics is None or analytics.bypassed_queries is None:
+            return None
+        return analytics.bypassed_queries
+
+
+class ControlDManagerRedirectedQueriesSensor(ControlDManagerAccountAnalyticsSensor):
+    """Expose the current account-level redirected query count."""
+
+    _attr_translation_key = TRANS_KEY_ENTITY_REDIRECTED_QUERIES
+
+    def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
+        """Initialize the redirected-queries sensor."""
+        super().__init__(config_entry, "redirected_queries")
+        self._attr_name = "Redirected queries"
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def available(self) -> bool:
+        """Return whether a proven redirected-query total is available."""
+        analytics = self.runtime.registry.account_analytics
+        return (
+            super().available
+            and analytics is not None
+            and analytics.redirected_queries is not None
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the current redirected query count for the reporting window."""
+        analytics = self.runtime.registry.account_analytics
+        if analytics is None or analytics.redirected_queries is None:
+            return None
+        return analytics.redirected_queries
+
+
+class ControlDManagerBlockedQueriesRatioSensor(ControlDManagerAccountAnalyticsSensor):
+    """Expose the current blocked-query ratio for the account."""
+
+    _attr_translation_key = TRANS_KEY_ENTITY_BLOCKED_QUERIES_RATIO
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
+        """Initialize the blocked-query-ratio sensor."""
+        super().__init__(config_entry, "blocked_queries_ratio")
+        self._attr_name = "Blocked queries ratio"
+        self._attr_suggested_display_precision = 1
+
+    @property
+    def available(self) -> bool:
+        """Return whether a proven blocked-query ratio is available."""
+        analytics = self.runtime.registry.account_analytics
+        return (
+            super().available
+            and analytics is not None
+            and analytics.blocked_queries_ratio is not None
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the current blocked-query ratio for the reporting window."""
+        analytics = self.runtime.registry.account_analytics
+        if analytics is None or analytics.blocked_queries_ratio is None:
+            return None
+        return round(analytics.blocked_queries_ratio, 1)
+
+
+class ControlDManagerProfileAnalyticsSensor(ControlDManagerProfileEntity, SensorEntity):
+    """Base sensor for profile-level analytics summary values."""
+
+    _purpose = PURPOSE_PROFILE_ANALYTICS
+    _attr_native_unit_of_measurement = "queries"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def analytics(self) -> ControlDAccountAnalytics | None:
+        """Return the current analytics snapshot for this profile."""
+        return self.runtime.registry.profile_analytics_by_profile.get(self._profile_pk)
+
+    @property
+    def available(self) -> bool:
+        """Return whether analytics data is currently available."""
+        return super().available and self.analytics is not None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Return the analytics reporting window when available."""
+        attributes = super().extra_state_attributes or {}
+        if (analytics := self.analytics) is None:
+            return attributes
+        if analytics.start_time is not None:
+            attributes[ATTR_ANALYTICS_START_TIME] = analytics.start_time
+        if analytics.end_time is not None:
+            attributes[ATTR_ANALYTICS_END_TIME] = analytics.end_time
+        return attributes
+
+
+class ControlDManagerProfileTotalQueriesSensor(ControlDManagerProfileAnalyticsSensor):
+    """Expose the current profile-level total query count."""
+
+    _attr_translation_key = TRANS_KEY_ENTITY_TOTAL_QUERIES
+
+    def __init__(
+        self,
+        config_entry: ConfigEntry[ControlDManagerRuntime],
+        profile_pk: str,
+    ) -> None:
+        """Initialize the profile total-queries sensor."""
+        super().__init__(config_entry, profile_pk, "total_queries")
+        self._attr_name = "Total queries"
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the current total query count for the reporting window."""
+        if (analytics := self.analytics) is None:
+            return None
+        return analytics.total_queries
+
+
+class ControlDManagerProfileBlockedQueriesSensor(ControlDManagerProfileAnalyticsSensor):
+    """Expose the current profile-level blocked query count."""
+
+    _attr_translation_key = TRANS_KEY_ENTITY_BLOCKED_QUERIES
+
+    def __init__(
+        self,
+        config_entry: ConfigEntry[ControlDManagerRuntime],
+        profile_pk: str,
+    ) -> None:
+        """Initialize the profile blocked-queries sensor."""
+        super().__init__(config_entry, profile_pk, "blocked_queries")
+        self._attr_name = "Blocked queries"
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def available(self) -> bool:
+        """Return whether a proven blocked-query total is available."""
+        analytics = self.analytics
+        return (
+            super().available
+            and analytics is not None
+            and analytics.blocked_queries is not None
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the current blocked query count for the reporting window."""
+        if (analytics := self.analytics) is None or analytics.blocked_queries is None:
+            return None
+        return analytics.blocked_queries
+
+
+class ControlDManagerProfileBypassedQueriesSensor(
+    ControlDManagerProfileAnalyticsSensor
+):
+    """Expose the current profile-level bypassed query count."""
+
+    _attr_translation_key = TRANS_KEY_ENTITY_BYPASSED_QUERIES
+
+    def __init__(
+        self,
+        config_entry: ConfigEntry[ControlDManagerRuntime],
+        profile_pk: str,
+    ) -> None:
+        """Initialize the profile bypassed-queries sensor."""
+        super().__init__(config_entry, profile_pk, "bypassed_queries")
+        self._attr_name = "Bypassed queries"
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def available(self) -> bool:
+        """Return whether a proven bypassed-query total is available."""
+        analytics = self.analytics
+        return (
+            super().available
+            and analytics is not None
+            and analytics.bypassed_queries is not None
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the current bypassed query count for the reporting window."""
+        if (analytics := self.analytics) is None or analytics.bypassed_queries is None:
+            return None
+        return analytics.bypassed_queries
+
+
+class ControlDManagerProfileRedirectedQueriesSensor(
+    ControlDManagerProfileAnalyticsSensor
+):
+    """Expose the current profile-level redirected query count."""
+
+    _attr_translation_key = TRANS_KEY_ENTITY_REDIRECTED_QUERIES
+
+    def __init__(
+        self,
+        config_entry: ConfigEntry[ControlDManagerRuntime],
+        profile_pk: str,
+    ) -> None:
+        """Initialize the profile redirected-queries sensor."""
+        super().__init__(config_entry, profile_pk, "redirected_queries")
+        self._attr_name = "Redirected queries"
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def available(self) -> bool:
+        """Return whether a proven redirected-query total is available."""
+        analytics = self.analytics
+        return (
+            super().available
+            and analytics is not None
+            and analytics.redirected_queries is not None
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the current redirected query count for the reporting window."""
+        if (
+            analytics := self.analytics
+        ) is None or analytics.redirected_queries is None:
+            return None
+        return analytics.redirected_queries

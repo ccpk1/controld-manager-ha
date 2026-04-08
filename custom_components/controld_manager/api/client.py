@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from aiohttp import ClientError, ClientSession
 
 from ..models import (
+    ControlDAccountAnalytics,
     ControlDInventoryPayload,
     ControlDProfileDetailPayload,
     ControlDUser,
@@ -19,6 +22,12 @@ from .exceptions import (
 )
 
 DEFAULT_BASE_URL = "https://api.controld.com"
+ACTION_BLOCKED = 0
+ACTION_BYPASSED = 1
+ACTION_REDIRECTED = 2
+ACTION_REDIRECTED_LOCAL = 3
+
+type AnalyticsScopeParams = Mapping[str, str | list[str]]
 
 
 class ControlDAPIClient:
@@ -67,6 +76,133 @@ class ControlDAPIClient:
             user=user,
             profiles=tuple(profiles),
             devices=tuple(devices),
+        )
+
+    async def async_get_account_analytics(
+        self,
+        stats_endpoint: str,
+        *,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> ControlDAccountAnalytics:
+        """Fetch the current account-level analytics summary."""
+        return await self._async_get_scoped_analytics(
+            stats_endpoint,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    async def async_get_profile_analytics(
+        self,
+        stats_endpoint: str,
+        profile_pk: str,
+        *,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> ControlDAccountAnalytics:
+        """Fetch the current profile-scoped analytics summary."""
+        return await self._async_get_scoped_analytics(
+            stats_endpoint,
+            start_time=start_time,
+            end_time=end_time,
+            scope_params={"profileId": profile_pk},
+        )
+
+    async def async_get_endpoint_analytics(
+        self,
+        stats_endpoint: str,
+        profile_pk: str,
+        endpoint_id: str,
+        *,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> ControlDAccountAnalytics:
+        """Fetch the current endpoint-scoped analytics summary."""
+        return await self._async_get_scoped_analytics(
+            stats_endpoint,
+            start_time=start_time,
+            end_time=end_time,
+            scope_params={
+                "profileId": profile_pk,
+                "endpointId[]": [endpoint_id],
+            },
+        )
+
+    async def _async_get_scoped_analytics(
+        self,
+        stats_endpoint: str,
+        *,
+        start_time: datetime,
+        end_time: datetime,
+        scope_params: AnalyticsScopeParams | None = None,
+    ) -> ControlDAccountAnalytics:
+        """Fetch one scoped analytics summary from the action-bucket counts."""
+        params: dict[str, Any] = self._analytics_time_params(start_time, end_time)
+        if scope_params:
+            params.update(dict(scope_params))
+
+        (
+            blocked_payload,
+            bypassed_payload,
+            redirected_payload,
+            redirected_local_payload,
+        ) = await asyncio.gather(
+            self._async_get_external_json(
+                f"{self._analytics_base_url(stats_endpoint)}/v2/statistic/count",
+                params={**params, "action[]": str(ACTION_BLOCKED)},
+            ),
+            self._async_get_external_json(
+                f"{self._analytics_base_url(stats_endpoint)}/v2/statistic/count",
+                params={**params, "action[]": str(ACTION_BYPASSED)},
+            ),
+            self._async_get_external_json(
+                f"{self._analytics_base_url(stats_endpoint)}/v2/statistic/count",
+                params={**params, "action[]": str(ACTION_REDIRECTED)},
+            ),
+            self._async_get_external_json(
+                f"{self._analytics_base_url(stats_endpoint)}/v2/statistic/count",
+                params={**params, "action[]": str(ACTION_REDIRECTED_LOCAL)},
+            ),
+        )
+
+        blocked_count, blocked_start_time, blocked_end_time = (
+            self._extract_analytics_count(blocked_payload)
+        )
+        bypassed_count, bypassed_start_time, bypassed_end_time = (
+            self._extract_analytics_count(bypassed_payload)
+        )
+        redirected_count, redirected_start_time, redirected_end_time = (
+            self._extract_analytics_count(redirected_payload)
+        )
+        (
+            redirected_local_count,
+            redirected_local_start_time,
+            redirected_local_end_time,
+        ) = self._extract_analytics_count(redirected_local_payload)
+        response_start_time = (
+            blocked_start_time
+            or bypassed_start_time
+            or redirected_start_time
+            or redirected_local_start_time
+        )
+        response_end_time = (
+            blocked_end_time
+            or bypassed_end_time
+            or redirected_end_time
+            or redirected_local_end_time
+        )
+        redirected_total = redirected_count + redirected_local_count
+        total_count = blocked_count + bypassed_count + redirected_total
+        blocked_ratio = (blocked_count / total_count * 100) if total_count else 0.0
+
+        return ControlDAccountAnalytics(
+            total_queries=total_count,
+            blocked_queries=blocked_count,
+            bypassed_queries=bypassed_count,
+            redirected_queries=redirected_total,
+            blocked_queries_ratio=blocked_ratio,
+            start_time=response_start_time or start_time,
+            end_time=response_end_time or end_time,
         )
 
     async def async_get_profile_filters(self, profile_pk: str) -> list[dict[str, Any]]:
@@ -409,14 +545,31 @@ class ControlDAPIClient:
         """Perform a GET request and decode JSON safely."""
         return await self._async_request("GET", path)
 
+    async def _async_get_external_json(
+        self, url: str, *, params: dict[str, Any] | None = None
+    ) -> Any:
+        """Perform a GET request against a fully qualified external endpoint."""
+        return await self._async_request_url("GET", url, params=params)
+
     async def _async_request(
         self, method: str, path: str, payload: dict[str, Any] | None = None
     ) -> Any:
         """Perform an HTTP request and decode JSON when present."""
         url = f"{self._base_url}{path}"
+        return await self._async_request_url(method, url, payload=payload)
+
+    async def _async_request_url(
+        self,
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        """Perform an HTTP request against a fully qualified URL."""
         try:
             async with self._session.request(
-                method, url, headers=self._headers, json=payload
+                method, url, headers=self._headers, json=payload, params=params
             ) as response:
                 if response.status in (401, 403):
                     raise ControlDApiAuthError("Control D authentication failed")
@@ -429,6 +582,8 @@ class ControlDAPIClient:
                 return await response.json(content_type=None)
         except TimeoutError as err:
             raise ControlDApiConnectionError("Control D request timed out") from err
+        except AttributeError as err:
+            raise ControlDApiConnectionError("Control D request failed") from err
         except ClientError as err:
             raise ControlDApiConnectionError("Control D request failed") from err
 
@@ -484,3 +639,57 @@ class ControlDAPIClient:
     def _optional_string(value: Any) -> str | None:
         """Return an optional string field from a payload."""
         return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def _analytics_base_url(stats_endpoint: str) -> str:
+        """Return the analytics base URL for one stats endpoint token."""
+        normalized = stats_endpoint.strip().rstrip("/")
+        if normalized.startswith(("http://", "https://")):
+            return normalized
+        if normalized.endswith(".analytics.controld.com"):
+            return f"https://{normalized}"
+        return f"https://{normalized}.analytics.controld.com"
+
+    @staticmethod
+    def _analytics_time_params(
+        start_time: datetime, end_time: datetime
+    ) -> dict[str, str]:
+        """Return analytics query parameters for an explicit reporting window."""
+        start_time = start_time.astimezone(UTC)
+        end_time = end_time.astimezone(UTC)
+        return {
+            "startTime": start_time.isoformat(timespec="milliseconds").replace(
+                "+00:00", "Z"
+            ),
+            "endTime": end_time.isoformat(timespec="milliseconds").replace(
+                "+00:00", "Z"
+            ),
+        }
+
+    @classmethod
+    def _extract_analytics_count(
+        cls, payload: Any
+    ) -> tuple[int, datetime | None, datetime | None]:
+        """Extract one analytics count response with normalized time bounds."""
+        body = cls._extract_body_mapping(payload)
+        count = body.get("count")
+        if not isinstance(count, int):
+            raise ControlDApiResponseError(
+                "Control D analytics response is missing the expected integer count"
+            )
+        return (
+            count,
+            cls._parse_optional_datetime(body.get("startTime")),
+            cls._parse_optional_datetime(body.get("endTime")),
+        )
+
+    @staticmethod
+    def _parse_optional_datetime(value: Any) -> datetime | None:
+        """Parse an optional ISO datetime from analytics payloads."""
+        if not isinstance(value, str) or not value:
+            return None
+        normalized = value.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(normalized)
+        except ValueError:
+            return None

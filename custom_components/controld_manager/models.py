@@ -59,6 +59,19 @@ class ControlDUser:
 
 
 @dataclass(slots=True, frozen=True)
+class ControlDAccountAnalytics:
+    """Normalized account-level analytics for one reporting window."""
+
+    total_queries: int
+    blocked_queries: int | None = None
+    bypassed_queries: int | None = None
+    redirected_queries: int | None = None
+    blocked_queries_ratio: float | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+
+
+@dataclass(slots=True, frozen=True)
 class ControlDAttachedProfile:
     """A normalized attached-profile reference from a device payload."""
 
@@ -493,6 +506,7 @@ class ControlDInventoryPayload:
     option_catalog: tuple[dict[str, Any], ...] = ()
     service_categories: tuple[dict[str, Any], ...] = ()
     service_catalog: tuple[dict[str, Any], ...] = ()
+    account_analytics: ControlDAccountAnalytics | None = None
 
 
 def _build_endpoint_inventory_stats() -> ControlDEndpointInventoryStats:
@@ -505,6 +519,10 @@ class ControlDRegistry:
     """Coordinator-owned normalized snapshot for one config entry."""
 
     user: ControlDUser | None = None
+    account_analytics: ControlDAccountAnalytics | None = None
+    profile_analytics_by_profile: dict[str, ControlDAccountAnalytics] = field(
+        default_factory=dict
+    )
     endpoint_inventory: ControlDEndpointInventoryStats = field(
         default_factory=_build_endpoint_inventory_stats
     )
