@@ -1,27 +1,25 @@
 rules:
-  baseline-note:
-    status: todo
-    comment: The runtime foundation and first conservative entity and service slice now exist, but additional quality-scale behavior still remains.
-
   # Bronze
   action-setup: done
-  appropriate-polling: todo
+  appropriate-polling:
+    status: done
+    comment: The current implementation uses one bounded configuration-sync poller and does not expose inactive polling paths.
   brands:
-    status: exempt
-    comment: Custom integration branding is intentionally not part of the initial scaffold.
+    status: done
+    comment: Custom integration branding complete per 2026.3 standards
   common-modules: done
-  config-flow-test-coverage: todo
+  config-flow-test-coverage:
+    status: done
+    comment: Config-flow tests now cover create-entry, duplicate-instance, reauth, reconfigure, translated token-submit failures, and an options-flow lookup failure path.
   config-flow: done
   dependency-transparency: done
   docs-actions: done
   docs-high-level-description: done
-  docs-installation-instructions:
-    status: todo
-    comment: Real installation and runtime instructions depend on implemented behavior.
-  docs-removal-instructions: todo
+  docs-installation-instructions: done
+  docs-removal-instructions: done
   entity-event-setup:
     status: exempt
-    comment: No event-driven entities exist in the scaffold.
+    comment: No event-driven entities exist.
   entity-unique-id: done
   has-entity-name: done
   runtime-data: done
@@ -32,7 +30,7 @@ rules:
   # Silver
   action-exceptions: done
   config-entry-unloading: done
-  docs-data-update: todo
+  docs-data-update: done
   entity-unavailable: done
   log-when-unavailable: done
   parallel-updates: done
@@ -41,14 +39,12 @@ rules:
 
   # Gold
   devices: done
-  diagnostics:
-    status: done
-    comment: Diagnostics now include refresh state, registry summary, and per-profile policy scope with redaction.
+  diagnostics: done
   discovery:
     status: exempt
-    comment: No discovery contract has been defined for this cloud integration.
-  entity-category: todo
-  entity-disabled-by-default: todo
+    comment: No discovery for cloud integration.
+  entity-category: done
+  entity-disabled-by-default: done
   entity-translations: done
   exception-translations: done
   icon-translations: done

@@ -303,12 +303,9 @@ Critical rules:
 ## Polling standards
 
 - direct API calls from entities are forbidden except for narrowly justified, user-initiated actions that cannot be expressed through the manager path
-- prefer split refresh groups over one oversized poll path when analytics and configuration data have materially different cadences
-- benchmark the final polling shape against Home Assistant cloud integrations such as NextDNS before locking the intervals
-- current target posture is a fast analytics poller at 3 to 5 minutes and a slow configuration poller at 30 to 60 minutes
-- refresh groups must be runtime-defined so individual poll categories can be added, removed, or rebalanced without rewriting coordinator architecture
-- each refresh group must have explicit `DEFAULT_*`, `MIN_*`, and `MAX_*` interval constants before it becomes user-configurable
-- options-backed polling changes must stay within bounded ranges per refresh group; unbounded user-defined polling is forbidden
+- the current supported model is one bounded configuration-sync poller
+- polling intervals must stay coordinator-owned and bounded; unbounded user-defined polling is forbidden
+- do not document or expose additional pollers until they are implemented and validated
 - after a successful mutation, trigger an immediate refresh of the affected configuration path so the Home Assistant UI reflects the new cloud state promptly
 
 ## Config flow standards
@@ -320,10 +317,10 @@ Critical rules:
 - implement reauthentication and reconfiguration explicitly once credentials and instance identity semantics are confirmed
 - options flows should use a menu-based structure when multiple mutable settings families exist
 - options-flow menuing, system-settings steps, and translation structure should follow the Firewalla Local pattern: one top-level menu, one profile selector, one focused per-profile edit form, and one integration-settings form
-- options-flow structure should keep one coherent save surface per scope: submitting the profile form saves that profile policy, and submitting the integration-settings form saves the global polling policy
+- options-flow structure should keep one coherent save surface per scope: submitting the profile form saves that profile policy, and submitting the integration-settings form saves the current global polling policy
 - initial setup should include all discovered profiles by default
 - the options flow must allow any profile to be excluded from the integration later without deleting the config entry
-- per-refresh-group polling settings belong in coordinator-owned system settings, not in entity or service configuration surfaces
+- polling settings belong in coordinator-owned system settings, not in entity or service configuration surfaces
 
 ## Service standards
 

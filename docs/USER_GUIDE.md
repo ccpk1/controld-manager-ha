@@ -24,12 +24,43 @@ This guide reflects the current implemented behavior in this repository.
 - exposes profile controls as Home Assistant entities
 - provides account-level summary sensors and a manual sync button
 
+## Installation
+
+You can install Control D Manager through HACS or by copying the integration
+into your Home Assistant configuration directory manually.
+
+### One-click HACS install
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ccpk1&repository=controld-manager-ha&category=integration)
+
+### Manual HACS setup
+
+1. Ensure HACS is installed.
+2. In Home Assistant, open HACS -> Integrations -> Custom repositories.
+3. Add `https://github.com/ccpk1/controld-manager-ha` as an Integration repository.
+4. Search for `Control D Manager`, install it, and restart Home Assistant.
+
+### Manual installation
+
+1. Download this repository.
+2. Copy `custom_components/controld_manager` into your Home Assistant
+	`custom_components/` directory.
+3. Restart Home Assistant.
+
+### Before you add the integration
+
+Before starting the config flow, sign in to your Control D account at
+`controld.com` and create an API key with write access. The integration uses a
+write-capable key because it supports profile enable or disable, filter
+changes, service changes, option changes, and rule changes in addition to
+read-only inventory and analytics.
+
 ## Initial setup
 
 1. Open Home Assistant.
 2. Go to Settings > Devices & services.
 3. Add the Control D Manager integration.
-4. Enter a valid Control D API token.
+4. Enter a valid write-capable Control D API token.
 
 If authentication succeeds, Home Assistant creates one config entry for that
 Control D instance.
@@ -50,6 +81,35 @@ Use these entry actions when needed:
 
 Both paths verify that the submitted token still belongs to the same immutable
 Control D instance before the entry is updated.
+
+## Removal
+
+If you want to stop using the integration, remove the Home Assistant config
+entry first.
+
+### Remove the config entry
+
+1. Open Home Assistant.
+2. Go to Settings > Devices & services.
+3. Open the `Control D Manager` integration entry.
+4. Choose Delete.
+
+Removing the config entry unloads the runtime, removes the entities that belong
+to that entry, and detaches the Home Assistant devices created for the account
+and managed profiles.
+
+### Remove the installed files
+
+After removing the config entry, remove the integration files using the same
+method you used to install it.
+
+- HACS:
+	Open HACS, locate `Control D Manager`, and uninstall the repository.
+- Manual install:
+	Delete `custom_components/controld_manager` from your Home Assistant
+	configuration directory.
+
+Restart Home Assistant after removing the files.
 
 ## Options flow
 
@@ -99,9 +159,10 @@ This form controls the currently active refresh cadence.
 	Control D inventory and configuration data. The allowed range is 5 to 60
 	minutes.
 
-The integration does not currently expose separate polling controls for
-endpoint activity or profile analytics because those are not separate runtime
-pollers yet.
+The integration currently uses one polling path for inventory, profile detail,
+endpoint activity, and analytics refresh. Separate polling controls are not
+documented or exposed because separate runtime pollers are not part of the
+supported implementation today.
 
 ## Diagnostics and availability
 
@@ -128,10 +189,11 @@ Current account entities:
 - Endpoint count
 - Total queries
 - Blocked queries
+- Blocked queries ratio
 - Bypassed queries
 - Redirected queries
 
-Each managed profile device also exposes the same four analytics sensors for
+Each managed profile device also exposes the same five analytics sensors for
 that profile, using the same rolling last day reporting window as the Control D
 statistics page.
 - Sync now
@@ -249,10 +311,86 @@ Current notes for these first-release analytics sensors:
 	buckets shown in the dashboard-style action model, rather than from the raw
 	unsliced aggregate count endpoint alone
 - the returned analytics start and end times are exposed as state attributes
-- blocked query ratio is still not exposed because the action-bucket counts are
-	more stable and informative for the first account analytics surface
+- blocked query ratio is exposed as a percentage sensor for both the account
+	and each managed profile
 - these sensors are best-effort telemetry and do not affect the core inventory
 	refresh path if the analytics endpoint is temporarily unavailable
+
+## Dashboard compatibility
+
+### Pi-hole card
+
+The integration exposes several account and profile analytics sensors using
+translation keys that the `custom:pi-hole` Lovelace card already understands.
+This gives you a practical way to reuse that card for a Control D dashboard.
+
+Current compatible surfaces include:
+
+- total queries
+- blocked queries
+- blocked queries ratio
+- unique clients or endpoint count
+- status
+
+This is limited compatibility rather than a full Pi-hole emulation layer. The
+card still includes Pi-hole-specific sections that expect Pi-hole services and
+Pi-hole data models.
+
+### Practical limitations
+
+Some built-in Pi-hole card sections are not a direct fit for Control D.
+
+- pause controls in the card trigger Pi-hole-specific service calls
+- charts and footer content are designed around Pi-hole behavior and may not be
+	useful in a Control D dashboard
+- card actions may assume Pi-hole endpoints or service names that this
+	integration does not provide
+
+For that reason, it is usually better to hide those sections with
+`exclude_sections` and let the Control D entities provide the controls.
+
+### Example configuration
+
+This example uses one card for account statistics and one card for a single
+profile control surface.
+
+```yaml
+type: grid
+cards:
+	- type: custom:pi-hole
+		device_id: ACCOUNT_DEVICE_ID  # Replace with your account device ID
+		title: Control D - Account
+		icon: mdi:dns-outline
+		exclude_sections:
+			- pause
+			- chart
+			- footer
+			- switches
+
+	- type: custom:pi-hole
+		device_id: PROFILE_DEVICE_ID  # Replace with your profile device ID
+		title: Control D - Profile 1
+		icon: mdi:dns-outline
+		exclude_sections:
+			- actions
+			- chart
+			- footer
+			- pause
+		entity_order:
+			- switch.profile_1_disable  # Replace with the disable switch for the selected profile
+			- divider
+```
+
+What this configuration does:
+
+- The account card is used as a read-only summary card for account-wide
+	statistics.
+- The profile card keeps the statistics layout from the Pi-hole card while
+	leaving room for Control D switches and other profile entities.
+- The excluded sections avoid Pi-hole-specific controls that would otherwise
+	call unsupported actions.
+- `entity_order` lets you keep the main profile disable switch near the top of
+	the switch list.
 
 ## Profile controls
 

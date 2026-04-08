@@ -4,14 +4,58 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.controld_manager.api import (
+    ControlDApiAuthError,
+    ControlDApiConnectionError,
+    ControlDApiResponseError,
+)
 from custom_components.controld_manager.config_flow import ControlDManagerOptionsFlow
-from custom_components.controld_manager.const import CONF_API_TOKEN, DOMAIN
+from custom_components.controld_manager.const import (
+    CONF_API_TOKEN,
+    DOMAIN,
+    TRANS_KEY_CANNOT_CONNECT,
+    TRANS_KEY_INVALID_AUTH,
+    TRANS_KEY_UNKNOWN,
+)
 from custom_components.controld_manager.models import ControlDUser
+
+
+async def _submit_token_flow(
+    hass,
+    flow_kind: str,
+    api_token: str,
+):
+    """Start and submit one token-based config-flow path."""
+    if flow_kind == "user":
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        return await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_API_TOKEN: api_token}
+        )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "old-token", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry.add_to_hass(hass)
+
+    if flow_kind == "reauth":
+        result = await entry.start_reauth_flow(hass)
+    else:
+        result = await entry.start_reconfigure_flow(hass)
+
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_API_TOKEN: api_token}
+    )
 
 
 async def test_user_flow_creates_entry(hass) -> None:
@@ -106,6 +150,84 @@ async def test_user_flow_rejects_duplicate_instance(hass) -> None:
 
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "already_configured"
+
+
+@pytest.mark.parametrize(
+    ("flow_kind", "raised_error", "expected_error", "expected_step_id"),
+    [
+        (
+            "user",
+            ControlDApiAuthError,
+            TRANS_KEY_INVALID_AUTH,
+            "user",
+        ),
+        (
+            "user",
+            ControlDApiConnectionError,
+            TRANS_KEY_CANNOT_CONNECT,
+            "user",
+        ),
+        (
+            "user",
+            ControlDApiResponseError,
+            TRANS_KEY_UNKNOWN,
+            "user",
+        ),
+        (
+            "reauth",
+            ControlDApiAuthError,
+            TRANS_KEY_INVALID_AUTH,
+            "reauth_confirm",
+        ),
+        (
+            "reauth",
+            ControlDApiConnectionError,
+            TRANS_KEY_CANNOT_CONNECT,
+            "reauth_confirm",
+        ),
+        (
+            "reauth",
+            ValueError,
+            TRANS_KEY_UNKNOWN,
+            "reauth_confirm",
+        ),
+        (
+            "reconfigure",
+            ControlDApiAuthError,
+            TRANS_KEY_INVALID_AUTH,
+            "reconfigure",
+        ),
+        (
+            "reconfigure",
+            ControlDApiConnectionError,
+            TRANS_KEY_CANNOT_CONNECT,
+            "reconfigure",
+        ),
+        (
+            "reconfigure",
+            ControlDApiResponseError,
+            TRANS_KEY_UNKNOWN,
+            "reconfigure",
+        ),
+    ],
+)
+async def test_token_flows_show_expected_errors(
+    hass,
+    flow_kind: str,
+    raised_error: type[Exception],
+    expected_error: str,
+    expected_step_id: str,
+) -> None:
+    """Token-entry flows should surface specific translated error keys."""
+    with patch(
+        "custom_components.controld_manager.config_flow.ControlDAPIClient.async_get_instance_identity",
+        new=AsyncMock(side_effect=raised_error),
+    ):
+        result = await _submit_token_flow(hass, flow_kind, "bad-token")
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == expected_step_id
+    assert result["errors"] == {"base": expected_error}
 
 
 async def test_options_flow_edit_profile_exposes_external_filters_and_hides_auto_enable(
@@ -268,3 +390,38 @@ async def test_options_flow_integration_settings_only_exposes_active_poller(
     assert isinstance(schema, vol.Schema)
     field_names = [marker.schema for marker in schema.schema]
     assert field_names == ["configuration_sync_interval_minutes"]
+
+
+@pytest.mark.parametrize(
+    ("raised_error", "expected_error"),
+    [
+        (ControlDApiAuthError, TRANS_KEY_INVALID_AUTH),
+        (ControlDApiConnectionError, TRANS_KEY_CANNOT_CONNECT),
+        (ValueError, TRANS_KEY_UNKNOWN),
+    ],
+)
+async def test_options_flow_select_profile_surfaces_lookup_errors(
+    hass,
+    raised_error: type[Exception],
+    expected_error: str,
+) -> None:
+    """Profile selection should return a form-level error when lookup fails."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    flow = ControlDManagerOptionsFlow(entry)
+    flow.hass = hass
+
+    with patch.object(
+        flow,
+        "_async_get_profile_choices",
+        new=AsyncMock(side_effect=raised_error),
+    ):
+        result = await flow.async_step_select_profile()
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "select_profile"
+    assert result["errors"] == {"base": expected_error}

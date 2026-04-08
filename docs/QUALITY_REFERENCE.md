@@ -26,7 +26,7 @@ It is a compact reference for review and maintenance. It should stay focused on 
 | Translation posture | User-facing failures and service surfaces are translation-ready | translations, flows, services, repair surfaces |
 | Error handling | API exceptions are typed and Home Assistant exception mapping is specific | `custom_components/controld_manager/api/`, flows, services, coordinator |
 | Diagnostics and supportability | Sensitive data is redacted while diagnostics remain useful | `custom_components/controld_manager/diagnostics.py` |
-| Runtime efficiency | Refreshes are grouped by actual data cadence instead of a single oversized poll path, and entities do not poll the API directly | coordinators, managers, platform code |
+| Runtime efficiency | Refreshes stay coordinator-owned, bounded, and consistent with the currently implemented single polling path, and entities do not poll the API directly | coordinators, managers, platform code |
 | Documentation quality | Repository guidance reflects durable rules and stays aligned with implementation | `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT_STANDARDS.md`, `docs/QUALITY_REFERENCE.md` |
 
 ## Architecture quality contracts
@@ -53,8 +53,8 @@ It is a compact reference for review and maintenance. It should stay focused on 
 
 ### Polling contract
 
-- refresh paths should be split by data cadence when analytics and configuration payloads differ materially
-- the preferred baseline is a fast analytics poller and a slower configuration poller
+- the current supported runtime uses one bounded configuration-sync poller
+- entities do not poll the API directly
 - successful mutations should request an immediate refresh of the affected configuration state
 
 ### Translation contract
