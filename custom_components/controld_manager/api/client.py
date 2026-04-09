@@ -60,7 +60,7 @@ class ControlDAPIClient:
                 or self._optional_string(user_payload.get("username"))
             ),
             last_active=self._optional_string(user_payload.get("last_active")),
-            stats_endpoint=self._optional_string(user_payload.get("stats_endpoint")),
+            stats_endpoint=self._extract_stats_endpoint(user_payload),
             status=self._optional_string(user_payload.get("status")),
             safe_countries=safe_countries,
         )
@@ -639,6 +639,17 @@ class ControlDAPIClient:
     def _optional_string(value: Any) -> str | None:
         """Return an optional string field from a payload."""
         return value if isinstance(value, str) and value else None
+
+    @classmethod
+    def _extract_stats_endpoint(cls, payload: dict[str, Any]) -> str | None:
+        """Return the analytics endpoint token from user or org payloads."""
+        if stats_endpoint := cls._optional_string(payload.get("stats_endpoint")):
+            return stats_endpoint
+
+        org_payload = payload.get("org")
+        if not isinstance(org_payload, dict):
+            return None
+        return cls._optional_string(org_payload.get("stats_endpoint"))
 
     @staticmethod
     def _analytics_base_url(stats_endpoint: str) -> str:

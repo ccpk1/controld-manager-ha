@@ -213,6 +213,42 @@ def test_integration_manager_builds_normalized_registry() -> None:
     assert registry.endpoint_inventory.protected_endpoint_count == 3
 
 
+def test_integration_manager_reads_org_stats_endpoint_fallback() -> None:
+    """Nested organization stats-endpoint metadata should be preserved."""
+    device_manager = DeviceManager()
+    entity_manager = EntityManager()
+    integration_manager = IntegrationManager(
+        profile_manager=ProfileManager(),
+        endpoint_manager=EndpointManager(),
+        device_manager=device_manager,
+        entity_manager=entity_manager,
+    )
+
+    inventory = _sample_inventory()
+    inventory = ControlDInventoryPayload(
+        user={
+            "id": "user-123",
+            "PK": "account-pk",
+            "org": {"stats_endpoint": "us-east1-org01"},
+            "safe_countries": ["US", "CA"],
+        },
+        profiles=inventory.profiles,
+        devices=inventory.devices,
+    )
+
+    with (
+        patch.object(device_manager, "sync_registry"),
+        patch.object(entity_manager, "sync_registry"),
+    ):
+        integration_manager.attach_runtime(
+            cast(Any, SimpleNamespace(options=ControlDOptions()))
+        )
+        registry = integration_manager.build_registry(inventory)
+
+    assert registry.user is not None
+    assert registry.user.stats_endpoint == "us-east1-org01"
+
+
 def test_integration_manager_preserves_filter_fallback_and_service_modes() -> None:
     """Disabled modal filters and block services should normalize predictably."""
     device_manager = DeviceManager()

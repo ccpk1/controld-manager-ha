@@ -143,6 +143,28 @@ async def test_client_preserves_mixed_flat_and_nested_service_rows() -> None:
         ]
 
 
+async def test_client_reads_org_stats_endpoint_from_nested_org_payload() -> None:
+    """Use the nested org token when the top-level analytics field is absent."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    with patch.object(
+        client,
+        "async_get_user",
+        AsyncMock(
+            return_value={
+                "id": "user-123",
+                "PK": "pk-1",
+                "org": {"stats_endpoint": "us-east1-org01"},
+            }
+        ),
+    ):
+        identity = await client.async_get_instance_identity()
+
+    assert identity.instance_id == "user-123"
+    assert identity.account_pk == "pk-1"
+    assert identity.stats_endpoint == "us-east1-org01"
+
+
 async def test_client_fetches_account_analytics() -> None:
     """Fetch account analytics from the stats-endpoint host."""
     client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))

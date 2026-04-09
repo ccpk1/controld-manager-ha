@@ -301,6 +301,12 @@ reporting window.
 Redirected queries shows the current account-level redirected bucket for the
 same reporting window.
 
+This count combines both analytics redirect action types currently documented by
+Control D:
+
+- redirected by IP
+- redirected by Location
+
 Current notes for these first-release analytics sensors:
 
 - they request a rolling last-day account-level reporting window, then expose
@@ -823,6 +829,8 @@ persistent state across Home Assistant restarts.
 ## Troubleshooting
 
 - If Status reports Degraded or Problem, check the last refresh error attribute.
+- If the Control D API key is rejected, ensure a Home Country is set in your
+	Control D preferences on the website.
 - If a profile should disappear from Home Assistant, verify that Enable
 	management in Home Assistant is turned off for that profile.
 - If expected service controls are missing, verify that the relevant service

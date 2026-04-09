@@ -1,5 +1,17 @@
 # Control D Manager engineering findings
 
+## Research reference
+
+For deeper API research and discrepancy checks, use the Control D Analytics API
+reference as the primary published source for analytics behavior:
+
+- https://r1wwk64kpj.apidog.io/
+
+When this document and later ad-hoc findings appear to disagree on analytics
+read behavior, prefer the published API reference first, then reconcile the
+difference with live captures or dashboard-backed evidence before changing
+runtime assumptions.
+
 ## Purpose
 
 This document records the verified engineering findings that emerged from proof-of-concept work, published payloads, and dashboard-backed API inspection.
@@ -465,14 +477,44 @@ Observed families include:
 
 Common traits:
 
-- analytics calls use a region-specific host such as `america.analytics.controld.com`
+- analytics calls use an account- and region-specific host such as:
+  - `us-east1-usr01.analytics.controld.com`
+  - `us-east1-org01.analytics.controld.com`
+  - `asia-southeast1-usr01.analytics.controld.com`
+  - `europe-west4-usr01.analytics.controld.com`
 - response bodies commonly return normalized `startTime` and `endTime`
 - the server does not necessarily echo the requested time window exactly
+- the public analytics docs now define runtime host resolution explicitly:
+  - for users, `stats_endpoint` is served under `body.stats_endpoint`
+  - for organizations, `stats_endpoint` is served under `body.org.stats_endpoint`
+  - the analytics base URL is `concat(stats_endpoint, ".analytics.controld.com")`
 
-Working interpretation:
+Settled interpretation:
 
 - returned time bounds should be treated as authoritative analytics metadata
-- host selection is probably related to `stats_endpoint`, but that mapping is not fully closed yet
+- analytics host selection should be derived from `stats_endpoint`, not hardcoded from a static region label
+- earlier observed hosts such as `america.analytics.controld.com` should be treated as sample endpoints or aliases, not as the canonical construction rule
+
+### Analytics action enums now close the redirect count model
+
+The public analytics docs now define the `action` enum directly.
+
+Observed definitions:
+
+- `-1` = failed
+- `0` = blocked
+- `1` = bypassed
+- `2` = redirected by IP
+- `3` = redirected by Location
+- `spoofTarget` is the redirect destination and may be an IP, domain, or IATA code
+
+Settled interpretation:
+
+- analytics-side redirected totals should aggregate both redirect action buckets:
+  - `2` for IP redirect
+  - `3` for Location redirect
+- the current analytics read model is strong enough to justify one combined redirected-query count in the integration
+- redirect subtype breakout remains optional later enrichment rather than a v1 requirement
 
 ### Analytics client inventory is enrichment, not discovery
 
@@ -716,9 +758,8 @@ These are the remaining gaps that are worth resolving before or during implement
 - how should the runtime normalize attached-profile sibling fields beyond the current `profile` and `profile2` cases
 - how should the first implementation refresh groups be named and bounded
 - how exactly should parent-child endpoint metadata surface in v1
-- how does the analytics host selection map from `stats_endpoint`
 - how do `v2/client` identifiers correlate, if at all, to `/devices` identifiers
-- how do `action` values map across blocked, bypassed, and redirected views
+- which exact analytics queries and filters back the dashboard totals for each action bucket
 - what exact query backs the full blocked-card total
 - what exact denominator does `Benign Blocks` use when phishing or other security categories are present outside the visible ranked rows
 - how should country scoping and protocol scoping be treated in the default analytics model
@@ -1045,7 +1086,6 @@ The supplied regional analytics payload at `https://america.analytics.controld.c
 
 ### New uncertainty narrowed by this sample
 
-- analytics reads appear to use a region-specific host, which may be related to the account `stats_endpoint`, but that host-selection contract is not yet proven
 - the top-level analytics item identifiers are not yet proven to be the same identifiers used by `GET /devices`
 - the child client records are not yet proven to map 1:1 to standalone Control D endpoints, so they should not drive v1 entity creation
 
@@ -2091,7 +2131,7 @@ These findings are strong enough to convert several planning topics from theory 
 
 - how to generalize the normalizer beyond the currently observed `profile` and `profile2` shape for possible organization cases
 - how parent-child endpoint visibility should influence discovery and presentation when Firewalla child clients are not independently listed until explicitly assigned
-- how the analytics `/v2/client` item identifiers correlate to `/devices` identifiers and whether analytics host selection is derived directly from `stats_endpoint`
+- how the analytics `/v2/client` item identifiers correlate to `/devices` identifiers
 - how `action` values map to dashboard views such as blocked, bypassed, and redirected for `v2/statistic/count/triggerValue`
 - whether the internal analytics `value` slugs have a stable published mapping to the dashboard labels or need repository-owned translation logic
 - how `srcCountry[]` affects totals and whether the dashboard always scopes statistics by one or more country filters
