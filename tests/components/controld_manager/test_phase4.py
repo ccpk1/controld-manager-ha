@@ -25,6 +25,7 @@ from custom_components.controld_manager.const import (
     ATTR_EXPIRES_AT,
     ATTR_REDIRECT_TARGET,
     ATTR_REDIRECT_TARGET_TYPE,
+    ATTR_SUGGESTED_REDIRECT_TARGET,
     CONF_API_TOKEN,
     DOMAIN,
     SERVICE_CREATE_RULE,
@@ -1094,6 +1095,7 @@ async def test_service_select_recognizes_location_redirect_state(hass) -> None:
     assert service_state.state == "redirected"
     assert service_state.attributes[ATTR_REDIRECT_TARGET] == "DFW"
     assert service_state.attributes[ATTR_REDIRECT_TARGET_TYPE] == "location"
+    assert service_state.attributes[ATTR_SUGGESTED_REDIRECT_TARGET] == "JFK"
 
 
 @pytest.mark.parametrize(
@@ -1180,6 +1182,7 @@ async def test_service_select_reports_special_redirect_target_types(
     assert service_state.state == "redirected"
     assert service_state.attributes[ATTR_REDIRECT_TARGET] == redirect_target
     assert service_state.attributes[ATTR_REDIRECT_TARGET_TYPE] == expected_target_type
+    assert service_state.attributes[ATTR_SUGGESTED_REDIRECT_TARGET] == "JFK"
 
 
 async def test_rule_group_select_updates_expected_mode(hass) -> None:
@@ -2746,7 +2749,7 @@ async def test_set_service_state_supports_user_facing_names(hass) -> None:
         "amazonmusic",
         enabled=True,
         action_do=3,
-        via="LOCAL",
+        via="JFK",
         via_v6=None,
     )
 
@@ -2833,6 +2836,79 @@ async def test_set_service_state_infers_location_redirect_target_without_type(
     runtime.client.async_set_profile_service.assert_awaited_once_with(
         "profile-1",
         "amazonmusic",
+        enabled=True,
+        action_do=3,
+        via="LOCAL",
+        via_v6=None,
+    )
+
+
+async def test_set_service_state_defaults_to_local_without_unlock_location(
+    hass,
+) -> None:
+    """Services without an unlock location should still default to LOCAL."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_get_service_categories = AsyncMock(
+        return_value=[
+            {"PK": "audio", "name": "Audio", "count": 18},
+            {"PK": "social", "name": "Social", "count": 10},
+        ]
+    )
+    runtime.client.async_get_service_catalog = AsyncMock(
+        return_value=[
+            {
+                "PK": "facebook",
+                "name": "Facebook",
+                "category": "social",
+                "warning": "",
+                "unlock_location": None,
+            }
+        ]
+    )
+    runtime.client.async_get_profile_services = AsyncMock(
+        return_value=[
+            {
+                "PK": "facebook",
+                "name": "Facebook",
+                "category": "social",
+                "warning": "",
+                "unlock_location": None,
+                "action": {"do": 1, "status": 1},
+            }
+        ]
+    )
+    runtime.client.async_set_profile_service = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SERVICE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_SERVICE_ID: "facebook",
+            SERVICE_FIELD_MODE: "Redirected",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_service.assert_awaited_once_with(
+        "profile-1",
+        "facebook",
         enabled=True,
         action_do=3,
         via="LOCAL",

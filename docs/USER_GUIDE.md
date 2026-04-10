@@ -827,6 +827,13 @@ Redirect target behavior:
 - `redirect_target_type` is optional; when omitted, the integration infers
 	IPv4 or IPv6 from a valid IP address and treats other values as
 	location-family redirects
+- when `redirect_target` is omitted, the integration prefers the service's
+	suggested `unlock_location` when one is available and otherwise falls back
+	to explicit auto routing equivalent to `LOCAL`
+- the Control D web app may instead prefill a concrete suggested location for
+	some services based on the service catalog `unlock_location` metadata; when
+	available, service select entities expose that suggestion as the
+	`suggested_redirect_target` state attribute
 
 Manual examples:
 

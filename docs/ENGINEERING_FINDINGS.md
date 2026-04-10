@@ -335,8 +335,10 @@ Observed browser behavior:
   choose a concrete redirect target rather than using `LOCAL`
 - the browser can then surface a follow-up choice for a specific redirect
   location
-- the observed service UI behavior so far does not expose the same random
-  redirect option shape captured for custom rules
+- Control D staff later confirmed that the special location-family values
+  `LOCAL` and `?` are compatible with services as well
+- the concrete browser default is explained by the catalog `unlock_location`
+  field, which provides a suggested service-specific redirect location
 - service redirect appears to support at least two target families:
   - location-style targets carried by `do = 3`
   - proxy-style targets carried by `do = 2`

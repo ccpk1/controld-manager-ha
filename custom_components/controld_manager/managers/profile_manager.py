@@ -251,7 +251,7 @@ class ProfileManager(BaseManager):
         elif normalized_mode == "redirected":
             if redirect_target is None or redirect_target_type is None:
                 action_do = 3
-                via = "LOCAL"
+                via = service_row.unlock_location or "LOCAL"
             elif redirect_target_type == "location":
                 action_do = 3
                 via = redirect_target
