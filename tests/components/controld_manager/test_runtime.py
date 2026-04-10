@@ -507,6 +507,26 @@ async def test_filter_write_payload_matches_browser_contract() -> None:
     )
 
 
+async def test_service_write_payload_matches_browser_contract() -> None:
+    """Service writes should match the browser-verified service API contract."""
+    async with ClientSession() as session:
+        client = ControlDAPIClient("token-value", session)
+
+        with patch.object(client, "_async_request", new=AsyncMock()) as async_request:
+            await client.async_set_profile_service(
+                "profile-1",
+                "amazonmusic",
+                enabled=True,
+                action_do=3,
+            )
+
+    async_request.assert_awaited_once_with(
+        "PUT",
+        "/profiles/profile-1/services/amazonmusic",
+        {"status": 1, "do": 3},
+    )
+
+
 async def test_rule_rich_write_payload_matches_browser_contract() -> None:
     """Rich rule writes should match the browser-verified rule API contract."""
     async with ClientSession() as session:
@@ -535,6 +555,38 @@ async def test_rule_rich_write_payload_matches_browser_contract() -> None:
             "hostnames": ["example.com"],
             "group": 0,
             "comment": "new rule comment",
+        },
+    )
+
+
+async def test_rule_rich_write_payload_supports_redirect_targets() -> None:
+    """Rich rule writes should forward explicit redirect targets when supplied."""
+    async with ClientSession() as session:
+        client = ControlDAPIClient("token-value", session)
+
+        with patch.object(client, "_async_request", new=AsyncMock()) as async_request:
+            await client.async_update_profile_rule_rich(
+                "profile-1",
+                "example.com",
+                enabled=True,
+                action_do=3,
+                group_pk=None,
+                ttl=None,
+                comment="",
+                via="WFR",
+            )
+
+    async_request.assert_awaited_once_with(
+        "PUT",
+        "/profiles/profile-1/rules",
+        {
+            "do": 3,
+            "status": 1,
+            "via": "WFR",
+            "via_v6": "-1",
+            "hostnames": ["example.com"],
+            "group": 0,
+            "comment": "",
         },
     )
 

@@ -1,10 +1,13 @@
 # Control D Manager user guide
 
 > [!WARNING]
-> First-release disclaimer: redirect-related controls have not been validated
-> end to end yet. Redirect modes and redirect-capable options may not work
-> reliably in this first release, so treat them as provisional until they have
-> been fully tested against live Control D behavior.
+> Redirect behavior is now validated across the default-rule, custom-rule, and
+> service service surfaces for Control D's current location-family and
+> proxy-style contracts. Remaining gaps are narrower: default-rule redirecting
+> is still intentionally limited to location-family targets such as `LOCAL`,
+> `?`, and POP codes because proxy-style default-rule targets are not yet
+> validated, and manual default-rule POP targets still are not sticky upstream
+> once the mode is changed away from redirecting and then back again.
 
 ## Overview
 
@@ -536,11 +539,36 @@ for one or more selected profiles.
 	disambiguators, with `config_entry_id` taking precedence
 - `mode` is required and supports `Blocking`, `Bypassing`, and `Redirecting`
 
+Current validation status:
+
+- `Redirecting` is validated for the default-rule surface using Control D's
+	current location-family redirect behavior
+- `redirect_target` is optional and may be used with `Redirecting`
+- supported default-rule redirect targets are Control D location-style values:
+	POP codes or names, `LOCAL` for auto routing, and `?` for random routing
+- `redirect_target_type` is optional and currently only supports `location`
+- IP-style proxy redirects are intentionally rejected for default rules until
+	the upstream contract is validated for that surface
+- manual POP-target selections are not currently sticky in the upstream UI if
+	you switch away from redirecting and then return to it
+
 Manual examples:
 
 - set one profile to redirect unmatched queries by default:
 	`profile_name: ["Primary"]`
 	`mode: "Redirecting"`
+- set one profile to redirect unmatched queries through one POP:
+	`profile_name: ["Primary"]`
+	`mode: "Redirecting"`
+	`redirect_target: "WFR"`
+- set one profile to use Control D auto routing explicitly:
+	`profile_name: ["Primary"]`
+	`mode: "Redirecting"`
+	`redirect_target: "LOCAL"`
+- set one profile to use Control D random routing explicitly:
+	`profile_name: ["Primary"]`
+	`mode: "Redirecting"`
+	`redirect_target: "?"`
 
 ### Option state service
 
@@ -637,6 +665,11 @@ Supported mutation fields:
 
 - `enabled` toggles the selected rules on or off
 - `mode` changes the rule action to `block`, `bypass`, or `redirect`
+- when `mode: "redirect"` is used, `redirect_target` may be a Control D
+	location code or name, `LOCAL`, `?`, or an IPv4 or IPv6 address
+- `redirect_target_type` is optional; when omitted, the integration infers
+	IPv4 or IPv6 from a valid IP address and treats other values as
+	location-family redirects
 - `comment` attempts to replace the upstream rule comment
 - `cancel_expiration` clears the current expiration
 - `expiration_duration` sets a relative expiration
@@ -677,6 +710,21 @@ Manual examples:
 	`profile_name: ["Primary"]`
 	`rule_identity: ["root|example.com"]`
 	`cancel_expiration: true`
+- redirect one rule through auto routing:
+	`profile_name: ["Primary"]`
+	`rule_identity: ["root|example.com"]`
+	`mode: "redirect"`
+	`redirect_target: "LOCAL"`
+- redirect one rule through random routing:
+	`profile_name: ["Primary"]`
+	`rule_identity: ["root|example.com"]`
+	`mode: "redirect"`
+	`redirect_target: "?"`
+- redirect one rule through an IPv4 proxy target:
+	`profile_name: ["Primary"]`
+	`rule_identity: ["root|example.com"]`
+	`mode: "redirect"`
+	`redirect_target: "1.1.1.1"`
 
 ### Create rule service
 
@@ -693,6 +741,9 @@ profiles.
 	profile
 - `enabled`, `mode`, `comment`, `expiration_duration`, and `expire_at` reuse
 	the same semantics as `set_rule_state`
+- when `mode: "redirect"` is used, `redirect_target` and
+	`redirect_target_type` reuse the same redirect semantics as
+	`set_rule_state`
 - if `enabled` is omitted, the new rules default to enabled
 - if `mode` is omitted, the new rules default to `block`
 - `config_entry_id` and `config_entry_name` remain optional multi-entry
@@ -720,6 +771,11 @@ Manual examples:
 	`hostname: ["example.org"]`
 	`mode: "redirect"`
 	`expiration_duration: "00:30:00"`
+- create one redirect rule using random routing:
+	`profile_name: ["Primary"]`
+	`hostname: ["example.org"]`
+	`mode: "redirect"`
+	`redirect_target: "?"`
 
 ### Delete rule service
 
@@ -764,6 +820,14 @@ This service does not require service entities to be exposed. It can resolve
 live service data even when the matching category is not currently enabled for
 entities.
 
+Redirect target behavior:
+
+- when `mode: "Redirected"` is used, `redirect_target` may be a Control D
+	location code or name, `LOCAL`, `?`, or an IPv4 or IPv6 address
+- `redirect_target_type` is optional; when omitted, the integration infers
+	IPv4 or IPv6 from a valid IP address and treats other values as
+	location-family redirects
+
 Manual examples:
 
 - block one service by raw ID:
@@ -774,6 +838,16 @@ Manual examples:
 	`profile_name: ["Primary"]`
 	`service_name: ["Amazon Music"]`
 	`mode: "Redirected"`
+- redirect one service using random routing:
+	`profile_name: ["Primary"]`
+	`service_name: ["Amazon Music"]`
+	`mode: "Redirected"`
+	`redirect_target: "?"`
+- redirect one service through an IPv4 proxy target:
+	`profile_name: ["Primary"]`
+	`service_name: ["Amazon Music"]`
+	`mode: "Redirected"`
+	`redirect_target: "1.1.1.1"`
 
 ### Catalog service
 

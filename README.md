@@ -122,9 +122,7 @@ Control D pairs especially well with environments that already use profile-based
 | Tamper-detection hooks | Cross-reference endpoint activity with router or firewall visibility to spot likely DNS bypass behavior. |
 | Stateless pausing | Temporarily disable a profile with a duration while Control D handles the upstream countdown. |
 
-### Important current limitation
 
-Redirect-related controls exist in the current release, but redirect behavior has not yet been fully validated end to end against live Control D behavior. Treat redirect-capable options and rule modes as early functionality until that validation work is complete.
 
 ## ❤️ Support the project
 

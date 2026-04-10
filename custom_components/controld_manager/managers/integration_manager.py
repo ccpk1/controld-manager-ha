@@ -488,6 +488,8 @@ class IntegrationManager(BaseManager):
                 ),
                 enabled=bool(action.get("status", 0)),
                 action_do=(int(action["do"]) if "do" in action else 1),
+                via=IntegrationManager._optional_string(action.get("via")),
+                via_v6=IntegrationManager._optional_string(action.get("via_v6")),
                 warning=IntegrationManager._optional_string(payload.get("warning")),
                 unlock_location=IntegrationManager._optional_string(
                     payload.get("unlock_location")

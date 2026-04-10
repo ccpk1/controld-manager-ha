@@ -15,6 +15,8 @@ from .api import (
     ControlDApiResponseError,
 )
 from .const import (
+    ATTR_REDIRECT_TARGET,
+    ATTR_REDIRECT_TARGET_TYPE,
     DEFAULT_ENABLED_FILTERS,
     DOMAIN,
     PURPOSE_PROFILE_DEFAULT_RULE,
@@ -257,6 +259,19 @@ class ControlDManagerProfileServiceModeSelect(
         if service_row is None:
             return None
         return service_row.current_mode
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object] | None:
+        """Return live service metadata including redirect details."""
+        attributes = dict(super().extra_state_attributes or {})
+        service_row = self.service_row
+        if service_row is None:
+            return attributes or None
+        if (redirect_target := service_row.redirect_target) is not None:
+            attributes[ATTR_REDIRECT_TARGET] = redirect_target
+        if (redirect_target_type := service_row.redirect_target_type) is not None:
+            attributes[ATTR_REDIRECT_TARGET_TYPE] = redirect_target_type
+        return attributes or None
 
     def select_option(self, option: str) -> None:
         """Select option is handled asynchronously by Home Assistant."""

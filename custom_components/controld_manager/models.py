@@ -194,6 +194,8 @@ class ControlDService:
     category_name: str
     enabled: bool
     action_do: int
+    via: str | None = None
+    via_v6: str | None = None
     warning: str | None = None
     unlock_location: str | None = None
 
@@ -201,8 +203,32 @@ class ControlDService:
     def current_mode(self) -> str:
         """Return the current service mode for Home Assistant controls."""
         if not self.enabled:
-            return "Off"
+            return SERVICE_MODE_OFF
         return service_mode_from_action_do(self.action_do)
+
+    @property
+    def redirect_target(self) -> str | None:
+        """Return the active redirect target when one is available."""
+        if self.action_do not in {2, 3}:
+            return None
+        if self.via is not None and self.via != "-1":
+            return self.via
+        if self.via_v6 is not None and self.via_v6 != "-1":
+            return self.via_v6
+        return None
+
+    @property
+    def redirect_target_type(self) -> str | None:
+        """Return the upstream redirect target family when available."""
+        if self.action_do == 3:
+            if self.via == "LOCAL":
+                return "auto"
+            if self.via == "?":
+                return "random"
+            return "location"
+        if self.action_do == 2:
+            return "proxy"
+        return None
 
 
 @dataclass(slots=True, frozen=True)
@@ -611,6 +637,7 @@ def service_mode_from_action_do(action_do: int) -> str:
         0: SERVICE_MODE_BLOCKED,
         1: SERVICE_MODE_BYPASSED,
         2: SERVICE_MODE_REDIRECTED,
+        3: SERVICE_MODE_REDIRECTED,
     }.get(action_do, SERVICE_MODE_BYPASSED)
 
 
@@ -645,6 +672,7 @@ def rule_action_key_from_action_do(action_do: int) -> str:
         0: RULE_ACTION_BLOCK,
         1: RULE_ACTION_BYPASS,
         2: RULE_ACTION_REDIRECT,
+        3: RULE_ACTION_REDIRECT,
     }.get(action_do, RULE_ACTION_BYPASS)
 
 
@@ -654,6 +682,7 @@ def rule_action_label_from_action_do(action_do: int) -> str:
         0: "Block",
         1: "Bypass",
         2: "Redirect",
+        3: "Redirect",
     }.get(action_do, "Bypass")
 
 
@@ -711,6 +740,7 @@ def rule_group_mode_from_action(action_do: int | None, enabled: bool) -> str:
         0: RULE_ACTION_BLOCK,
         1: RULE_ACTION_BYPASS,
         2: RULE_ACTION_REDIRECT,
+        3: RULE_ACTION_REDIRECT,
     }.get(action_do, RULE_ACTION_OFF)
 
 

@@ -397,12 +397,19 @@ class ControlDAPIClient:
         *,
         enabled: bool,
         action_do: int,
+        via: str | None = None,
+        via_v6: str | None = None,
     ) -> None:
         """Update one profile service row using the current action model."""
+        payload: dict[str, Any] = {"do": action_do, "status": int(enabled)}
+        if via is not None:
+            payload["via"] = via
+        if via_v6 is not None:
+            payload["via_v6"] = via_v6
         await self._async_request(
             "PUT",
             f"/profiles/{profile_pk}/services/{service_pk}",
-            {"do": action_do, "status": int(enabled)},
+            payload,
         )
 
     async def async_set_profile_rule(
@@ -438,6 +445,8 @@ class ControlDAPIClient:
         group_pk: str | None,
         comment: str,
         ttl: int | None,
+        via: str | None = None,
+        via_v6: str | None = None,
     ) -> None:
         """Update one profile rule using the rich hostname-based contract."""
         payload: dict[str, Any] = {
@@ -449,6 +458,10 @@ class ControlDAPIClient:
             "group": 0 if group_pk is None else int(group_pk),
             "comment": comment,
         }
+        if via is not None:
+            payload["via"] = via
+        if via_v6 is not None:
+            payload["via_v6"] = via_v6
         if ttl is not None:
             payload["ttl"] = ttl
         await self._async_request("PUT", f"/profiles/{profile_pk}/rules", payload)
@@ -463,6 +476,8 @@ class ControlDAPIClient:
         group_pk: str | None,
         comment: str,
         ttl: int | None,
+        via: str | None = None,
+        via_v6: str | None = None,
     ) -> None:
         """Create one or more profile rules using the browser-backed contract."""
         payload: dict[str, Any] = {
@@ -474,6 +489,10 @@ class ControlDAPIClient:
             "group": 0 if group_pk is None else int(group_pk),
             "comment": comment,
         }
+        if via is not None:
+            payload["via"] = via
+        if via_v6 is not None:
+            payload["via_v6"] = via_v6
         if ttl is not None:
             payload["ttl"] = ttl
         await self._async_request("POST", f"/profiles/{profile_pk}/rules", payload)

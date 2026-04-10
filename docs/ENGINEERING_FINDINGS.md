@@ -317,16 +317,57 @@ Observed and supplied evidence:
 - `PUT /profiles/{profile_id}/services/{service_id}` accepts a service action payload
 - one supplied example for `amazonmusic` returned:
   - `{"body":{"services":[{"do":0,"status":1}]},"success":true}`
+- browser-backed service captures now prove multiple redirect-family write forms:
+  - bypassed service:
+    - `{"PK":"amazonmusic","do":1,"status":1}`
+  - blocked service:
+    - `{"PK":"applemusic","do":0,"status":1}`
+  - location-targeted redirected service:
+    - `{"PK":"applemusic","do":3,"status":1,"via":"DFW"}`
+  - proxy-targeted redirected service:
+    - `{"PK":"applemusic","do":2,"status":1,"via":"1.1.1.1"}`
+  - IPv6 proxy-targeted redirected service:
+    - `{"PK":"applemusic","do":2,"status":1,"via":"-1","via_v6":"a:b:c:d:e:f::"}`
 
-Working interpretation:
+Observed browser behavior:
+
+- when a service is first switched to redirect in the web UI, Control D can
+  choose a concrete redirect target rather than using `LOCAL`
+- the browser can then surface a follow-up choice for a specific redirect
+  location
+- the observed service UI behavior so far does not expose the same random
+  redirect option shape captured for custom rules
+- service redirect appears to support at least two target families:
+  - location-style targets carried by `do = 3`
+  - proxy-style targets carried by `do = 2`
+    - IPv4 proxy targets use `via`
+    - IPv6 proxy targets use `via_v6`, with `via = "-1"` when no IPv4 target is set
+
+Settled interpretation:
 
 - service item mutation uses a profile-scoped `PUT` endpoint per service item
 - service action state uses the same core semantics seen elsewhere:
   - `do = 0` means block
   - `do = 1` means allow or bypass-style enablement when supported by the service surface
+  - `do = 3` with `via = <location>` means redirect to a specific location-style target
+  - `do = 2` with `via = <proxy>` or `via_v6 = <proxy>` means redirect through a proxy-style target
   - `status = 1` means enabled
   - `status = 0` means disabled
+- service redirect configuration requires target state rather than a bare redirect mode
 - this strengthens the case for treating service items as switch-like rule surfaces once exposed, even though the catalog-selection problem remains category-driven at the options-flow level
+
+Implementation consequence:
+
+- the current service-mode mapping in the integration is not fully aligned with
+  the observed upstream redirect contract
+- service read normalization should not treat only `do = 2` as redirected,
+  because location-targeted service redirects are now observed with `do = 3`
+- service configuration surfaces that change a service into redirect mode need a
+  redirect-target decision instead of assuming a bare redirect action is enough
+- the published Apidog reference linked at the top of this document does not
+  document these service write payloads directly because it is an analytics API
+  reference, not the Control D configuration API; at most it provides analytics-side
+  context that `2` means redirected by IP and `3` means redirected by Location
 
 ## Rules and groups findings
 
@@ -365,6 +406,25 @@ Observed rule patterns:
 - enabled allow rule:
   - `action.do = 1`
   - `action.status = 1`
+- rule enable or disable is a separate status-style operation on the
+  hostname-targeted endpoint:
+  - `PUT /profiles/{profile_id}/rules/{hostname}`
+  - payload can be as small as `{"status":1}`
+  - response preserves the existing rule configuration, including redirect
+    action and target fields such as `do = 3` and `via = "LOCAL"`
+- redirected rule configuration uses the rich rule endpoint and carries both
+  redirect action and target fields:
+  - `PUT /profiles/{profile_id}/rules`
+  - auto or random redirect:
+    - `do = 3`
+    - `status = 1`
+    - `via = "?"`
+    - `via_v6 = "-1"`
+  - specific redirect target:
+    - `do = 3`
+    - `status = 1`
+    - `via = "CLE"` or `via = "WFR"`
+    - `via_v6 = "-1"`
 - disabled rule:
   - `action.status = 0`
 - expiring rule:
@@ -387,6 +447,14 @@ Settled interpretation:
 - folders are important for naming and exposure policy, but they do not replace rule-level switch semantics
 - rule exposure should store explicitly selected typed rule identities per profile
 - the upstream write contract is hostname-oriented rather than rule-PK-oriented
+- custom-rule enable or disable is a separate concern from custom-rule
+  configuration
+- redirected custom rules do not currently follow the same action-value family
+  as service rules or folder rules:
+  - custom-rule redirect uses `do = 3`
+  - custom-rule redirect requires a `via` target choice
+- when a redirect rule is toggled through the hostname-targeted endpoint, the
+  existing redirect configuration is preserved instead of being reset
 - comment changes and expiration changes should use a merged rich `/profiles/{profile_id}/rules` payload built from the current rule state
 - expiration cancellation uses the rich hostname-based rule update endpoint with `ttl = -1`
 - past expiration timestamps are valid input and should not be rejected by Home Assistant service validation
@@ -394,6 +462,18 @@ Settled interpretation:
 - comment update support should remain documented as backend-limited until Control D persists those writes reliably
 - bare hostnames are a safe convenience selector when they are unique, while full rule identities should remain the recommended selector in Home Assistant
 - later implementation should preserve room for additional action semantics such as expiring rules and folder-imposed allow or block defaults
+
+Implementation consequence:
+
+- the current integration's generic custom-rule redirect mapping should still be
+  treated as provisional because the newly captured browser contract requires
+  `do = 3` plus an explicit `via` choice, while the current generic rule model
+  does not yet carry redirect-target state
+- custom-rule toggles should preserve the existing upstream redirect
+  configuration rather than reconstructing redirect payload details locally
+- a later custom-rule redirect enhancement should separate redirect action from
+  redirect target and should preserve that target when toggling rule enabled
+  state on and off
 
 ## Endpoint status findings
 
@@ -1627,6 +1707,21 @@ Observed requests:
   - `{"do":0,"status":1}`
   - `{"do":1,"status":1}`
   - `{"do":3,"via":"LOCAL","status":1}`
+  - `{"do":3,"via":"CLE","status":1}`
+  - `{"do":3,"via":"WFR","status":1}`
+
+Observed responses:
+
+- `{"body":{"default":{"do":3,"status":1,"via":"LOCAL"}},"success":true}`
+- `{"body":{"default":{"do":3,"status":1,"via":"CLE"}},"success":true}`
+- `{"body":{"default":{"do":3,"status":1,"via":"WFR"}},"success":true}`
+
+Observed browser behavior:
+
+- when a manual redirect target such as `CLE` or `WFR` is selected in the web
+  UI, changing the default rule away from redirecting and then back to
+  redirecting resets the upstream value to the auto or local behavior instead
+  of restoring the prior manual target
 
 Observed consequences:
 
@@ -1635,16 +1730,33 @@ Observed consequences:
 - the default rule has its own dedicated profile-scoped endpoint
 - the default rule is action-driven in the same general style as rules and
   services, but it also introduces an additional redirect-style variant using
-  `via = "LOCAL"`
+  `via`
 
-Working interpretation:
+Settled interpretation:
 
 - `do = 0` corresponds to the blocked default-rule mode
 - `do = 1` corresponds to the bypassed default-rule mode
-- `do = 3` with `via = "LOCAL"` corresponds to the locally resolved
-  default-rule mode shown in the web UI
+- `do = 3` corresponds to the redirected default-rule mode
+- `via = "LOCAL"` corresponds to the auto or locally resolved redirect mode
+  shown in the web UI
+- specific POP-style redirect targets are accepted by the same endpoint, with
+  observed examples including `CLE` and `WFR`
+- manual redirect-target selection is not sticky across leaving and re-entering
+  redirect mode in the current upstream browser behavior
 - the currently captured write set proves active-mode writes, but it does not
   yet prove whether a disabled or status-zero state exists for this surface
+
+Implementation consequence:
+
+- the current integration mapping of `Redirecting -> {"do":3,"via":"LOCAL","status":1}`
+  is now validated for the default-rule surface
+- explicit redirect-target selection is a separate enhancement from basic
+  default-rule redirect support because the upstream `via` field can carry
+  both auto-routing and concrete POP values
+- any future manual redirect-target feature should treat redirect target
+  persistence as explicit state managed by the integration or the user, not as
+  behavior the upstream UI reliably preserves when redirect mode is toggled off
+  and back on
 
 Additional implementation consequence:
 

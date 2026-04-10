@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -51,6 +52,8 @@ from .const import (
     SERVICE_FIELD_OPTION_NAME,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
+    SERVICE_FIELD_REDIRECT_TARGET,
+    SERVICE_FIELD_REDIRECT_TARGET_TYPE,
     SERVICE_FIELD_RULE_GROUP_ID,
     SERVICE_FIELD_RULE_GROUP_NAME,
     SERVICE_FIELD_RULE_IDENTITY,
@@ -68,6 +71,8 @@ from .const import (
     TRANS_KEY_CONFIG_ENTRY_NOT_FOUND,
     TRANS_KEY_CONFIG_ENTRY_NOT_LOADED,
     TRANS_KEY_CREATE_RULES_FAILED,
+    TRANS_KEY_DEFAULT_RULE_REDIRECT_TARGET_INVALID,
+    TRANS_KEY_DEFAULT_RULE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE,
     TRANS_KEY_DELETE_RULES_FAILED,
     TRANS_KEY_DISABLE_PROFILES_FAILED,
     TRANS_KEY_ENABLE_PROFILES_FAILED,
@@ -83,7 +88,11 @@ from .const import (
     TRANS_KEY_RULE_HOSTNAME_DUPLICATE,
     TRANS_KEY_RULE_HOSTNAME_REQUIRED,
     TRANS_KEY_RULE_MUTATION_REQUIRED,
+    TRANS_KEY_RULE_REDIRECT_TARGET_INVALID,
+    TRANS_KEY_RULE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE,
     TRANS_KEY_SERVICE_MODE_REJECTED,
+    TRANS_KEY_SERVICE_REDIRECT_TARGET_INVALID,
+    TRANS_KEY_SERVICE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE,
     TRANS_KEY_SET_DEFAULT_RULES_FAILED,
     TRANS_KEY_SET_FILTERS_FAILED,
     TRANS_KEY_SET_OPTIONS_FAILED,
@@ -95,6 +104,8 @@ from .models import (
     ControlDManagerRuntime,
     ControlDService,
     default_rule_mode_labels,
+    normalize_default_rule_mode,
+    normalize_service_mode,
     rule_action_options,
     service_mode_labels,
 )
@@ -158,6 +169,18 @@ _PROFILE_SERVICE_ENTRY_TARGET_FIELDS: dict[vol.Marker, object] = {
     vol.Optional(SERVICE_FIELD_CONFIG_ENTRY_NAME): cv.string,
 }
 
+_RULE_REDIRECT_SERVICE_FIELDS: dict[vol.Marker, object] = {
+    vol.Optional(SERVICE_FIELD_REDIRECT_TARGET): cv.string,
+    vol.Optional(SERVICE_FIELD_REDIRECT_TARGET_TYPE): vol.In(
+        ("location", "ipv4", "ipv6")
+    ),
+}
+
+_DEFAULT_RULE_REDIRECT_SERVICE_FIELDS: dict[vol.Marker, object] = {
+    vol.Optional(SERVICE_FIELD_REDIRECT_TARGET): cv.string,
+    vol.Optional(SERVICE_FIELD_REDIRECT_TARGET_TYPE): vol.In(("location",)),
+}
+
 DISABLE_PROFILE_SERVICE_SCHEMA = vol.Schema(
     {
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
@@ -189,6 +212,7 @@ SET_SERVICE_STATE_SERVICE_SCHEMA = vol.Schema(
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         **_SERVICE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Required(SERVICE_FIELD_MODE): vol.In(service_mode_labels()),
+        **_RULE_REDIRECT_SERVICE_FIELDS,
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
@@ -207,6 +231,7 @@ SET_DEFAULT_RULE_STATE_SERVICE_SCHEMA = vol.Schema(
     {
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Required(SERVICE_FIELD_MODE): vol.In(default_rule_mode_labels()),
+        **_DEFAULT_RULE_REDIRECT_SERVICE_FIELDS,
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
@@ -217,6 +242,7 @@ SET_RULE_STATE_SERVICE_SCHEMA = vol.Schema(
         **_RULE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Optional(SERVICE_FIELD_ENABLED): cv.boolean,
         vol.Optional(SERVICE_FIELD_MODE): vol.In(rule_action_options()),
+        **_RULE_REDIRECT_SERVICE_FIELDS,
         vol.Optional(SERVICE_FIELD_COMMENT): cv.string,
         vol.Optional(SERVICE_FIELD_CANCEL_EXPIRATION): cv.boolean,
         vol.Optional(SERVICE_FIELD_EXPIRATION_DURATION): vol.All(
@@ -235,6 +261,7 @@ CREATE_RULE_SERVICE_SCHEMA = vol.Schema(
         **_RULE_GROUP_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Optional(SERVICE_FIELD_ENABLED): cv.boolean,
         vol.Optional(SERVICE_FIELD_MODE): vol.In(rule_action_options()),
+        **_RULE_REDIRECT_SERVICE_FIELDS,
         vol.Optional(SERVICE_FIELD_COMMENT): cv.string,
         vol.Optional(SERVICE_FIELD_EXPIRATION_DURATION): vol.All(
             cv.time_period,
@@ -331,6 +358,8 @@ class ParsedRuleMutation:
     mode: str | None
     comment: str | None
     ttl: int | None
+    redirect_target: str | None
+    redirect_target_type: str | None
 
 
 async def async_register_services(hass: HomeAssistant) -> None:
@@ -410,6 +439,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 mode=mutation.mode,
                 ttl=mutation.ttl,
                 comment=mutation.comment,
+                redirect_target=mutation.redirect_target,
+                redirect_target_type=mutation.redirect_target_type,
             )
         except (
             ControlDApiAuthError,
@@ -438,6 +469,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 mode=mutation.mode,
                 ttl=mutation.ttl,
                 comment=mutation.comment,
+                redirect_target=mutation.redirect_target,
+                redirect_target_type=mutation.redirect_target_type,
             )
         except (
             ControlDApiAuthError,
@@ -462,12 +495,19 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def async_handle_set_service_state(call: ServiceCall) -> None:
         """Set one or more targeted Control D services to the requested mode."""
         resolved_target = await _resolve_service_service_target(hass, call)
+        redirect_target, redirect_target_type = _normalize_service_redirect_target(
+            call.data[SERVICE_FIELD_MODE],
+            call.data.get(SERVICE_FIELD_REDIRECT_TARGET),
+            call.data.get(SERVICE_FIELD_REDIRECT_TARGET_TYPE),
+        )
         try:
             profile_manager = resolved_target.entry.runtime_data.managers.profile
             await profile_manager.async_set_services_mode(
                 resolved_target.profile_services,
                 call.data[SERVICE_FIELD_MODE],
                 service_rows_by_profile=resolved_target.service_rows_by_profile,
+                redirect_target=redirect_target,
+                redirect_target_type=redirect_target_type,
             )
         except ControlDApiResponseError as err:
             raise _ha_error(TRANS_KEY_SERVICE_MODE_REJECTED) from err
@@ -512,11 +552,18 @@ async def async_register_services(hass: HomeAssistant) -> None:
             profile_device_field=SERVICE_FIELD_PROFILE_ID,
             require_profile_selector=True,
         )
+        redirect_target, redirect_target_type = _normalize_default_rule_redirect_target(
+            call.data[SERVICE_FIELD_MODE],
+            call.data.get(SERVICE_FIELD_REDIRECT_TARGET),
+            call.data.get(SERVICE_FIELD_REDIRECT_TARGET_TYPE),
+        )
         try:
             profile_manager = resolved_target.entry.runtime_data.managers.profile
             await profile_manager.async_set_default_rules_mode(
                 resolved_target.profile_pks,
                 call.data[SERVICE_FIELD_MODE],
+                redirect_target=redirect_target,
+                redirect_target_type=redirect_target_type,
             )
         except (
             ControlDApiAuthError,
@@ -766,6 +813,8 @@ def _parse_rule_mutation(call: ServiceCall) -> ParsedRuleMutation:
     enabled = call.data.get(SERVICE_FIELD_ENABLED)
     mode = call.data.get(SERVICE_FIELD_MODE)
     comment = call.data.get(SERVICE_FIELD_COMMENT)
+    redirect_target = call.data.get(SERVICE_FIELD_REDIRECT_TARGET)
+    redirect_target_type = call.data.get(SERVICE_FIELD_REDIRECT_TARGET_TYPE)
     cancel_expiration = call.data.get(SERVICE_FIELD_CANCEL_EXPIRATION, False)
     expiration_duration = call.data.get(SERVICE_FIELD_EXPIRATION_DURATION)
     expire_at = call.data.get(SERVICE_FIELD_EXPIRE_AT)
@@ -777,11 +826,21 @@ def _parse_rule_mutation(call: ServiceCall) -> ParsedRuleMutation:
     if not cancel_expiration and expire_at is not None:
         expires_at = int(dt_util.as_utc(expire_at).timestamp())
 
+    normalized_redirect_target, normalized_redirect_target_type = (
+        _normalize_rule_redirect_target(
+            mode,
+            redirect_target,
+            redirect_target_type,
+        )
+    )
+
     return ParsedRuleMutation(
         enabled=enabled,
         mode=mode,
         comment=comment,
         ttl=expires_at,
+        redirect_target=normalized_redirect_target,
+        redirect_target_type=normalized_redirect_target_type,
     )
 
 
@@ -792,12 +851,130 @@ def _require_rule_mutation(mutation: ParsedRuleMutation) -> None:
         and mutation.mode is None
         and mutation.comment is None
         and mutation.ttl is None
+        and mutation.redirect_target is None
     ):
         raise ServiceValidationError(
             "Provide at least one rule mutation field",
             translation_domain=DOMAIN,
             translation_key=TRANS_KEY_RULE_MUTATION_REQUIRED,
         )
+
+
+def _normalize_rule_redirect_target(
+    mode: str | None,
+    redirect_target: str | None,
+    redirect_target_type: str | None,
+    *,
+    redirect_mode_key: str = "redirect",
+    invalid_translation_key: str = TRANS_KEY_RULE_REDIRECT_TARGET_INVALID,
+    requires_mode_translation_key: str = (
+        TRANS_KEY_RULE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE
+    ),
+    allow_ip_targets: bool = True,
+) -> tuple[str | None, str | None]:
+    """Validate and normalize optional redirect-target inputs for rule services."""
+    normalized_target = None
+    if isinstance(redirect_target, str):
+        normalized_target = redirect_target.strip()
+    if not normalized_target and redirect_target_type is None:
+        return None, None
+    if not normalized_target:
+        raise ServiceValidationError(
+            "Provide a valid redirect target value",
+            translation_domain=DOMAIN,
+            translation_key=invalid_translation_key,
+        )
+    if mode != redirect_mode_key:
+        raise ServiceValidationError(
+            "Redirect targets require redirect mode",
+            translation_domain=DOMAIN,
+            translation_key=requires_mode_translation_key,
+        )
+
+    normalized_type = redirect_target_type
+    if normalized_type is None:
+        try:
+            parsed_target = ipaddress.ip_address(normalized_target)
+        except ValueError:
+            normalized_type = "location"
+        else:
+            if not allow_ip_targets:
+                raise ServiceValidationError(
+                    "Provide a valid redirect target value",
+                    translation_domain=DOMAIN,
+                    translation_key=invalid_translation_key,
+                )
+            normalized_type = "ipv4" if parsed_target.version == 4 else "ipv6"
+
+    if normalized_type == "location":
+        return normalized_target, normalized_type
+
+    if not allow_ip_targets:
+        raise ServiceValidationError(
+            "Provide a valid redirect target value",
+            translation_domain=DOMAIN,
+            translation_key=invalid_translation_key,
+        )
+
+    try:
+        parsed_target = ipaddress.ip_address(normalized_target)
+    except ValueError as err:
+        raise ServiceValidationError(
+            "Provide a valid redirect target value",
+            translation_domain=DOMAIN,
+            translation_key=invalid_translation_key,
+        ) from err
+
+    if normalized_type == "ipv4" and parsed_target.version != 4:
+        raise ServiceValidationError(
+            "Provide a valid redirect target value",
+            translation_domain=DOMAIN,
+            translation_key=invalid_translation_key,
+        )
+    if normalized_type == "ipv6" and parsed_target.version != 6:
+        raise ServiceValidationError(
+            "Provide a valid redirect target value",
+            translation_domain=DOMAIN,
+            translation_key=invalid_translation_key,
+        )
+    return str(parsed_target), normalized_type
+
+
+def _normalize_service_redirect_target(
+    mode: str,
+    redirect_target: str | None,
+    redirect_target_type: str | None,
+) -> tuple[str | None, str | None]:
+    """Validate and normalize optional redirect-target inputs for service writes."""
+    return _normalize_rule_redirect_target(
+        normalize_service_mode(mode),
+        redirect_target,
+        redirect_target_type,
+        redirect_mode_key="redirected",
+        invalid_translation_key=TRANS_KEY_SERVICE_REDIRECT_TARGET_INVALID,
+        requires_mode_translation_key=(
+            TRANS_KEY_SERVICE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE
+        ),
+    )
+
+
+def _normalize_default_rule_redirect_target(
+    mode: str,
+    redirect_target: str | None,
+    redirect_target_type: str | None,
+) -> tuple[str | None, str | None]:
+    """Validate and normalize optional redirect-target inputs for default rules."""
+    return _normalize_rule_redirect_target(
+        normalize_default_rule_mode(mode),
+        redirect_target,
+        redirect_target_type,
+        redirect_mode_key="redirecting",
+        invalid_translation_key=TRANS_KEY_DEFAULT_RULE_REDIRECT_TARGET_INVALID,
+        requires_mode_translation_key=(
+            TRANS_KEY_DEFAULT_RULE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE
+        ),
+        allow_ip_targets=False,
+    )
 
 
 def _resolve_rule_hostnames(call: ServiceCall) -> tuple[str, ...]:

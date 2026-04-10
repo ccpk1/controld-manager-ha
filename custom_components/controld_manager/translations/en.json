@@ -182,6 +182,24 @@
     "rule_mutation_required": {
       "message": "Provide at least one rule mutation field such as Enabled, Mode, Comment, Cancel expiration, Expiration duration, or Expire at."
     },
+    "rule_redirect_target_invalid": {
+      "message": "Provide a valid redirect target. Use a location code or name for location redirects, `LOCAL` for auto routing, `?` for random routing, or a valid IPv4 or IPv6 address for IP redirects."
+    },
+    "rule_redirect_target_requires_redirect_mode": {
+      "message": "Redirect targets can only be used when Mode is redirect."
+    },
+    "default_rule_redirect_target_invalid": {
+      "message": "Provide a valid default-rule redirect target. Use a Control D location code or name, LOCAL for auto routing, or ? for random routing."
+    },
+    "default_rule_redirect_target_requires_redirect_mode": {
+      "message": "Default-rule redirect targets can only be used when Mode is Redirecting."
+    },
+    "service_redirect_target_invalid": {
+      "message": "Provide a valid service redirect target. Use a location code or name for location redirects, `LOCAL` for auto routing, `?` for random routing, or a valid IPv4 or IPv6 address for IP redirects."
+    },
+    "service_redirect_target_requires_redirect_mode": {
+      "message": "Service redirect targets can only be used when Mode is Redirected."
+    },
     "rule_hostname_required": {
       "message": "Select at least one Control D rule hostname."
     },
@@ -358,7 +376,7 @@
     },
     "set_rule_state": {
       "name": "Set rule state",
-      "description": "Enable or disable one or more Control D custom rules by stable identity across the selected profiles, and optionally change their action mode, comment, or expiration. If Cancel expiration is set, it overrides Expiration duration and Expire at. Otherwise, Expire at takes precedence over Expiration duration.",
+      "description": "Enable or disable one or more Control D custom rules by stable identity across the selected profiles, and optionally change their action mode, redirect target, comment, or expiration. Redirect targets are only applied when Mode is redirect. If Cancel expiration is set, it overrides Expiration duration and Expire at. Otherwise, Expire at takes precedence over Expiration duration.",
       "fields": {
         "profile_id": {
           "name": "Select a profile",
@@ -379,6 +397,14 @@
         "mode": {
           "name": "Mode",
           "description": "Optional. Change the selected rules to block, bypass, or redirect. If omitted, the current rule action is preserved."
+        },
+        "redirect_target": {
+          "name": "Redirect target",
+          "description": "Optional. Redirect destination. Use a Control D location code or name, LOCAL for auto routing, ? for random routing, or an IP address for proxy redirects."
+        },
+        "redirect_target_type": {
+          "name": "Redirect target type",
+          "description": "Optional. Redirect target family. When omitted, the integration infers ipv4 or ipv6 from a valid IP address and treats other values, including LOCAL and ?, as location-family redirects."
         },
         "comment": {
           "name": "Comment",
@@ -408,7 +434,7 @@
     },
     "create_rule": {
       "name": "Create rule",
-      "description": "Create one or more Control D custom rules across the selected profiles. If you do not provide Enabled or Mode, the new rules default to enabled blocking rules.",
+      "description": "Create one or more Control D custom rules across the selected profiles. If you do not provide Enabled or Mode, the new rules default to enabled blocking rules. Redirect targets are only applied when Mode is redirect.",
       "fields": {
         "profile_id": {
           "name": "Select a profile",
@@ -437,6 +463,14 @@
         "mode": {
           "name": "Mode",
           "description": "Optional. Create the new rules as block, bypass, or redirect rules. If omitted, new rules default to block."
+        },
+        "redirect_target": {
+          "name": "Redirect target",
+          "description": "Optional. Redirect destination. Use a Control D location code or name, LOCAL for auto routing, ? for random routing, or an IP address for proxy redirects."
+        },
+        "redirect_target_type": {
+          "name": "Redirect target type",
+          "description": "Optional. Redirect target family. When omitted, the integration infers ipv4 or ipv6 from a valid IP address and treats other values, including LOCAL and ?, as location-family redirects."
         },
         "comment": {
           "name": "Comment",
@@ -488,7 +522,7 @@
     },
     "set_service_state": {
       "name": "Set service state",
-      "description": "Set one or more Control D services to Off, Blocked, Bypassed, or Redirected across the selected profiles.",
+      "description": "Set one or more Control D services to Off, Blocked, Bypassed, or Redirected across the selected profiles. Redirect targets are only applied when Mode is Redirected.",
       "fields": {
         "profile_id": {
           "name": "Select a profile",
@@ -509,6 +543,14 @@
         "mode": {
           "name": "Mode",
           "description": "Set the selected services to Off, Blocked, Bypassed, or Redirected."
+        },
+        "redirect_target": {
+          "name": "Redirect target",
+          "description": "Optional. Redirect destination. Use a Control D location code or name, LOCAL for auto routing, ? for random routing, or an IP address for proxy redirects."
+        },
+        "redirect_target_type": {
+          "name": "Redirect target type",
+          "description": "Optional. Redirect target family. When omitted, the integration infers ipv4 or ipv6 from a valid IP address and treats other values, including LOCAL and ?, as location-family redirects."
         },
         "config_entry_id": {
           "name": "Configuration Entry ID",
@@ -560,7 +602,7 @@
     },
     "set_default_rule_state": {
       "name": "Set default rule state",
-      "description": "Set the Control D default-rule behavior to Blocking, Bypassing, or Redirecting across the selected profiles.",
+      "description": "Set the Control D default-rule behavior to Blocking, Bypassing, or Redirecting across the selected profiles. Redirect targets are only applied when Mode is Redirecting.",
       "fields": {
         "profile_id": {
           "name": "Select a profile",
@@ -573,6 +615,14 @@
         "mode": {
           "name": "Mode",
           "description": "Set the selected profiles to Blocking, Bypassing, or Redirecting as their default query action."
+        },
+        "redirect_target": {
+          "name": "Redirect target",
+          "description": "Optional. Redirect destination. Use a Control D location code or name, LOCAL for auto routing, or ? for random routing."
+        },
+        "redirect_target_type": {
+          "name": "Redirect target type",
+          "description": "Optional. Redirect target family. Default-rule redirects currently support only Control D location-family routing, including the special LOCAL auto and ? random values."
         },
         "config_entry_id": {
           "name": "Configuration Entry ID",

@@ -23,6 +23,8 @@ from custom_components.controld_manager.api import (
 from custom_components.controld_manager.const import (
     ATTR_EXPIRED,
     ATTR_EXPIRES_AT,
+    ATTR_REDIRECT_TARGET,
+    ATTR_REDIRECT_TARGET_TYPE,
     CONF_API_TOKEN,
     DOMAIN,
     SERVICE_CREATE_RULE,
@@ -44,6 +46,8 @@ from custom_components.controld_manager.const import (
     SERVICE_FIELD_OPTION_NAME,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
+    SERVICE_FIELD_REDIRECT_TARGET,
+    SERVICE_FIELD_REDIRECT_TARGET_TYPE,
     SERVICE_FIELD_RULE_GROUP_NAME,
     SERVICE_FIELD_RULE_IDENTITY,
     SERVICE_FIELD_SERVICE_ID,
@@ -1010,6 +1014,172 @@ async def test_filter_and_service_selects_update_expected_modes(hass) -> None:
     async_set_service_mode.assert_awaited_once_with(
         "profile-1", "amazonmusic", "blocked"
     )
+
+
+async def test_service_select_recognizes_location_redirect_state(hass) -> None:
+    """Service selects should treat do=3 rows as redirected and expose target info."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"}),
+                    auto_enable_service_switches=True,
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry.add_to_hass(hass)
+    redirected_detail = replace(
+        _detail_payload("profile-1", include_services=True, include_rules=False),
+        services=(
+            {
+                "PK": "amazonmusic",
+                "name": "Amazon Music",
+                "category": "audio",
+                "warning": "",
+                "unlock_location": "JFK",
+                "action": {"do": 3, "status": 1, "via": "DFW"},
+            },
+        ),
+    )
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(return_value=redirected_detail),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entity_registry = er.async_get(hass)
+    service_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+    assert service_entity_id is not None
+    service_state = hass.states.get(service_entity_id)
+    assert service_state is not None
+    assert service_state.state == "redirected"
+    assert service_state.attributes[ATTR_REDIRECT_TARGET] == "DFW"
+    assert service_state.attributes[ATTR_REDIRECT_TARGET_TYPE] == "location"
+
+
+@pytest.mark.parametrize(
+    ("redirect_target", "expected_target_type"),
+    (("LOCAL", "auto"), ("?", "random")),
+)
+async def test_service_select_reports_special_redirect_target_types(
+    hass, redirect_target: str, expected_target_type: str
+) -> None:
+    """Service attributes should distinguish special redirect values."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"}),
+                    auto_enable_service_switches=True,
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry.add_to_hass(hass)
+    redirected_detail = replace(
+        _detail_payload("profile-1", include_services=True, include_rules=False),
+        services=(
+            {
+                "PK": "amazonmusic",
+                "name": "Amazon Music",
+                "category": "audio",
+                "warning": "",
+                "unlock_location": "JFK",
+                "action": {"do": 3, "status": 1, "via": redirect_target},
+            },
+        ),
+    )
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(return_value=redirected_detail),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entity_registry = er.async_get(hass)
+    service_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+    assert service_entity_id is not None
+    service_state = hass.states.get(service_entity_id)
+    assert service_state is not None
+    assert service_state.state == "redirected"
+    assert service_state.attributes[ATTR_REDIRECT_TARGET] == redirect_target
+    assert service_state.attributes[ATTR_REDIRECT_TARGET_TYPE] == expected_target_type
 
 
 async def test_rule_group_select_updates_expected_mode(hass) -> None:
@@ -2380,6 +2550,8 @@ async def test_set_service_state_supports_raw_service_key(hass) -> None:
         "amazonmusic",
         enabled=True,
         action_do=0,
+        via=None,
+        via_v6=None,
     )
 
 
@@ -2436,6 +2608,8 @@ async def test_set_service_state_supports_live_lookup_without_enabled_categories
         "amazonmusic",
         enabled=True,
         action_do=0,
+        via=None,
+        via_v6=None,
     )
 
 
@@ -2525,6 +2699,8 @@ async def test_set_service_state_supports_live_lookup_for_missing_loaded_categor
         "facebook",
         enabled=True,
         action_do=0,
+        via=None,
+        via_v6=None,
     )
 
 
@@ -2569,8 +2745,340 @@ async def test_set_service_state_supports_user_facing_names(hass) -> None:
         "profile-1",
         "amazonmusic",
         enabled=True,
-        action_do=2,
+        action_do=3,
+        via="LOCAL",
+        via_v6=None,
     )
+
+
+async def test_set_service_state_supports_location_redirect_target(hass) -> None:
+    """The service-mode service should support explicit location redirects."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_service = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SERVICE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_SERVICE_ID: "amazonmusic",
+            SERVICE_FIELD_MODE: "Redirected",
+            SERVICE_FIELD_REDIRECT_TARGET: "WFR",
+            SERVICE_FIELD_REDIRECT_TARGET_TYPE: "location",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_service.assert_awaited_once_with(
+        "profile-1",
+        "amazonmusic",
+        enabled=True,
+        action_do=3,
+        via="WFR",
+        via_v6=None,
+    )
+
+
+async def test_set_service_state_infers_location_redirect_target_without_type(
+    hass,
+) -> None:
+    """The service-mode service should infer location redirect targets."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_service = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SERVICE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_SERVICE_ID: "amazonmusic",
+            SERVICE_FIELD_MODE: "Redirected",
+            SERVICE_FIELD_REDIRECT_TARGET: "LOCAL",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_service.assert_awaited_once_with(
+        "profile-1",
+        "amazonmusic",
+        enabled=True,
+        action_do=3,
+        via="LOCAL",
+        via_v6=None,
+    )
+
+
+async def test_set_service_state_supports_ipv4_redirect_target(hass) -> None:
+    """The service-mode service should support explicit IPv4 redirects."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_service = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SERVICE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_SERVICE_ID: "amazonmusic",
+            SERVICE_FIELD_MODE: "Redirected",
+            SERVICE_FIELD_REDIRECT_TARGET: "1.1.1.1",
+            SERVICE_FIELD_REDIRECT_TARGET_TYPE: "ipv4",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_service.assert_awaited_once_with(
+        "profile-1",
+        "amazonmusic",
+        enabled=True,
+        action_do=2,
+        via="1.1.1.1",
+        via_v6=None,
+    )
+
+
+async def test_set_service_state_infers_ipv4_redirect_target_without_type(hass) -> None:
+    """The service-mode service should infer IPv4 redirect targets."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_service = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SERVICE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_SERVICE_ID: "amazonmusic",
+            SERVICE_FIELD_MODE: "Redirected",
+            SERVICE_FIELD_REDIRECT_TARGET: "1.1.1.1",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_service.assert_awaited_once_with(
+        "profile-1",
+        "amazonmusic",
+        enabled=True,
+        action_do=2,
+        via="1.1.1.1",
+        via_v6=None,
+    )
+
+
+async def test_set_service_state_rejects_redirect_target_without_redirect_mode(
+    hass,
+) -> None:
+    """The service-mode service should reject redirect targets outside redirect mode."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SERVICE_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_SERVICE_ID: "amazonmusic",
+                SERVICE_FIELD_MODE: "Blocked",
+                SERVICE_FIELD_REDIRECT_TARGET: "WFR",
+            },
+            blocking=True,
+        )
+
+
+async def test_set_service_state_accepts_question_mark_redirect_target(hass) -> None:
+    """The service-mode service should pass through accepted symbolic targets."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_service = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SERVICE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_SERVICE_ID: "amazonmusic",
+            SERVICE_FIELD_MODE: "Redirected",
+            SERVICE_FIELD_REDIRECT_TARGET: "?",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_service.assert_awaited_once_with(
+        "profile-1",
+        "amazonmusic",
+        enabled=True,
+        action_do=3,
+        via="?",
+        via_v6=None,
+    )
+
+
+async def test_service_select_reports_off_for_disabled_service(hass) -> None:
+    """Disabled services should map to the stable off select option."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"}),
+                    auto_enable_service_switches=True,
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry.add_to_hass(hass)
+    disabled_detail = replace(
+        _detail_payload("profile-1", include_services=True, include_rules=False),
+        services=(
+            {
+                "PK": "amazonmusic",
+                "name": "Amazon Music",
+                "category": "audio",
+                "warning": "",
+                "unlock_location": "JFK",
+                "action": {"do": 1, "status": 0},
+            },
+        ),
+    )
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(return_value=disabled_detail),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entity_registry = er.async_get(hass)
+    service_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+    assert service_entity_id is not None
+    service_state = hass.states.get(service_entity_id)
+    assert service_state is not None
+    assert service_state.state == "off"
 
 
 async def test_set_service_state_prefers_service_ids_over_names(hass) -> None:
@@ -2611,6 +3119,8 @@ async def test_set_service_state_prefers_service_ids_over_names(hass) -> None:
         "amazonmusic",
         enabled=False,
         action_do=1,
+        via=None,
+        via_v6=None,
     )
 
 
@@ -3458,6 +3968,121 @@ async def test_set_default_rule_state_updates_targeted_profiles(hass) -> None:
     )
 
 
+async def test_set_default_rule_state_supports_location_redirect_target(hass) -> None:
+    """The default-rule service should support explicit location redirects."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_default_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_DEFAULT_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_MODE: "Redirecting",
+            SERVICE_FIELD_REDIRECT_TARGET: "WFR",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_default_rule.assert_awaited_once_with(
+        "profile-1",
+        action_do=3,
+        via="WFR",
+    )
+
+
+@pytest.mark.parametrize("redirect_target", ("LOCAL", "?"))
+async def test_set_default_rule_state_supports_special_redirect_targets(
+    hass, redirect_target: str
+) -> None:
+    """The default-rule service should pass through special location-family values."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_profile_default_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_DEFAULT_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_MODE: "Redirecting",
+            SERVICE_FIELD_REDIRECT_TARGET: redirect_target,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_profile_default_rule.assert_awaited_once_with(
+        "profile-1",
+        action_do=3,
+        via=redirect_target,
+    )
+
+
+async def test_set_default_rule_state_rejects_redirect_target_outside_redirect_mode(
+    hass,
+) -> None:
+    """The default-rule service should reject redirect targets outside redirect mode."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_DEFAULT_RULE_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_MODE: "Blocking",
+                SERVICE_FIELD_REDIRECT_TARGET: "WFR",
+            },
+            blocking=True,
+        )
+
+
+async def test_set_default_rule_state_rejects_ip_redirect_targets(hass) -> None:
+    """The default-rule service should reject unvalidated IP redirect targets."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_DEFAULT_RULE_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_MODE: "Redirecting",
+                SERVICE_FIELD_REDIRECT_TARGET: "1.1.1.1",
+            },
+            blocking=True,
+        )
+
+
 async def test_set_default_rule_state_prefers_config_entry_id_over_name(hass) -> None:
     """The default-rule service should use config_entry_id before entry name."""
     entry_one = MockConfigEntry(
@@ -3682,6 +4307,110 @@ async def test_create_rule_supports_grouped_rich_creation(hass) -> None:
     ]
     assert created_rule.group_name == "Allow folder"
     assert created_rule.action_do == 2
+
+
+async def test_create_rule_supports_location_redirect_target(hass) -> None:
+    """The create-rule service should support explicit location redirects."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_create_profile_rules = AsyncMock()
+    runtime.client.async_get_profile_detail = AsyncMock(
+        return_value=_detail_payload(
+            "profile-1",
+            include_services=False,
+            include_rules=True,
+        )
+    )
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CREATE_RULE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_HOSTNAME: ["new3.example"],
+            SERVICE_FIELD_MODE: "redirect",
+            SERVICE_FIELD_REDIRECT_TARGET: "WFR",
+            SERVICE_FIELD_REDIRECT_TARGET_TYPE: "location",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_create_profile_rules.assert_awaited_once_with(
+        "profile-1",
+        ["new3.example"],
+        enabled=True,
+        action_do=3,
+        group_pk=None,
+        comment="",
+        ttl=None,
+        via="WFR",
+        via_v6=None,
+    )
+    assert (
+        runtime.registry.rules_by_profile["profile-1"]["root|new3.example"].action_do
+        == 3
+    )
+
+
+@pytest.mark.parametrize("redirect_target", ("LOCAL", "?"))
+async def test_create_rule_infers_special_location_redirect_targets(
+    hass, redirect_target: str
+) -> None:
+    """The create-rule service should pass through special location-family targets."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_create_profile_rules = AsyncMock()
+    runtime.client.async_get_profile_detail = AsyncMock(
+        return_value=_detail_payload(
+            "profile-1",
+            include_services=False,
+            include_rules=True,
+        )
+    )
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CREATE_RULE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_HOSTNAME: ["new4.example"],
+            SERVICE_FIELD_MODE: "redirect",
+            SERVICE_FIELD_REDIRECT_TARGET: redirect_target,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_create_profile_rules.assert_awaited_once_with(
+        "profile-1",
+        ["new4.example"],
+        enabled=True,
+        action_do=3,
+        group_pk=None,
+        comment="",
+        ttl=None,
+        via=redirect_target,
+        via_v6=None,
+    )
+    assert (
+        runtime.registry.rules_by_profile["profile-1"]["root|new4.example"].action_do
+        == 3
+    )
 
 
 async def test_create_rule_rejects_existing_hostname(hass) -> None:
@@ -3953,6 +4682,8 @@ async def test_set_rule_state_supports_comment_updates(hass) -> None:
         group_pk=None,
         ttl=None,
         comment="Temporary allowance",
+        via=None,
+        via_v6=None,
     )
     runtime.client.async_set_profile_rule.assert_not_awaited()
 
@@ -4009,6 +4740,8 @@ async def test_set_rule_state_supports_duration_updates(hass) -> None:
         group_pk=None,
         ttl=int((frozen_now + timedelta(minutes=30)).timestamp()),
         comment="",
+        via=None,
+        via_v6=None,
     )
     runtime.client.async_set_profile_rule.assert_not_awaited()
 
@@ -4067,6 +4800,8 @@ async def test_set_rule_state_expire_at_overrides_duration(hass) -> None:
         group_pk=None,
         ttl=int(expire_at.timestamp()),
         comment="",
+        via=None,
+        via_v6=None,
     )
     runtime.client.async_set_profile_rule.assert_not_awaited()
 
@@ -4118,6 +4853,8 @@ async def test_set_rule_state_cancel_expiration_uses_rich_update(hass) -> None:
         group_pk=None,
         ttl=-1,
         comment="",
+        via=None,
+        via_v6=None,
     )
     runtime.client.async_set_profile_rule.assert_not_awaited()
 
@@ -4171,8 +4908,192 @@ async def test_set_rule_state_cancel_expiration_overrides_expire_inputs(hass) ->
         group_pk=None,
         ttl=-1,
         comment="",
+        via=None,
+        via_v6=None,
     )
     runtime.client.async_set_profile_rule.assert_not_awaited()
+
+
+async def test_set_rule_state_supports_location_redirect_target(hass) -> None:
+    """The rule service should support explicit location redirect targets."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset({"rule:root|example.com"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_update_profile_rule_rich = AsyncMock()
+    runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_RULE_IDENTITY: ["root|example.com"],
+            SERVICE_FIELD_MODE: "redirect",
+            SERVICE_FIELD_REDIRECT_TARGET: "WFR",
+            SERVICE_FIELD_REDIRECT_TARGET_TYPE: "location",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_update_profile_rule_rich.assert_awaited_once_with(
+        "profile-1",
+        "example.com",
+        enabled=True,
+        action_do=3,
+        group_pk=None,
+        ttl=None,
+        comment="",
+        via="WFR",
+        via_v6=None,
+    )
+    runtime.client.async_set_profile_rule.assert_not_awaited()
+
+
+@pytest.mark.parametrize("redirect_target", ("LOCAL", "?"))
+async def test_set_rule_state_infers_special_location_redirect_targets(
+    hass, redirect_target: str
+) -> None:
+    """The rule service should pass through special location-family targets."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset({"rule:root|example.com"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_update_profile_rule_rich = AsyncMock()
+    runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_RULE_IDENTITY: ["root|example.com"],
+            SERVICE_FIELD_MODE: "redirect",
+            SERVICE_FIELD_REDIRECT_TARGET: redirect_target,
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_update_profile_rule_rich.assert_awaited_once_with(
+        "profile-1",
+        "example.com",
+        enabled=True,
+        action_do=3,
+        group_pk=None,
+        ttl=None,
+        comment="",
+        via=redirect_target,
+        via_v6=None,
+    )
+    runtime.client.async_set_profile_rule.assert_not_awaited()
+
+
+async def test_set_rule_state_supports_ipv6_redirect_target(hass) -> None:
+    """The rule service should support explicit IPv6 redirect targets."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset({"rule:root|example.com"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_update_profile_rule_rich = AsyncMock()
+    runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_RULE_STATE,
+        {
+            SERVICE_FIELD_PROFILE_NAME: "Primary",
+            SERVICE_FIELD_RULE_IDENTITY: ["root|example.com"],
+            SERVICE_FIELD_MODE: "redirect",
+            SERVICE_FIELD_REDIRECT_TARGET: "a:b:c:d:e:f::",
+            SERVICE_FIELD_REDIRECT_TARGET_TYPE: "ipv6",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_update_profile_rule_rich.assert_awaited_once_with(
+        "profile-1",
+        "example.com",
+        enabled=True,
+        action_do=2,
+        group_pk=None,
+        ttl=None,
+        comment="",
+        via=None,
+        via_v6="a:b:c:d:e:f::",
+    )
+    runtime.client.async_set_profile_rule.assert_not_awaited()
+
+
+async def test_set_rule_state_rejects_redirect_target_without_redirect_mode(
+    hass,
+) -> None:
+    """The rule service should reject redirect targets outside redirect mode."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset({"rule:root|example.com"})
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_RULE_STATE,
+            {
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_RULE_IDENTITY: ["root|example.com"],
+                SERVICE_FIELD_MODE: "bypass",
+                SERVICE_FIELD_REDIRECT_TARGET: "WFR",
+            },
+            blocking=True,
+        )
 
 
 async def test_rule_entity_exposes_expiration_attributes(hass) -> None:
