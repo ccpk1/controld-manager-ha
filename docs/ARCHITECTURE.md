@@ -33,7 +33,8 @@ Use these terms consistently across code and docs.
 | Device | A Home Assistant device registry object used only as a logical and visual container |
 | Entity | A Home Assistant platform object only |
 | Profile | A Control D configuration container holding rules, services, and blocklists |
-| Endpoint | A physical client such as a phone, PC, or tablet |
+| Endpoint | A top-level Control D protected device row from `/devices`, such as a router segment or an individually protected client |
+| Client | A client visible under an endpoint in analytics and device relationships; client aliases are client-scoped, not endpoint-scoped |
 | Runtime snapshot | The coordinator-owned in-memory view of current Control D state |
 | Registry | The manager-owned indexed runtime structure derived from API payloads |
 | Policy | A Control D rule, filter, service toggle, or other supported profile-level control |
@@ -61,6 +62,7 @@ Rationale: this avoids credential duplication and keeps multi-instance behavior 
 - one instance system device represents the Control D instance
 - one profile device is created for each Control D profile
 - physical endpoints do not become Home Assistant devices
+- clients under endpoints do not become Home Assistant devices
 - endpoint telemetry and control surfaces are modeled as entities attached to the owning profile device
 
 Rationale: profiles are a useful organizational unit in Home Assistant; endpoints are not.
@@ -80,6 +82,8 @@ Rationale: profiles are a useful organizational unit in Home Assistant; endpoint
 - when an endpoint is enforced by multiple profiles, the integration always assigns the endpoint entity to the first attached upstream profile exposed by the published API payload
 - additional attached profiles remain part of normalized runtime metadata, but they do not change the owning Home Assistant profile device in v1
 - this attachment rule is a Home Assistant presentation and organization rule only; it does not imply policy precedence inside Control D
+- some future mutations may be client-scoped rather than endpoint-scoped; those mutations require separate runtime metadata and must not overload endpoint unique IDs or endpoint entity identity
+- client alias support specifically should treat analytics client data as the authoritative read path and should preserve client-scoped identity separately from endpoint-scoped identity
 
 ## Layered design
 
@@ -289,6 +293,42 @@ Required behavior:
 - profile disable and enable behavior should be exposed as paired services rather than as one overloaded mutation surface
 - future disable behavior for profile sub-resources such as filters or services may share a typed target-resolution model only if validation remains explicit and unambiguous
 
+### Service-first mutation families
+
+The current mutation surface is intentionally service-first.
+
+- high-churn or ambiguous write paths such as client aliases and endpoint settings do not become always-on entities in v1
+- the service layer provides explicit target resolution, explicit entry scoping, and translation-ready failure handling without forcing new registry identity contracts for every mutable upstream field
+- the manager layer remains the only write path above the API boundary, so entity platforms, config flows, and services do not drift into separate mutation logic
+
+Current mutation families are:
+
+- profile-scoped mutations such as enable, disable, filter changes, service-mode changes, option writes, and rule writes
+- client-scoped alias mutations on the analytics host
+- endpoint-scoped settings mutations on `/devices/{device_id}`
+
+### Endpoint-scoped versus client-scoped writes
+
+Endpoint and client mutations are related, but they are not interchangeable.
+
+- endpoint-scoped writes use the core Control D API contract on `/devices/{device_id}`
+- currently validated endpoint-scoped writes are rename updates and analytics logging changes
+- client-scoped alias writes use the analytics host and the parent-endpoint-plus-client contract
+- the same physical user device can participate in both families, but the integration must not collapse them into one identifier model or one selector contract
+
+Current proven contracts:
+
+- endpoint rename: `PUT /devices/{device_id}` with `{"name": "..."}`
+- endpoint analytics logging: `PUT /devices/{device_id}` with `{"stats": 0|1|2}` mapped from `None`, `Some`, and `Full`
+- client alias set: `POST /client/alias?deviceId=<parent endpoint>&clientId=<client>` with a raw JSON string body
+- client alias clear: `DELETE /client/alias?deviceId=<parent endpoint>&clientId=<client>`
+
+Selector design consequence:
+
+- endpoint services resolve endpoint-scoped rows only and reject ambiguous current endpoint names
+- client alias services resolve client-scoped targets only and may require `parent_endpoint_name` when convenience selectors are not unique
+- shared config-entry targeting helpers are acceptable, but selector families and translated errors must remain separate so user-facing terminology matches the real contract
+
 ## Runtime data contract
 
 `ConfigEntry.runtime_data` is the single owner of the live integration runtime for one entry.
@@ -299,6 +339,17 @@ It must hold:
 - the coordinator objects or refresh-group owners
 - the manager objects required by the entry
 - the current normalized runtime state needed by entities, services, and diagnostics
+
+For the current service-first write surface, that runtime state must include both:
+
+- endpoint-scoped registry rows anchored to immutable endpoint `device_id` values
+- client-alias target metadata that joins `/devices` relationship fields with analytics-client rows without changing endpoint entity identity
+
+Read-path consequences:
+
+- endpoint rename and endpoint analytics logging refresh against the normal endpoint inventory path
+- client alias visibility depends on analytics-client reads scoped by parent endpoint
+- analytics client data is authoritative for client alias state and should not require endpoint payloads to mirror alias text before the integration can reconcile writes
 
 ## Diagnostics and lifecycle
 

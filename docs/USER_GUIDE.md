@@ -1,19 +1,11 @@
 # Control D Manager user guide
 
-> [!WARNING]
-> First-release disclaimer: redirect-related controls have not been validated
-> end to end yet. Redirect modes and redirect-capable options may not work
-> reliably in this first release, so treat them as provisional until they have
-> been fully tested against live Control D behavior.
-
 ## Overview
 
 Control D Manager is a Home Assistant custom integration for managing one Control D
 account per config entry. It gives you a small account-level surface plus
 profile-scoped controls for filters, services, custom rules, and endpoint status
 entities.
-
-This guide reflects the current implemented behavior in this repository.
 
 ## What the integration does
 
@@ -68,8 +60,7 @@ Control D instance.
 ## Credential updates and repair
 
 If your Control D API token is rotated, revoked, or expires, the integration
-now raises a normal Home Assistant reauthentication request instead of staying
-in a generic failed-refresh state.
+raises a Home Assistant reauthentication request.
 
 Use these entry actions when needed:
 
@@ -152,17 +143,15 @@ so the service-category and custom-rule exposure decisions stay grouped
 together.
 
 ### Integration settings
-This form controls the currently active refresh cadence.
+This form controls the active refresh cadence.
 
 - Configuration sync interval (minutes)
-	Controls how often the integration refreshes the currently implemented
+	Controls how often the integration refreshes the
 	Control D inventory and configuration data. The allowed range is 5 to 60
 	minutes.
 
-The integration currently uses one polling path for inventory, profile detail,
-endpoint activity, and analytics refresh. Separate polling controls are not
-documented or exposed because separate runtime pollers are not part of the
-supported implementation today.
+The integration uses one polling path for inventory, profile detail, endpoint
+activity, and analytics refresh. Separate polling controls are not exposed.
 
 ## Diagnostics and availability
 
@@ -182,7 +171,7 @@ refresh path.
 Each config entry creates one Home Assistant device named Account. Account-level
 entities are attached to that device.
 
-Current account entities:
+Account surfaces:
 
 - Status
 - Profile count
@@ -196,6 +185,7 @@ Current account entities:
 Each managed profile device also exposes the same five analytics sensors for
 that profile, using the same rolling last day reporting window as the Control D
 statistics page.
+
 - Sync now
 
 ### Profile devices
@@ -203,7 +193,7 @@ statistics page.
 Each managed Control D profile becomes its own Home Assistant device under the
 account device.
 
-Current profile surfaces can include:
+Profile surfaces can include:
 
 - a disable switch for the profile
 - filter switches
@@ -220,7 +210,7 @@ Current profile surfaces can include:
 The Status entity is an enum sensor that reports the health of the integration's
 refresh path for that Control D account.
 
-Current states:
+States:
 
 - Healthy
 	The latest refresh succeeded.
@@ -233,7 +223,7 @@ Current states:
 The Status sensor is about integration health, not a full upstream Control D
 service-health contract.
 
-Current Status attributes may include:
+Status attributes may include:
 
 - last refresh attempt
 - last successful refresh
@@ -265,7 +255,7 @@ entities because it includes:
 - explicitly discovered endpoints from the Control D devices inventory
 - nested router client counts when the same inventory payload exposes them
 
-Current Endpoint count attributes:
+Endpoint count attributes:
 
 - discovered endpoint count
 - router client count
@@ -301,7 +291,13 @@ reporting window.
 Redirected queries shows the current account-level redirected bucket for the
 same reporting window.
 
-Current notes for these first-release analytics sensors:
+This count combines both analytics redirect action types currently documented by
+Control D:
+
+- redirected by IP
+- redirected by Location
+
+Analytics sensor notes:
 
 - they request a rolling last-day account-level reporting window, then expose
 	the UTC-normalized window returned by the Control D analytics API
@@ -324,14 +320,13 @@ The integration exposes several account and profile analytics sensors using
 translation keys that the `custom:pi-hole` Lovelace card already understands.
 This gives you a practical way to reuse that card for a Control D dashboard.
 
-Current compatible surfaces include:
+Compatible surfaces include:
 
 - total queries
 - blocked queries
 - blocked queries ratio
 - unique clients or endpoint count
 - status
-
 This is limited compatibility rather than a full Pi-hole emulation layer. The
 card still includes Pi-hole-specific sections that expect Pi-hole services and
 Pi-hole data models.
@@ -420,7 +415,7 @@ In practice:
 Service mode selectors are only created for the service categories you allow in
 the profile options.
 
-Current options are `Off`, `Blocked`, `Bypassed`, and `Redirected`.
+Supported options are `Off`, `Blocked`, `Bypassed`, and `Redirected`.
 
 Services use selectors instead of switches because they usually represent an
 action choice, not just on or off.
@@ -454,18 +449,109 @@ last activity time.
 
 ## Services
 
-The integration currently registers these Home Assistant services:
+The integration registers these Home Assistant services:
 
 - `controld_manager.create_rule`
 - `controld_manager.delete_rule`
 - `controld_manager.disable_profile`
 - `controld_manager.enable_profile`
+- `controld_manager.set_client_alias`
+- `controld_manager.clear_client_alias`
+- `controld_manager.rename_endpoint`
+- `controld_manager.set_endpoint_analytics_logging`
 - `controld_manager.set_default_rule_state`
 - `controld_manager.set_filter_state`
 - `controld_manager.set_option_state`
 - `controld_manager.set_rule_state`
 - `controld_manager.set_service_state`
 - `controld_manager.get_catalog`
+
+### Client alias services
+
+`controld_manager.set_client_alias` and `controld_manager.clear_client_alias`
+target Control D clients that sit under a parent endpoint in analytics data.
+
+- both services operate inside exactly one loaded Control D config entry
+- if more than one config entry is loaded, use `config_entry_id` or
+	`config_entry_name` to scope the request, with `config_entry_id` taking
+	precedence
+- supported selectors are `endpoint_mac`, `endpoint_name`,
+	`endpoint_hostname`, and `endpoint_ip`
+- selector precedence is MAC address, then endpoint name, then hostname, then
+	IP address
+- `parent_endpoint_name` is optional and is primarily useful for resolving
+	duplicate hostname or IP matches behind routers, gateways, or VLAN endpoints
+- MAC, hostname, and IP selectors can resolve analytics-only client rows even
+	when that client does not currently exist as a standalone endpoint entity in
+	Home Assistant
+- these services intentionally target client-alias rows, not endpoint rename
+	rows
+
+Manual examples:
+
+- set one client alias by MAC address:
+	`endpoint_mac: ["50:eb:71:b6:78:3a"]`
+	`alias: "Kids iPhone"`
+- clear one client alias by current endpoint name:
+	`endpoint_name: ["Chads-Phone"]`
+- set one client alias by hostname and parent endpoint name:
+	`endpoint_hostname: ["duplicate-host"]`
+	`parent_endpoint_name: "Firewalla-VLAN60"`
+	`alias: "Shared Host"`
+
+### Endpoint rename service
+
+`controld_manager.rename_endpoint` updates the endpoint label stored on the
+Control D `/devices/{device_id}` surface.
+
+- this service is endpoint-scoped, not client-alias-scoped
+- select targets with `endpoint_name`
+- if more than one loaded Control D config entry exists, use `config_entry_id`
+	or `config_entry_name` to scope the request, with `config_entry_id` taking
+	precedence
+- if one current endpoint name matches more than one endpoint inside the same
+	config entry, the service raises an ambiguity error instead of guessing
+- `new_name` is required and must be a non-empty value
+- endpoint entity unique IDs stay anchored to immutable Control D `device_id`
+	values, so renames do not orphan entities
+
+Manual examples:
+
+- rename one endpoint by its current label:
+	`endpoint_name: ["Chads-Phone"]`
+	`new_name: "Kids iPhone"`
+- rename one endpoint in a specific config entry when multiple instances are
+	loaded:
+	`config_entry_id: "a1b2c3d4e5f6g7h8i9j0"`
+	`endpoint_name: ["Cabin Tablet"]`
+	`new_name: "Guest Tablet"`
+
+### Endpoint analytics logging service
+
+`controld_manager.set_endpoint_analytics_logging` updates the endpoint analytics
+logging level stored on the Control D `/devices/{device_id}` surface.
+
+- this service is endpoint-scoped, not client-alias-scoped
+- select targets with `endpoint_name`
+- if more than one loaded Control D config entry exists, use `config_entry_id`
+	or `config_entry_name` to scope the request, with `config_entry_id` taking
+	precedence
+- if one current endpoint name matches more than one endpoint inside the same
+	config entry, the service raises an ambiguity error instead of guessing
+- `mode` is required and currently supports the validated values `None`,
+	`Some`, and `Full`
+- those values map exactly to the proven Control D endpoint `stats` payload
+	values `0`, `1`, and `2`
+
+Manual examples:
+
+- set one endpoint to the highest logging level:
+	`endpoint_name: ["Chads-Phone"]`
+	`mode: "Full"`
+- reduce logging for one endpoint in a specific config entry:
+	`config_entry_id: "a1b2c3d4e5f6g7h8i9j0"`
+	`endpoint_name: ["Cabin Tablet"]`
+	`mode: "Some"`
 
 ### Enable and disable profile services
 
@@ -494,7 +580,7 @@ Manual examples:
 
 ### Filter state service
 
-`controld_manager.set_filter_state` now uses the same profile-targeting rules as
+`controld_manager.set_filter_state` uses the same profile-targeting rules as
 the enable and disable profile services.
 
 - select profiles with `profile_id` or `profile_name`
@@ -530,11 +616,34 @@ for one or more selected profiles.
 	disambiguators, with `config_entry_id` taking precedence
 - `mode` is required and supports `Blocking`, `Bypassing`, and `Redirecting`
 
+Supported behavior:
+
+- `Redirecting` supports Control D location-family redirect behavior
+- `redirect_target` is optional and may be used with `Redirecting`
+- supported default-rule redirect targets are Control D location-style values:
+	POP codes or names, `LOCAL` for auto routing, and `?` for random routing
+- `redirect_target_type` is optional and supports `location`
+- IP-style proxy redirects are not supported for default rules
+- manual POP-target selections do not stay sticky upstream if you switch away
+	from redirecting and then return to it
+
 Manual examples:
 
 - set one profile to redirect unmatched queries by default:
 	`profile_name: ["Primary"]`
 	`mode: "Redirecting"`
+- set one profile to redirect unmatched queries through one POP:
+	`profile_name: ["Primary"]`
+	`mode: "Redirecting"`
+	`redirect_target: "WFR"`
+- set one profile to use Control D auto routing explicitly:
+	`profile_name: ["Primary"]`
+	`mode: "Redirecting"`
+	`redirect_target: "LOCAL"`
+- set one profile to use Control D random routing explicitly:
+	`profile_name: ["Primary"]`
+	`mode: "Redirecting"`
+	`redirect_target: "?"`
 
 ### Option state service
 
@@ -553,10 +662,11 @@ options across the selected profiles.
 - for select-style options such as AI Malware Filter:
 	`enabled: true` turns the option back on using the upstream default value
 	when available, otherwise the first available level
-- `b_resp` is service-capable for the currently proven values `0.0.0.0 / ::`,
+
+- `b_resp` supports the values `0.0.0.0 / ::`,
 	`NXDOMAIN`, and `REFUSED`
-- `ecs_subnet` is service-capable for the currently proven values `No ECS` and
-	`Auto`, and `enabled: false` turns it off
+- `ecs_subnet` supports the values `No ECS` and `Auto`, and `enabled: false`
+	turns it off
 - for numeric TTL-style field options such as Block TTL:
 	`value` sets the number of seconds and implies `enabled: true`
 - for numeric TTL-style field options such as Block TTL:
@@ -631,6 +741,11 @@ Supported mutation fields:
 
 - `enabled` toggles the selected rules on or off
 - `mode` changes the rule action to `block`, `bypass`, or `redirect`
+- when `mode: "redirect"` is used, `redirect_target` may be a Control D
+	location code or name, `LOCAL`, `?`, or an IPv4 or IPv6 address
+- `redirect_target_type` is optional; when omitted, the integration infers
+	IPv4 or IPv6 from a valid IP address and treats other values as
+	location-family redirects
 - `comment` attempts to replace the upstream rule comment
 - `cancel_expiration` clears the current expiration
 - `expiration_duration` sets a relative expiration
@@ -641,16 +756,15 @@ Precedence rules:
 - `cancel_expiration` overrides both `expiration_duration` and `expire_at`
 - `expire_at` overrides `expiration_duration` when both are provided
 
-Current backend limitation:
+Backend limitation:
 
-- rule comment updates are not persisting reliably in Control D today
+- rule comment updates do not persist reliably in Control D
 - the browser UI shows the same behavior: a comment can appear to update until
 	the page refreshes, then the previous value returns
 - the Home Assistant service exposes the field because it matches the observed
-	write contract, but comment changes should be treated as backend-limited for
-	now
+	write contract, but comment changes should be treated as backend-limited
 
-Current entity behavior for expired rules:
+Expired rule behavior:
 
 - a rule with an expiration in the past is exposed as `off`
 - rule entities expose `expired: true` and `expires_at` attributes when an
@@ -671,6 +785,21 @@ Manual examples:
 	`profile_name: ["Primary"]`
 	`rule_identity: ["root|example.com"]`
 	`cancel_expiration: true`
+- redirect one rule through auto routing:
+	`profile_name: ["Primary"]`
+	`rule_identity: ["root|example.com"]`
+	`mode: "redirect"`
+	`redirect_target: "LOCAL"`
+- redirect one rule through random routing:
+	`profile_name: ["Primary"]`
+	`rule_identity: ["root|example.com"]`
+	`mode: "redirect"`
+	`redirect_target: "?"`
+- redirect one rule through an IPv4 proxy target:
+	`profile_name: ["Primary"]`
+	`rule_identity: ["root|example.com"]`
+	`mode: "redirect"`
+	`redirect_target: "1.1.1.1"`
 
 ### Create rule service
 
@@ -687,6 +816,9 @@ profiles.
 	profile
 - `enabled`, `mode`, `comment`, `expiration_duration`, and `expire_at` reuse
 	the same semantics as `set_rule_state`
+- when `mode: "redirect"` is used, `redirect_target` and
+	`redirect_target_type` reuse the same redirect semantics as
+	`set_rule_state`
 - if `enabled` is omitted, the new rules default to enabled
 - if `mode` is omitted, the new rules default to `block`
 - `config_entry_id` and `config_entry_name` remain optional multi-entry
@@ -714,6 +846,11 @@ Manual examples:
 	`hostname: ["example.org"]`
 	`mode: "redirect"`
 	`expiration_duration: "00:30:00"`
+- create one redirect rule using random routing:
+	`profile_name: ["Primary"]`
+	`hostname: ["example.org"]`
+	`mode: "redirect"`
+	`redirect_target: "?"`
 
 ### Delete rule service
 
@@ -755,8 +892,22 @@ the selected profiles.
 	disambiguators, with `config_entry_id` taking precedence
 
 This service does not require service entities to be exposed. It can resolve
-live service data even when the matching category is not currently enabled for
-entities.
+live service data even when the matching category is not enabled for entities.
+
+Redirect target behavior:
+
+- when `mode: "Redirected"` is used, `redirect_target` may be a Control D
+	location code or name, `LOCAL`, `?`, or an IPv4 or IPv6 address
+- `redirect_target_type` is optional; when omitted, the integration infers
+	IPv4 or IPv6 from a valid IP address and treats other values as
+	location-family redirects
+- when `redirect_target` is omitted, the integration prefers the service's
+	suggested `unlock_location` when one is available and otherwise falls back
+	to explicit auto routing equivalent to `LOCAL`
+- the Control D web app may instead prefill a concrete suggested location for
+	some services based on the service catalog `unlock_location` metadata; when
+	available, service select entities expose that suggestion as the
+	`suggested_redirect_target` state attribute
 
 Manual examples:
 
@@ -768,6 +919,16 @@ Manual examples:
 	`profile_name: ["Primary"]`
 	`service_name: ["Amazon Music"]`
 	`mode: "Redirected"`
+- redirect one service using random routing:
+	`profile_name: ["Primary"]`
+	`service_name: ["Amazon Music"]`
+	`mode: "Redirected"`
+	`redirect_target: "?"`
+- redirect one service through an IPv4 proxy target:
+	`profile_name: ["Primary"]`
+	`service_name: ["Amazon Music"]`
+	`mode: "Redirected"`
+	`redirect_target: "1.1.1.1"`
 
 ### Catalog service
 
@@ -810,19 +971,21 @@ That runtime data is refreshed on poll and reused by entities, managers, and
 service handlers while Home Assistant is running. It is not intended to be
 persistent state across Home Assistant restarts.
 
-## Current limitations
+## Limitations
 
 - endpoint discovery still treats the Control D devices inventory as the
 	authoritative source for endpoint entities
 - nested router clients contribute to the account endpoint total, but they are
 	not created as standalone endpoint entities
 - profile analytics and endpoint analytics refresh intervals are configured, but
-	the integration still centers current runtime behavior on the configuration
-	inventory refresh path
+	the integration centers runtime behavior on the configuration inventory
+	refresh path
 
 ## Troubleshooting
 
 - If Status reports Degraded or Problem, check the last refresh error attribute.
+- If the Control D API key is rejected, ensure a Home Country is set in your
+	Control D preferences on the website.
 - If a profile should disappear from Home Assistant, verify that Enable
 	management in Home Assistant is turned off for that profile.
 - If expected service controls are missing, verify that the relevant service

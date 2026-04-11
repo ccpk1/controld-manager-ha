@@ -1,5 +1,17 @@
 # Control D Manager engineering findings
 
+## Research reference
+
+For deeper API research and discrepancy checks, use the Control D Analytics API
+reference as the primary published source for analytics behavior:
+
+- https://r1wwk64kpj.apidog.io/
+
+When this document and later ad-hoc findings appear to disagree on analytics
+read behavior, prefer the published API reference first, then reconcile the
+difference with live captures or dashboard-backed evidence before changing
+runtime assumptions.
+
 ## Purpose
 
 This document records the verified engineering findings that emerged from proof-of-concept work, published payloads, and dashboard-backed API inspection.
@@ -144,6 +156,9 @@ Observed and verified:
   - `profile`
   - `profile2`
   - `parent_device`
+- `parent_device` can be a mapping with both:
+  - `device_id`
+  - `client_id`
 - docs also mention:
   - `/devices/users`
   - `/devices/routers`
@@ -154,6 +169,37 @@ Settled interpretation:
 - endpoint discovery should come from `GET /devices`
 - profile membership should be derived from attached profile objects such as `profile` and `profile2`
 - `GET /devices` is account- or organization-scoped inventory, not a documented profile-scoped list endpoint
+- top-level device rows from `/devices` are Control D endpoints
+- some endpoint rows also represent clients that sit under another endpoint and expose that relationship through `parent_device.device_id` and `parent_device.client_id`
+
+### Client-versus-endpoint scope is now explicit
+
+Observed and verified:
+
+- a row such as `Firewalla-VLAN60` is a top-level endpoint with its own
+  `device_id`
+- rows such as `Chads-Phone` and `Kadens-Phone` can appear as top-level endpoint
+  inventory records while also exposing:
+  - `parent_device.device_id = <parent endpoint>`
+  - `parent_device.client_id = <analytics client>`
+- analytics client reads can be scoped by parent endpoint with:
+  - `GET https://<stats_endpoint>.analytics.controld.com/v2/client?endpointId=<device_id>`
+
+Settled interpretation:
+
+- endpoint and client are not interchangeable terms in the Control D contract
+- endpoint identity remains anchored to the top-level `/devices` row `device_id`
+- client identity for alias work is a separate analytics-scoped concept carried by
+  `parent_device.client_id`
+- analytics client reads scoped by parent endpoint through
+  `GET https://<stats_endpoint>.analytics.controld.com/v2/client?endpointId=<device_id>`
+  should be treated as the authoritative read path for client alias visibility
+- a physical user device may therefore participate in two related but distinct
+  contracts:
+  - endpoint-scoped updates through `/devices/{device_id}`
+  - client-scoped alias updates through `/client/alias?deviceId=<parent>&clientId=<client>`
+- the integration should not overload endpoint unique IDs or endpoint entity
+  identity with client alias identity
 
 ### Multi-profile endpoint attachment is settled for v1
 
@@ -190,6 +236,59 @@ Settled interpretation:
 - explicit endpoint inventory is not the same thing as every latent child client relationship
 - endpoint discovery for v1 must remain based on explicit published inventory records
 - parent-child metadata is useful context, but not a substitute for endpoint discovery
+- client relationships under an endpoint are valid mutation targets for some
+  later features, but they are not a reason to create separate Home Assistant
+  devices or endpoint entities automatically
+
+### Endpoint updates and client aliases are separate mutation families
+
+Observed and verified:
+
+- endpoint updates use the core API host and a dedicated endpoint write path:
+  - `PUT /devices/{device_id}`
+- observed endpoint update payloads include:
+  - rename:
+    - `{"name":"Chads-Phone2"}`
+  - analytics-setting writes:
+    - `{"stats":0}`
+    - `{"stats":1}`
+    - `{"stats":2}`
+- observed UI labels for those endpoint analytics-setting writes are:
+  - analytics none -> `stats = 0`
+  - analytics some -> `stats = 1`
+  - analytics full -> `stats = 2`
+- a successful endpoint update returns the updated endpoint row and message:
+  - `"Endpoint has been updated"`
+- client aliases use the analytics host and a different write contract:
+  - `POST /client/alias?deviceId=<parent endpoint>&clientId=<client id>`
+  - body is a raw JSON string alias value
+  - `DELETE /client/alias?deviceId=<parent endpoint>&clientId=<client id>`
+
+Settled interpretation:
+
+- endpoint renames and endpoint analytics-setting changes are endpoint-scoped
+  mutations on `/devices/{device_id}`
+- the `stats` field is not just a generic counter in this write contract; it is
+  an endpoint-scoped logging or analytics level controlled by the web UI
+- current proven endpoint analytics-setting values are:
+  - `0` = none
+  - `1` = some
+  - `2` = full
+- client aliases are client-scoped mutations on the analytics host and should
+  not be described as endpoint renames
+- these two mutation families are related through the same physical device, but
+  they must remain separate in implementation planning, runtime modeling, and
+  user-facing terminology
+- for alias refresh behavior, the integration should rely on analytics client
+  data rather than requiring endpoint inventory payloads to mirror alias values
+
+Implementation consequence:
+
+- a later endpoint-settings feature can safely treat endpoint rename and
+  endpoint analytics-setting writes as part of one endpoint-scoped mutation
+  family on `/devices/{device_id}`
+- if the integration exposes endpoint analytics settings later, the user-facing
+  values should map to the proven UI semantics `None`, `Some`, and `Full`
 
 ### Duplicate endpoint names are a real problem
 
@@ -205,6 +304,8 @@ Settled interpretation:
 - endpoint identity must remain anchored to `device_id`
 - endpoint names are presentation only
 - Home Assistant-owned `entity_id` disambiguation is sufficient for v1
+- endpoint names are also mutable through `PUT /devices/{device_id}`, which
+  further confirms that they cannot be used as stable identifiers
 
 ## External filter findings
 
@@ -305,16 +406,59 @@ Observed and supplied evidence:
 - `PUT /profiles/{profile_id}/services/{service_id}` accepts a service action payload
 - one supplied example for `amazonmusic` returned:
   - `{"body":{"services":[{"do":0,"status":1}]},"success":true}`
+- browser-backed service captures now prove multiple redirect-family write forms:
+  - bypassed service:
+    - `{"PK":"amazonmusic","do":1,"status":1}`
+  - blocked service:
+    - `{"PK":"applemusic","do":0,"status":1}`
+  - location-targeted redirected service:
+    - `{"PK":"applemusic","do":3,"status":1,"via":"DFW"}`
+  - proxy-targeted redirected service:
+    - `{"PK":"applemusic","do":2,"status":1,"via":"1.1.1.1"}`
+  - IPv6 proxy-targeted redirected service:
+    - `{"PK":"applemusic","do":2,"status":1,"via":"-1","via_v6":"a:b:c:d:e:f::"}`
 
-Working interpretation:
+Observed browser behavior:
+
+- when a service is first switched to redirect in the web UI, Control D can
+  choose a concrete redirect target rather than using `LOCAL`
+- the browser can then surface a follow-up choice for a specific redirect
+  location
+- Control D staff later confirmed that the special location-family values
+  `LOCAL` and `?` are compatible with services as well
+- the concrete browser default is explained by the catalog `unlock_location`
+  field, which provides a suggested service-specific redirect location
+- service redirect appears to support at least two target families:
+  - location-style targets carried by `do = 3`
+  - proxy-style targets carried by `do = 2`
+    - IPv4 proxy targets use `via`
+    - IPv6 proxy targets use `via_v6`, with `via = "-1"` when no IPv4 target is set
+
+Settled interpretation:
 
 - service item mutation uses a profile-scoped `PUT` endpoint per service item
 - service action state uses the same core semantics seen elsewhere:
   - `do = 0` means block
   - `do = 1` means allow or bypass-style enablement when supported by the service surface
+  - `do = 3` with `via = <location>` means redirect to a specific location-style target
+  - `do = 2` with `via = <proxy>` or `via_v6 = <proxy>` means redirect through a proxy-style target
   - `status = 1` means enabled
   - `status = 0` means disabled
+- service redirect configuration requires target state rather than a bare redirect mode
 - this strengthens the case for treating service items as switch-like rule surfaces once exposed, even though the catalog-selection problem remains category-driven at the options-flow level
+
+Implementation consequence:
+
+- the current service-mode mapping in the integration is not fully aligned with
+  the observed upstream redirect contract
+- service read normalization should not treat only `do = 2` as redirected,
+  because location-targeted service redirects are now observed with `do = 3`
+- service configuration surfaces that change a service into redirect mode need a
+  redirect-target decision instead of assuming a bare redirect action is enough
+- the published Apidog reference linked at the top of this document does not
+  document these service write payloads directly because it is an analytics API
+  reference, not the Control D configuration API; at most it provides analytics-side
+  context that `2` means redirected by IP and `3` means redirected by Location
 
 ## Rules and groups findings
 
@@ -353,6 +497,25 @@ Observed rule patterns:
 - enabled allow rule:
   - `action.do = 1`
   - `action.status = 1`
+- rule enable or disable is a separate status-style operation on the
+  hostname-targeted endpoint:
+  - `PUT /profiles/{profile_id}/rules/{hostname}`
+  - payload can be as small as `{"status":1}`
+  - response preserves the existing rule configuration, including redirect
+    action and target fields such as `do = 3` and `via = "LOCAL"`
+- redirected rule configuration uses the rich rule endpoint and carries both
+  redirect action and target fields:
+  - `PUT /profiles/{profile_id}/rules`
+  - auto or random redirect:
+    - `do = 3`
+    - `status = 1`
+    - `via = "?"`
+    - `via_v6 = "-1"`
+  - specific redirect target:
+    - `do = 3`
+    - `status = 1`
+    - `via = "CLE"` or `via = "WFR"`
+    - `via_v6 = "-1"`
 - disabled rule:
   - `action.status = 0`
 - expiring rule:
@@ -375,6 +538,14 @@ Settled interpretation:
 - folders are important for naming and exposure policy, but they do not replace rule-level switch semantics
 - rule exposure should store explicitly selected typed rule identities per profile
 - the upstream write contract is hostname-oriented rather than rule-PK-oriented
+- custom-rule enable or disable is a separate concern from custom-rule
+  configuration
+- redirected custom rules do not currently follow the same action-value family
+  as service rules or folder rules:
+  - custom-rule redirect uses `do = 3`
+  - custom-rule redirect requires a `via` target choice
+- when a redirect rule is toggled through the hostname-targeted endpoint, the
+  existing redirect configuration is preserved instead of being reset
 - comment changes and expiration changes should use a merged rich `/profiles/{profile_id}/rules` payload built from the current rule state
 - expiration cancellation uses the rich hostname-based rule update endpoint with `ttl = -1`
 - past expiration timestamps are valid input and should not be rejected by Home Assistant service validation
@@ -382,6 +553,18 @@ Settled interpretation:
 - comment update support should remain documented as backend-limited until Control D persists those writes reliably
 - bare hostnames are a safe convenience selector when they are unique, while full rule identities should remain the recommended selector in Home Assistant
 - later implementation should preserve room for additional action semantics such as expiring rules and folder-imposed allow or block defaults
+
+Implementation consequence:
+
+- the current integration's generic custom-rule redirect mapping should still be
+  treated as provisional because the newly captured browser contract requires
+  `do = 3` plus an explicit `via` choice, while the current generic rule model
+  does not yet carry redirect-target state
+- custom-rule toggles should preserve the existing upstream redirect
+  configuration rather than reconstructing redirect payload details locally
+- a later custom-rule redirect enhancement should separate redirect action from
+  redirect target and should preserve that target when toggling rule enabled
+  state on and off
 
 ## Endpoint status findings
 
@@ -465,14 +648,44 @@ Observed families include:
 
 Common traits:
 
-- analytics calls use a region-specific host such as `america.analytics.controld.com`
+- analytics calls use an account- and region-specific host such as:
+  - `us-east1-usr01.analytics.controld.com`
+  - `us-east1-org01.analytics.controld.com`
+  - `asia-southeast1-usr01.analytics.controld.com`
+  - `europe-west4-usr01.analytics.controld.com`
 - response bodies commonly return normalized `startTime` and `endTime`
 - the server does not necessarily echo the requested time window exactly
+- the public analytics docs now define runtime host resolution explicitly:
+  - for users, `stats_endpoint` is served under `body.stats_endpoint`
+  - for organizations, `stats_endpoint` is served under `body.org.stats_endpoint`
+  - the analytics base URL is `concat(stats_endpoint, ".analytics.controld.com")`
 
-Working interpretation:
+Settled interpretation:
 
 - returned time bounds should be treated as authoritative analytics metadata
-- host selection is probably related to `stats_endpoint`, but that mapping is not fully closed yet
+- analytics host selection should be derived from `stats_endpoint`, not hardcoded from a static region label
+- earlier observed hosts such as `america.analytics.controld.com` should be treated as sample endpoints or aliases, not as the canonical construction rule
+
+### Analytics action enums now close the redirect count model
+
+The public analytics docs now define the `action` enum directly.
+
+Observed definitions:
+
+- `-1` = failed
+- `0` = blocked
+- `1` = bypassed
+- `2` = redirected by IP
+- `3` = redirected by Location
+- `spoofTarget` is the redirect destination and may be an IP, domain, or IATA code
+
+Settled interpretation:
+
+- analytics-side redirected totals should aggregate both redirect action buckets:
+  - `2` for IP redirect
+  - `3` for Location redirect
+- the current analytics read model is strong enough to justify one combined redirected-query count in the integration
+- redirect subtype breakout remains optional later enrichment rather than a v1 requirement
 
 ### Analytics client inventory is enrichment, not discovery
 
@@ -716,9 +929,8 @@ These are the remaining gaps that are worth resolving before or during implement
 - how should the runtime normalize attached-profile sibling fields beyond the current `profile` and `profile2` cases
 - how should the first implementation refresh groups be named and bounded
 - how exactly should parent-child endpoint metadata surface in v1
-- how does the analytics host selection map from `stats_endpoint`
 - how do `v2/client` identifiers correlate, if at all, to `/devices` identifiers
-- how do `action` values map across blocked, bypassed, and redirected views
+- which exact analytics queries and filters back the dashboard totals for each action bucket
 - what exact query backs the full blocked-card total
 - what exact denominator does `Benign Blocks` use when phishing or other security categories are present outside the visible ranked rows
 - how should country scoping and protocol scoping be treated in the default analytics model
@@ -1045,7 +1257,6 @@ The supplied regional analytics payload at `https://america.analytics.controld.c
 
 ### New uncertainty narrowed by this sample
 
-- analytics reads appear to use a region-specific host, which may be related to the account `stats_endpoint`, but that host-selection contract is not yet proven
 - the top-level analytics item identifiers are not yet proven to be the same identifiers used by `GET /devices`
 - the child client records are not yet proven to map 1:1 to standalone Control D endpoints, so they should not drive v1 entity creation
 
@@ -1587,6 +1798,21 @@ Observed requests:
   - `{"do":0,"status":1}`
   - `{"do":1,"status":1}`
   - `{"do":3,"via":"LOCAL","status":1}`
+  - `{"do":3,"via":"CLE","status":1}`
+  - `{"do":3,"via":"WFR","status":1}`
+
+Observed responses:
+
+- `{"body":{"default":{"do":3,"status":1,"via":"LOCAL"}},"success":true}`
+- `{"body":{"default":{"do":3,"status":1,"via":"CLE"}},"success":true}`
+- `{"body":{"default":{"do":3,"status":1,"via":"WFR"}},"success":true}`
+
+Observed browser behavior:
+
+- when a manual redirect target such as `CLE` or `WFR` is selected in the web
+  UI, changing the default rule away from redirecting and then back to
+  redirecting resets the upstream value to the auto or local behavior instead
+  of restoring the prior manual target
 
 Observed consequences:
 
@@ -1595,16 +1821,33 @@ Observed consequences:
 - the default rule has its own dedicated profile-scoped endpoint
 - the default rule is action-driven in the same general style as rules and
   services, but it also introduces an additional redirect-style variant using
-  `via = "LOCAL"`
+  `via`
 
-Working interpretation:
+Settled interpretation:
 
 - `do = 0` corresponds to the blocked default-rule mode
 - `do = 1` corresponds to the bypassed default-rule mode
-- `do = 3` with `via = "LOCAL"` corresponds to the locally resolved
-  default-rule mode shown in the web UI
+- `do = 3` corresponds to the redirected default-rule mode
+- `via = "LOCAL"` corresponds to the auto or locally resolved redirect mode
+  shown in the web UI
+- specific POP-style redirect targets are accepted by the same endpoint, with
+  observed examples including `CLE` and `WFR`
+- manual redirect-target selection is not sticky across leaving and re-entering
+  redirect mode in the current upstream browser behavior
 - the currently captured write set proves active-mode writes, but it does not
   yet prove whether a disabled or status-zero state exists for this surface
+
+Implementation consequence:
+
+- the current integration mapping of `Redirecting -> {"do":3,"via":"LOCAL","status":1}`
+  is now validated for the default-rule surface
+- explicit redirect-target selection is a separate enhancement from basic
+  default-rule redirect support because the upstream `via` field can carry
+  both auto-routing and concrete POP values
+- any future manual redirect-target feature should treat redirect target
+  persistence as explicit state managed by the integration or the user, not as
+  behavior the upstream UI reliably preserves when redirect mode is toggled off
+  and back on
 
 Additional implementation consequence:
 
@@ -2091,7 +2334,7 @@ These findings are strong enough to convert several planning topics from theory 
 
 - how to generalize the normalizer beyond the currently observed `profile` and `profile2` shape for possible organization cases
 - how parent-child endpoint visibility should influence discovery and presentation when Firewalla child clients are not independently listed until explicitly assigned
-- how the analytics `/v2/client` item identifiers correlate to `/devices` identifiers and whether analytics host selection is derived directly from `stats_endpoint`
+- how the analytics `/v2/client` item identifiers correlate to `/devices` identifiers
 - how `action` values map to dashboard views such as blocked, bypassed, and redirected for `v2/statistic/count/triggerValue`
 - whether the internal analytics `value` slugs have a stable published mapping to the dashboard labels or need repository-owned translation logic
 - how `srcCountry[]` affects totals and whether the dashboard always scopes statistics by one or more country filters

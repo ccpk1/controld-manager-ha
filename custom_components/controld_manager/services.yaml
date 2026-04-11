@@ -68,6 +68,151 @@ enable_profile:
       selector:
         text:
 
+set_client_alias:
+  name: Set client alias
+  description: Set one alias across one or more Control D clients resolved from MAC address, endpoint name, hostname, or IP address within one selected config entry.
+  fields:
+    endpoint_mac:
+      required: false
+      example: |
+        ["50:eb:71:b6:78:3a", "3c:52:a1:11:22:33"]
+      selector:
+        text:
+    endpoint_name:
+      required: false
+      example: |
+        ["Chads-Phone", "Kitchen Tablet"]
+      selector:
+        text:
+    endpoint_hostname:
+      required: false
+      example: |
+        ["KadensSpyPhone", "living-room-apple-tv"]
+      selector:
+        text:
+    endpoint_ip:
+      required: false
+      example: |
+        ["192.168.202.244", "192.168.202.245"]
+      selector:
+        text:
+    parent_endpoint_name:
+      required: false
+      example: "Firewalla-VLAN60"
+      selector:
+        text:
+    alias:
+      required: true
+      example: "Kids iPhone"
+      selector:
+        text:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
+clear_client_alias:
+  name: Clear client alias
+  description: Clear one alias across one or more Control D clients resolved from MAC address, endpoint name, hostname, or IP address within one selected config entry.
+  fields:
+    endpoint_mac:
+      required: false
+      example: |
+        ["50:eb:71:b6:78:3a", "3c:52:a1:11:22:33"]
+      selector:
+        text:
+    endpoint_name:
+      required: false
+      example: |
+        ["Chads-Phone", "Kitchen Tablet"]
+      selector:
+        text:
+    endpoint_hostname:
+      required: false
+      example: |
+        ["KadensSpyPhone", "living-room-apple-tv"]
+      selector:
+        text:
+    endpoint_ip:
+      required: false
+      example: |
+        ["192.168.202.244", "192.168.202.245"]
+      selector:
+        text:
+    parent_endpoint_name:
+      required: false
+      example: "Firewalla-VLAN60"
+      selector:
+        text:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
+rename_endpoint:
+  name: Rename endpoint
+  description: Rename one or more Control D endpoints resolved by current endpoint name within one selected config entry.
+  fields:
+    endpoint_name:
+      required: false
+      example: |
+        ["Chads-Phone", "Kitchen Tablet"]
+      selector:
+        text:
+    new_name:
+      required: true
+      example: "Kids iPhone"
+      selector:
+        text:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
+set_endpoint_analytics_logging:
+  name: Set endpoint analytics logging
+  description: Update the Control D endpoint analytics logging level for one or more endpoints resolved by current endpoint name within one selected config entry.
+  fields:
+    endpoint_name:
+      required: false
+      example: |
+        ["Chads-Phone", "Kitchen Tablet"]
+      selector:
+        text:
+    mode:
+      required: true
+      example: "Full"
+      selector:
+        select:
+          options:
+            - None
+            - Some
+            - Full
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
 set_filter_state:
   name: Set filter state
   description: Enable or disable one or more Control D filters by raw key or user-facing name across the selected profiles.
@@ -116,7 +261,7 @@ set_filter_state:
 
 set_rule_state:
   name: Set rule state
-  description: Enable or disable one or more Control D custom rules by stable identity across the selected profiles, and optionally change their action mode, comment, or expiration. If cancel_expiration is set, it overrides expiration_duration and expire_at. Otherwise, expire_at takes precedence over expiration_duration.
+  description: Enable or disable one or more Control D custom rules by stable identity across the selected profiles, and optionally change their action mode, redirect target, comment, or expiration. If cancel_expiration is set, it overrides expiration_duration and expire_at. Otherwise, expire_at takes precedence over expiration_duration.
   fields:
     profile_id:
       required: false
@@ -153,6 +298,22 @@ set_rule_state:
             - block
             - bypass
             - redirect
+    redirect_target:
+      required: false
+      example: "WFR"
+      description: When Mode is Redirected, specify a Control D location code or name, `LOCAL` for auto routing, `?` for random routing, or an IPv4 or IPv6 address depending on Redirect target type.
+      selector:
+        text:
+    redirect_target_type:
+      required: false
+      example: "location"
+      description: Choose how Redirect target should be interpreted. Use location for Control D location routing, including the special `LOCAL` auto and `?` random values, ipv4 for an IPv4 proxy target, or ipv6 for an IPv6 proxy target.
+      selector:
+        select:
+          options:
+            - location
+            - ipv4
+            - ipv6
     comment:
       required: false
       example: "Temporary allowance for maintenance"
@@ -184,7 +345,7 @@ set_rule_state:
 
 create_rule:
   name: Create rule
-  description: Create one or more Control D custom rules across the selected profiles. If no Enabled or Mode value is supplied, the new rules default to enabled blocking rules.
+  description: Create one or more Control D custom rules across the selected profiles. If no Enabled or Mode value is supplied, the new rules default to enabled blocking rules. Redirect targets are only applied when Mode is redirect.
   fields:
     profile_id:
       required: false
@@ -231,6 +392,22 @@ create_rule:
             - block
             - bypass
             - redirect
+    redirect_target:
+      required: false
+      example: "1.1.1.1"
+      description: When Mode is redirect, specify a Control D location code or name, `LOCAL` for auto routing, `?` for random routing, or an IPv4 or IPv6 address depending on Redirect target type.
+      selector:
+        text:
+    redirect_target_type:
+      required: false
+      example: "ipv4"
+      description: Choose how Redirect target should be interpreted. Use location for Control D location routing, including the special `LOCAL` auto and `?` random values, ipv4 for an IPv4 proxy target, or ipv6 for an IPv6 proxy target.
+      selector:
+        select:
+          options:
+            - location
+            - ipv4
+            - ipv6
     comment:
       required: false
       example: "Temporary allowance for maintenance"
@@ -294,7 +471,7 @@ delete_rule:
 
 set_service_state:
   name: Set service state
-  description: Set one or more Control D services to Off, Blocked, Bypassed, or Redirected across the selected profiles.
+  description: Set one or more Control D services to Off, Blocked, Bypassed, or Redirected across the selected profiles. Redirect targets are only applied when Mode is Redirected.
   fields:
     profile_id:
       required: false
@@ -334,6 +511,22 @@ set_service_state:
             - "Blocked"
             - "Bypassed"
             - "Redirected"
+    redirect_target:
+      required: false
+      description: Redirect destination. Use a Control D location code or name, `LOCAL` for auto routing, `?` for random routing, or an IP address for proxy redirects.
+      example: "WFR"
+      selector:
+        text:
+    redirect_target_type:
+      required: false
+      description: Optional redirect target family. When omitted, the integration infers `ipv4` or `ipv6` from a valid IP address and treats other values, including `LOCAL` and `?`, as location-family redirects.
+      example: "location"
+      selector:
+        select:
+          options:
+            - location
+            - ipv4
+            - ipv6
     config_entry_id:
       required: false
       selector:
@@ -397,7 +590,7 @@ set_option_state:
 
 set_default_rule_state:
   name: Set default rule state
-  description: Set the Control D default-rule behavior to Blocking, Bypassing, or Redirecting across the selected profiles.
+  description: Set the Control D default-rule behavior to Blocking, Bypassing, or Redirecting across the selected profiles. Redirect targets are only applied when Mode is Redirecting.
   fields:
     profile_id:
       required: false
@@ -424,6 +617,20 @@ set_default_rule_state:
             - "Blocking"
             - "Bypassing"
             - "Redirecting"
+    redirect_target:
+      required: false
+      example: "WFR"
+      description: When Mode is Redirecting, specify a Control D location code or name, `LOCAL` for auto routing, or `?` for random routing.
+      selector:
+        text:
+    redirect_target_type:
+      required: false
+      example: "location"
+      description: Optional redirect target family. Default-rule redirects currently support only Control D location-family routing, including the special `LOCAL` auto and `?` random values.
+      selector:
+        select:
+          options:
+            - location
     config_entry_id:
       required: false
       selector:

@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -133,6 +134,47 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
             profile_analytics_by_profile=profile_analytics_by_profile,
         )
 
+    async def _async_fetch_analytics_clients_by_endpoint(
+        self,
+        inventory: ControlDInventoryPayload,
+    ) -> dict[str, dict[str, Any]]:
+        """Fetch analytics client payloads for aliasable parent endpoints."""
+        stats_endpoint = self._runtime.client.extract_stats_endpoint(inventory.user)
+        if stats_endpoint is None:
+            return {}
+
+        parent_endpoint_ids = sorted(
+            self._runtime.managers.endpoint.aliasable_parent_endpoint_ids(
+                inventory.devices
+            )
+        )
+        if not parent_endpoint_ids:
+            return {}
+
+        try:
+            results = await asyncio.gather(
+                *(
+                    self._runtime.client.async_get_analytics_clients(
+                        stats_endpoint,
+                        endpoint_id=parent_endpoint_id,
+                    )
+                    for parent_endpoint_id in parent_endpoint_ids
+                )
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+            ValueError,
+        ) as err:
+            LOGGER.debug("Unable to refresh Control D analytics clients: %s", err)
+            return {}
+
+        analytics_clients_by_endpoint: dict[str, dict[str, Any]] = {}
+        for result in results:
+            analytics_clients_by_endpoint.update(result)
+        return analytics_clients_by_endpoint
+
     async def _async_update_data(self) -> ControlDRegistry:
         """Fetch and normalize the current Control D inventory snapshot."""
         sync_status = self._runtime.sync_status
@@ -202,6 +244,12 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
                         )
                     ),
                 )
+            inventory = replace(
+                inventory,
+                analytics_clients_by_endpoint=(
+                    await self._async_fetch_analytics_clients_by_endpoint(inventory)
+                ),
+            )
             registry = self._runtime.managers.integration.build_registry(inventory)
         except ControlDApiAuthError as err:
             return self._raise_update_failure(

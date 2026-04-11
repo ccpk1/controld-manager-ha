@@ -63,6 +63,11 @@ class IntegrationManager(BaseManager):
             ),
             profiles=profiles,
             endpoints=endpoints,
+            client_alias_targets=self._endpoint_manager.normalize_client_alias_targets(
+                inventory.devices,
+                endpoints,
+                inventory.analytics_clients_by_endpoint,
+            ),
             filters_by_profile={
                 profile_pk: self._normalize_filters(
                     detail.filters,
@@ -488,6 +493,8 @@ class IntegrationManager(BaseManager):
                 ),
                 enabled=bool(action.get("status", 0)),
                 action_do=(int(action["do"]) if "do" in action else 1),
+                via=IntegrationManager._optional_string(action.get("via")),
+                via_v6=IntegrationManager._optional_string(action.get("via_v6")),
                 warning=IntegrationManager._optional_string(payload.get("warning")),
                 unlock_location=IntegrationManager._optional_string(
                     payload.get("unlock_location")
@@ -658,12 +665,23 @@ class IntegrationManager(BaseManager):
             last_active=IntegrationManager._optional_string(
                 user_payload.get("last_active")
             ),
-            stats_endpoint=IntegrationManager._optional_string(
-                user_payload.get("stats_endpoint")
-            ),
+            stats_endpoint=IntegrationManager._extract_stats_endpoint(user_payload),
             status=IntegrationManager._optional_string(user_payload.get("status")),
             safe_countries=safe_countries,
         )
+
+    @staticmethod
+    def _extract_stats_endpoint(payload: dict[str, Any]) -> str | None:
+        """Return the analytics endpoint token from user or org payloads."""
+        if stats_endpoint := IntegrationManager._optional_string(
+            payload.get("stats_endpoint")
+        ):
+            return stats_endpoint
+
+        org_payload = payload.get("org")
+        if not isinstance(org_payload, dict):
+            return None
+        return IntegrationManager._optional_string(org_payload.get("stats_endpoint"))
 
     @staticmethod
     def _require_string(payload: dict[str, Any], key: str) -> str:

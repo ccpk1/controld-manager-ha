@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -30,16 +31,22 @@ from .api import (
 from .const import (
     DEFAULT_DISABLE_MINUTES,
     DOMAIN,
+    SERVICE_CLEAR_CLIENT_ALIAS,
     SERVICE_CREATE_RULE,
     SERVICE_DELETE_RULE,
     SERVICE_DISABLE_PROFILE,
     SERVICE_ENABLE_PROFILE,
+    SERVICE_FIELD_ALIAS,
     SERVICE_FIELD_CANCEL_EXPIRATION,
     SERVICE_FIELD_CATALOG_TYPE,
     SERVICE_FIELD_COMMENT,
     SERVICE_FIELD_CONFIG_ENTRY_ID,
     SERVICE_FIELD_CONFIG_ENTRY_NAME,
     SERVICE_FIELD_ENABLED,
+    SERVICE_FIELD_ENDPOINT_HOSTNAME,
+    SERVICE_FIELD_ENDPOINT_IP,
+    SERVICE_FIELD_ENDPOINT_MAC,
+    SERVICE_FIELD_ENDPOINT_NAME,
     SERVICE_FIELD_EXPIRATION_DURATION,
     SERVICE_FIELD_EXPIRE_AT,
     SERVICE_FIELD_FILTER_ID,
@@ -47,10 +54,14 @@ from .const import (
     SERVICE_FIELD_HOSTNAME,
     SERVICE_FIELD_MINUTES,
     SERVICE_FIELD_MODE,
+    SERVICE_FIELD_NEW_NAME,
     SERVICE_FIELD_OPTION_ID,
     SERVICE_FIELD_OPTION_NAME,
+    SERVICE_FIELD_PARENT_ENDPOINT_NAME,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
+    SERVICE_FIELD_REDIRECT_TARGET,
+    SERVICE_FIELD_REDIRECT_TARGET_TYPE,
     SERVICE_FIELD_RULE_GROUP_ID,
     SERVICE_FIELD_RULE_GROUP_NAME,
     SERVICE_FIELD_RULE_IDENTITY,
@@ -58,33 +69,54 @@ from .const import (
     SERVICE_FIELD_SERVICE_NAME,
     SERVICE_FIELD_VALUE,
     SERVICE_GET_CATALOG,
+    SERVICE_RENAME_ENDPOINT,
+    SERVICE_SET_CLIENT_ALIAS,
     SERVICE_SET_DEFAULT_RULE_STATE,
+    SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING,
     SERVICE_SET_FILTER_STATE,
     SERVICE_SET_OPTION_STATE,
     SERVICE_SET_RULE_STATE,
     SERVICE_SET_SERVICE_STATE,
+    TRANS_KEY_CLEAR_CLIENT_ALIASES_FAILED,
+    TRANS_KEY_CLIENT_ALIAS_INVALID,
+    TRANS_KEY_CLIENT_ALIAS_TARGET_AMBIGUOUS,
+    TRANS_KEY_CLIENT_ALIAS_TARGET_NOT_FOUND,
+    TRANS_KEY_CLIENT_ALIAS_TARGET_REQUIRED,
     TRANS_KEY_CONFIG_ENTRY_NAME_AMBIGUOUS,
     TRANS_KEY_CONFIG_ENTRY_NAME_NOT_FOUND,
     TRANS_KEY_CONFIG_ENTRY_NOT_FOUND,
     TRANS_KEY_CONFIG_ENTRY_NOT_LOADED,
     TRANS_KEY_CREATE_RULES_FAILED,
+    TRANS_KEY_DEFAULT_RULE_REDIRECT_TARGET_INVALID,
+    TRANS_KEY_DEFAULT_RULE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE,
     TRANS_KEY_DELETE_RULES_FAILED,
     TRANS_KEY_DISABLE_PROFILES_FAILED,
     TRANS_KEY_ENABLE_PROFILES_FAILED,
+    TRANS_KEY_ENDPOINT_NAME_INVALID,
+    TRANS_KEY_ENDPOINT_TARGET_AMBIGUOUS,
+    TRANS_KEY_ENDPOINT_TARGET_NOT_FOUND,
+    TRANS_KEY_ENDPOINT_TARGET_REQUIRED,
     TRANS_KEY_MULTIPLE_ENTRIES_LOADED,
     TRANS_KEY_OPTION_MUTATION_REQUIRED,
     TRANS_KEY_OPTION_VALUE_UNSUPPORTED,
     TRANS_KEY_PROFILE_TARGET_AMBIGUOUS,
     TRANS_KEY_PROFILE_TARGET_NOT_FOUND,
     TRANS_KEY_PROFILE_TARGET_REQUIRED,
+    TRANS_KEY_RENAME_ENDPOINTS_FAILED,
     TRANS_KEY_RULE_ALREADY_EXISTS,
     TRANS_KEY_RULE_GROUP_NAME_AMBIGUOUS,
     TRANS_KEY_RULE_GROUP_NAME_NOT_FOUND,
     TRANS_KEY_RULE_HOSTNAME_DUPLICATE,
     TRANS_KEY_RULE_HOSTNAME_REQUIRED,
     TRANS_KEY_RULE_MUTATION_REQUIRED,
+    TRANS_KEY_RULE_REDIRECT_TARGET_INVALID,
+    TRANS_KEY_RULE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE,
     TRANS_KEY_SERVICE_MODE_REJECTED,
+    TRANS_KEY_SERVICE_REDIRECT_TARGET_INVALID,
+    TRANS_KEY_SERVICE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE,
+    TRANS_KEY_SET_CLIENT_ALIASES_FAILED,
     TRANS_KEY_SET_DEFAULT_RULES_FAILED,
+    TRANS_KEY_SET_ENDPOINT_ANALYTICS_LOGGING_FAILED,
     TRANS_KEY_SET_FILTERS_FAILED,
     TRANS_KEY_SET_OPTIONS_FAILED,
     TRANS_KEY_SET_RULES_FAILED,
@@ -92,9 +124,16 @@ from .const import (
     TRANS_KEY_WRONG_INTEGRATION_ENTRY,
 )
 from .models import (
+    ControlDClientAliasTarget,
+    ControlDEndpointSummary,
     ControlDManagerRuntime,
     ControlDService,
     default_rule_mode_labels,
+    endpoint_analytics_logging_mode_labels,
+    endpoint_analytics_stats_value_from_mode,
+    normalize_default_rule_mode,
+    normalize_endpoint_analytics_logging_mode,
+    normalize_service_mode,
     rule_action_options,
     service_mode_labels,
 )
@@ -158,6 +197,26 @@ _PROFILE_SERVICE_ENTRY_TARGET_FIELDS: dict[vol.Marker, object] = {
     vol.Optional(SERVICE_FIELD_CONFIG_ENTRY_NAME): cv.string,
 }
 
+_CLIENT_ALIAS_SELECTOR_FIELDS: dict[vol.Marker, object] = {
+    vol.Optional(SERVICE_FIELD_ENDPOINT_MAC): vol.Any(cv.string, [cv.string]),
+    vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
+    vol.Optional(SERVICE_FIELD_ENDPOINT_HOSTNAME): vol.Any(cv.string, [cv.string]),
+    vol.Optional(SERVICE_FIELD_ENDPOINT_IP): vol.Any(cv.string, [cv.string]),
+    vol.Optional(SERVICE_FIELD_PARENT_ENDPOINT_NAME): cv.string,
+}
+
+_RULE_REDIRECT_SERVICE_FIELDS: dict[vol.Marker, object] = {
+    vol.Optional(SERVICE_FIELD_REDIRECT_TARGET): cv.string,
+    vol.Optional(SERVICE_FIELD_REDIRECT_TARGET_TYPE): vol.In(
+        ("location", "ipv4", "ipv6")
+    ),
+}
+
+_DEFAULT_RULE_REDIRECT_SERVICE_FIELDS: dict[vol.Marker, object] = {
+    vol.Optional(SERVICE_FIELD_REDIRECT_TARGET): cv.string,
+    vol.Optional(SERVICE_FIELD_REDIRECT_TARGET_TYPE): vol.In(("location",)),
+}
+
 DISABLE_PROFILE_SERVICE_SCHEMA = vol.Schema(
     {
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
@@ -171,6 +230,39 @@ DISABLE_PROFILE_SERVICE_SCHEMA = vol.Schema(
 ENABLE_PROFILE_SERVICE_SCHEMA = vol.Schema(
     {
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+SET_CLIENT_ALIAS_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_CLIENT_ALIAS_SELECTOR_FIELDS,
+        vol.Required(SERVICE_FIELD_ALIAS): cv.string,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+CLEAR_CLIENT_ALIAS_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_CLIENT_ALIAS_SELECTOR_FIELDS,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+RENAME_ENDPOINT_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
+        vol.Required(SERVICE_FIELD_NEW_NAME): cv.string,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+SET_ENDPOINT_ANALYTICS_LOGGING_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
+        vol.Required(SERVICE_FIELD_MODE): vol.In(
+            endpoint_analytics_logging_mode_labels()
+        ),
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
@@ -189,6 +281,7 @@ SET_SERVICE_STATE_SERVICE_SCHEMA = vol.Schema(
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         **_SERVICE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Required(SERVICE_FIELD_MODE): vol.In(service_mode_labels()),
+        **_RULE_REDIRECT_SERVICE_FIELDS,
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
@@ -207,6 +300,7 @@ SET_DEFAULT_RULE_STATE_SERVICE_SCHEMA = vol.Schema(
     {
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Required(SERVICE_FIELD_MODE): vol.In(default_rule_mode_labels()),
+        **_DEFAULT_RULE_REDIRECT_SERVICE_FIELDS,
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
@@ -217,6 +311,7 @@ SET_RULE_STATE_SERVICE_SCHEMA = vol.Schema(
         **_RULE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Optional(SERVICE_FIELD_ENABLED): cv.boolean,
         vol.Optional(SERVICE_FIELD_MODE): vol.In(rule_action_options()),
+        **_RULE_REDIRECT_SERVICE_FIELDS,
         vol.Optional(SERVICE_FIELD_COMMENT): cv.string,
         vol.Optional(SERVICE_FIELD_CANCEL_EXPIRATION): cv.boolean,
         vol.Optional(SERVICE_FIELD_EXPIRATION_DURATION): vol.All(
@@ -235,6 +330,7 @@ CREATE_RULE_SERVICE_SCHEMA = vol.Schema(
         **_RULE_GROUP_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Optional(SERVICE_FIELD_ENABLED): cv.boolean,
         vol.Optional(SERVICE_FIELD_MODE): vol.In(rule_action_options()),
+        **_RULE_REDIRECT_SERVICE_FIELDS,
         vol.Optional(SERVICE_FIELD_COMMENT): cv.string,
         vol.Optional(SERVICE_FIELD_EXPIRATION_DURATION): vol.All(
             cv.time_period,
@@ -324,6 +420,22 @@ class ResolvedCreateRuleServiceTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedClientAliasServiceTarget:
+    """Resolved service target for client-alias mutations."""
+
+    entry: ControlDManagerConfigEntry
+    targets: tuple[ControlDClientAliasTarget, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedEndpointServiceTarget:
+    """Resolved service target for endpoint rename mutations."""
+
+    entry: ControlDManagerConfigEntry
+    endpoints: tuple[ControlDEndpointSummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ParsedRuleMutation:
     """Normalized mutation values for a rule-state service call."""
 
@@ -331,6 +443,8 @@ class ParsedRuleMutation:
     mode: str | None
     comment: str | None
     ttl: int | None
+    redirect_target: str | None
+    redirect_target_type: str | None
 
 
 async def async_register_services(hass: HomeAssistant) -> None:
@@ -381,6 +495,77 @@ async def async_register_services(hass: HomeAssistant) -> None:
         ) as err:
             raise _ha_error(TRANS_KEY_ENABLE_PROFILES_FAILED) from err
 
+    async def async_handle_set_client_alias(call: ServiceCall) -> None:
+        """Set one alias across one or more resolved Control D clients."""
+        resolved_target = _resolve_client_alias_service_target(hass, call)
+        alias = _normalize_client_alias(call.data[SERVICE_FIELD_ALIAS])
+        try:
+            endpoint_manager = resolved_target.entry.runtime_data.managers.endpoint
+            await endpoint_manager.async_set_client_aliases(
+                resolved_target.targets,
+                alias,
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+            ValueError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_SET_CLIENT_ALIASES_FAILED) from err
+
+    async def async_handle_clear_client_alias(call: ServiceCall) -> None:
+        """Clear one alias across one or more resolved Control D clients."""
+        resolved_target = _resolve_client_alias_service_target(hass, call)
+        try:
+            endpoint_manager = resolved_target.entry.runtime_data.managers.endpoint
+            await endpoint_manager.async_clear_client_aliases(resolved_target.targets)
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+            ValueError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_CLEAR_CLIENT_ALIASES_FAILED) from err
+
+    async def async_handle_rename_endpoint(call: ServiceCall) -> None:
+        """Rename one or more resolved Control D endpoints."""
+        resolved_target = _resolve_endpoint_service_target(hass, call)
+        new_name = _normalize_endpoint_name(call.data[SERVICE_FIELD_NEW_NAME])
+        try:
+            endpoint_manager = resolved_target.entry.runtime_data.managers.endpoint
+            await endpoint_manager.async_rename_endpoints(
+                resolved_target.endpoints,
+                new_name,
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+            ValueError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_RENAME_ENDPOINTS_FAILED) from err
+
+    async def async_handle_set_endpoint_analytics_logging(call: ServiceCall) -> None:
+        """Update one endpoint analytics logging mode across resolved endpoints."""
+        resolved_target = _resolve_endpoint_service_target(hass, call)
+        normalized_mode = normalize_endpoint_analytics_logging_mode(
+            call.data[SERVICE_FIELD_MODE]
+        )
+        stats_value = endpoint_analytics_stats_value_from_mode(normalized_mode)
+        try:
+            endpoint_manager = resolved_target.entry.runtime_data.managers.endpoint
+            await endpoint_manager.async_set_endpoint_analytics_logging(
+                resolved_target.endpoints,
+                stats_value,
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+            ValueError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_SET_ENDPOINT_ANALYTICS_LOGGING_FAILED) from err
+
     async def async_handle_set_filter_state(call: ServiceCall) -> None:
         """Enable or disable one named filter across targeted profiles."""
         resolved_target = _resolve_filter_service_target(hass, call)
@@ -410,6 +595,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 mode=mutation.mode,
                 ttl=mutation.ttl,
                 comment=mutation.comment,
+                redirect_target=mutation.redirect_target,
+                redirect_target_type=mutation.redirect_target_type,
             )
         except (
             ControlDApiAuthError,
@@ -438,6 +625,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 mode=mutation.mode,
                 ttl=mutation.ttl,
                 comment=mutation.comment,
+                redirect_target=mutation.redirect_target,
+                redirect_target_type=mutation.redirect_target_type,
             )
         except (
             ControlDApiAuthError,
@@ -462,12 +651,19 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def async_handle_set_service_state(call: ServiceCall) -> None:
         """Set one or more targeted Control D services to the requested mode."""
         resolved_target = await _resolve_service_service_target(hass, call)
+        redirect_target, redirect_target_type = _normalize_service_redirect_target(
+            call.data[SERVICE_FIELD_MODE],
+            call.data.get(SERVICE_FIELD_REDIRECT_TARGET),
+            call.data.get(SERVICE_FIELD_REDIRECT_TARGET_TYPE),
+        )
         try:
             profile_manager = resolved_target.entry.runtime_data.managers.profile
             await profile_manager.async_set_services_mode(
                 resolved_target.profile_services,
                 call.data[SERVICE_FIELD_MODE],
                 service_rows_by_profile=resolved_target.service_rows_by_profile,
+                redirect_target=redirect_target,
+                redirect_target_type=redirect_target_type,
             )
         except ControlDApiResponseError as err:
             raise _ha_error(TRANS_KEY_SERVICE_MODE_REJECTED) from err
@@ -512,11 +708,18 @@ async def async_register_services(hass: HomeAssistant) -> None:
             profile_device_field=SERVICE_FIELD_PROFILE_ID,
             require_profile_selector=True,
         )
+        redirect_target, redirect_target_type = _normalize_default_rule_redirect_target(
+            call.data[SERVICE_FIELD_MODE],
+            call.data.get(SERVICE_FIELD_REDIRECT_TARGET),
+            call.data.get(SERVICE_FIELD_REDIRECT_TARGET_TYPE),
+        )
         try:
             profile_manager = resolved_target.entry.runtime_data.managers.profile
             await profile_manager.async_set_default_rules_mode(
                 resolved_target.profile_pks,
                 call.data[SERVICE_FIELD_MODE],
+                redirect_target=redirect_target,
+                redirect_target_type=redirect_target_type,
             )
         except (
             ControlDApiAuthError,
@@ -552,6 +755,34 @@ async def async_register_services(hass: HomeAssistant) -> None:
             SERVICE_ENABLE_PROFILE,
             async_handle_enable_profile,
             schema=ENABLE_PROFILE_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_CLIENT_ALIAS):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_CLIENT_ALIAS,
+            async_handle_set_client_alias,
+            schema=SET_CLIENT_ALIAS_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_CLEAR_CLIENT_ALIAS):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CLEAR_CLIENT_ALIAS,
+            async_handle_clear_client_alias,
+            schema=CLEAR_CLIENT_ALIAS_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_RENAME_ENDPOINT):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RENAME_ENDPOINT,
+            async_handle_rename_endpoint,
+            schema=RENAME_ENDPOINT_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING,
+            async_handle_set_endpoint_analytics_logging,
+            schema=SET_ENDPOINT_ANALYTICS_LOGGING_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_FILTER_STATE):
         hass.services.async_register(
@@ -638,6 +869,80 @@ def _resolve_filter_service_target(
     )
 
 
+def _resolve_client_alias_service_target(
+    hass: HomeAssistant,
+    call: ServiceCall,
+) -> ResolvedClientAliasServiceTarget:
+    """Resolve one client-alias mutation target within one config entry."""
+    explicit_entry_ids = set(_ensure_list(call.data.get(SERVICE_FIELD_CONFIG_ENTRY_ID)))
+    config_entry_name = call.data.get(SERVICE_FIELD_CONFIG_ENTRY_NAME)
+    loaded_entries = {
+        entry.entry_id: entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if _entry_runtime(entry) is not None
+    }
+    entry = _resolve_loaded_entry(
+        hass,
+        entry_ids=explicit_entry_ids,
+        entry_name=(config_entry_name if isinstance(config_entry_name, str) else None),
+        loaded_entries=loaded_entries,
+        entity_ids=set(),
+        device_ids=set(),
+    )
+
+    endpoint_selector_values = _selected_client_alias_selector_values(call)
+    if not endpoint_selector_values:
+        raise ServiceValidationError(
+            "Select at least one Control D client target",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_CLIENT_ALIAS_TARGET_REQUIRED,
+        )
+
+    parent_endpoint_name = call.data.get(SERVICE_FIELD_PARENT_ENDPOINT_NAME)
+    endpoint_manager = entry.runtime_data.managers.endpoint
+    resolved_targets: dict[str, ControlDClientAliasTarget] = {}
+
+    for selector_kind, selector_value in endpoint_selector_values:
+        try:
+            if selector_kind == SERVICE_FIELD_ENDPOINT_MAC:
+                target = endpoint_manager.resolve_client_alias_target(
+                    endpoint_mac=selector_value,
+                    parent_endpoint_name=parent_endpoint_name,
+                )
+            elif selector_kind == SERVICE_FIELD_ENDPOINT_NAME:
+                target = endpoint_manager.resolve_client_alias_target(
+                    endpoint_name=selector_value,
+                    parent_endpoint_name=parent_endpoint_name,
+                )
+            elif selector_kind == SERVICE_FIELD_ENDPOINT_HOSTNAME:
+                target = endpoint_manager.resolve_client_alias_target(
+                    endpoint_hostname=selector_value,
+                    parent_endpoint_name=parent_endpoint_name,
+                )
+            else:
+                target = endpoint_manager.resolve_client_alias_target(
+                    endpoint_ip=selector_value,
+                    parent_endpoint_name=parent_endpoint_name,
+                )
+        except ValueError as err:
+            translation_key = (
+                TRANS_KEY_CLIENT_ALIAS_TARGET_AMBIGUOUS
+                if "Ambiguous" in str(err)
+                else TRANS_KEY_CLIENT_ALIAS_TARGET_NOT_FOUND
+            )
+            raise ServiceValidationError(
+                str(err),
+                translation_domain=DOMAIN,
+                translation_key=translation_key,
+            ) from err
+        resolved_targets[target.target_key] = target
+
+    return ResolvedClientAliasServiceTarget(
+        entry=entry,
+        targets=tuple(resolved_targets.values()),
+    )
+
+
 def _resolve_catalog_service_target(
     hass: HomeAssistant, call: ServiceCall
 ) -> ResolvedCatalogServiceTarget:
@@ -655,6 +960,63 @@ def _resolve_catalog_service_target(
         entry=resolved_profiles.entry,
         profile_pks=resolved_profiles.profile_pks,
         catalog_type=catalog_type,
+    )
+
+
+def _resolve_endpoint_service_target(
+    hass: HomeAssistant,
+    call: ServiceCall,
+) -> ResolvedEndpointServiceTarget:
+    """Resolve one endpoint-rename target scope within one config entry."""
+    explicit_entry_ids = set(_ensure_list(call.data.get(SERVICE_FIELD_CONFIG_ENTRY_ID)))
+    config_entry_name = call.data.get(SERVICE_FIELD_CONFIG_ENTRY_NAME)
+    requested_endpoint_names = _ensure_name_list(
+        call.data.get(SERVICE_FIELD_ENDPOINT_NAME)
+    )
+    loaded_entries = {
+        entry.entry_id: entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if _entry_runtime(entry) is not None
+    }
+    entry = _resolve_loaded_entry(
+        hass,
+        entry_ids=explicit_entry_ids,
+        entry_name=(config_entry_name if isinstance(config_entry_name, str) else None),
+        loaded_entries=loaded_entries,
+        entity_ids=set(),
+        device_ids=set(),
+    )
+
+    if not requested_endpoint_names:
+        raise ServiceValidationError(
+            "Select at least one Control D endpoint target",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_ENDPOINT_TARGET_REQUIRED,
+        )
+
+    endpoint_manager = entry.runtime_data.managers.endpoint
+    resolved_endpoints: dict[str, ControlDEndpointSummary] = {}
+    for requested_name in requested_endpoint_names:
+        try:
+            endpoint = endpoint_manager.resolve_endpoint_target(
+                endpoint_name=requested_name,
+            )
+        except ValueError as err:
+            translation_key = (
+                TRANS_KEY_ENDPOINT_TARGET_AMBIGUOUS
+                if "Ambiguous" in str(err)
+                else TRANS_KEY_ENDPOINT_TARGET_NOT_FOUND
+            )
+            raise ServiceValidationError(
+                str(err),
+                translation_domain=DOMAIN,
+                translation_key=translation_key,
+            ) from err
+        resolved_endpoints[endpoint.device_id] = endpoint
+
+    return ResolvedEndpointServiceTarget(
+        entry=entry,
+        endpoints=tuple(resolved_endpoints.values()),
     )
 
 
@@ -766,6 +1128,8 @@ def _parse_rule_mutation(call: ServiceCall) -> ParsedRuleMutation:
     enabled = call.data.get(SERVICE_FIELD_ENABLED)
     mode = call.data.get(SERVICE_FIELD_MODE)
     comment = call.data.get(SERVICE_FIELD_COMMENT)
+    redirect_target = call.data.get(SERVICE_FIELD_REDIRECT_TARGET)
+    redirect_target_type = call.data.get(SERVICE_FIELD_REDIRECT_TARGET_TYPE)
     cancel_expiration = call.data.get(SERVICE_FIELD_CANCEL_EXPIRATION, False)
     expiration_duration = call.data.get(SERVICE_FIELD_EXPIRATION_DURATION)
     expire_at = call.data.get(SERVICE_FIELD_EXPIRE_AT)
@@ -777,11 +1141,21 @@ def _parse_rule_mutation(call: ServiceCall) -> ParsedRuleMutation:
     if not cancel_expiration and expire_at is not None:
         expires_at = int(dt_util.as_utc(expire_at).timestamp())
 
+    normalized_redirect_target, normalized_redirect_target_type = (
+        _normalize_rule_redirect_target(
+            mode,
+            redirect_target,
+            redirect_target_type,
+        )
+    )
+
     return ParsedRuleMutation(
         enabled=enabled,
         mode=mode,
         comment=comment,
         ttl=expires_at,
+        redirect_target=normalized_redirect_target,
+        redirect_target_type=normalized_redirect_target_type,
     )
 
 
@@ -792,12 +1166,130 @@ def _require_rule_mutation(mutation: ParsedRuleMutation) -> None:
         and mutation.mode is None
         and mutation.comment is None
         and mutation.ttl is None
+        and mutation.redirect_target is None
     ):
         raise ServiceValidationError(
             "Provide at least one rule mutation field",
             translation_domain=DOMAIN,
             translation_key=TRANS_KEY_RULE_MUTATION_REQUIRED,
         )
+
+
+def _normalize_rule_redirect_target(
+    mode: str | None,
+    redirect_target: str | None,
+    redirect_target_type: str | None,
+    *,
+    redirect_mode_key: str = "redirect",
+    invalid_translation_key: str = TRANS_KEY_RULE_REDIRECT_TARGET_INVALID,
+    requires_mode_translation_key: str = (
+        TRANS_KEY_RULE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE
+    ),
+    allow_ip_targets: bool = True,
+) -> tuple[str | None, str | None]:
+    """Validate and normalize optional redirect-target inputs for rule services."""
+    normalized_target = None
+    if isinstance(redirect_target, str):
+        normalized_target = redirect_target.strip()
+    if not normalized_target and redirect_target_type is None:
+        return None, None
+    if not normalized_target:
+        raise ServiceValidationError(
+            "Provide a valid redirect target value",
+            translation_domain=DOMAIN,
+            translation_key=invalid_translation_key,
+        )
+    if mode != redirect_mode_key:
+        raise ServiceValidationError(
+            "Redirect targets require redirect mode",
+            translation_domain=DOMAIN,
+            translation_key=requires_mode_translation_key,
+        )
+
+    normalized_type = redirect_target_type
+    if normalized_type is None:
+        try:
+            parsed_target = ipaddress.ip_address(normalized_target)
+        except ValueError:
+            normalized_type = "location"
+        else:
+            if not allow_ip_targets:
+                raise ServiceValidationError(
+                    "Provide a valid redirect target value",
+                    translation_domain=DOMAIN,
+                    translation_key=invalid_translation_key,
+                )
+            normalized_type = "ipv4" if parsed_target.version == 4 else "ipv6"
+
+    if normalized_type == "location":
+        return normalized_target, normalized_type
+
+    if not allow_ip_targets:
+        raise ServiceValidationError(
+            "Provide a valid redirect target value",
+            translation_domain=DOMAIN,
+            translation_key=invalid_translation_key,
+        )
+
+    try:
+        parsed_target = ipaddress.ip_address(normalized_target)
+    except ValueError as err:
+        raise ServiceValidationError(
+            "Provide a valid redirect target value",
+            translation_domain=DOMAIN,
+            translation_key=invalid_translation_key,
+        ) from err
+
+    if normalized_type == "ipv4" and parsed_target.version != 4:
+        raise ServiceValidationError(
+            "Provide a valid redirect target value",
+            translation_domain=DOMAIN,
+            translation_key=invalid_translation_key,
+        )
+    if normalized_type == "ipv6" and parsed_target.version != 6:
+        raise ServiceValidationError(
+            "Provide a valid redirect target value",
+            translation_domain=DOMAIN,
+            translation_key=invalid_translation_key,
+        )
+    return str(parsed_target), normalized_type
+
+
+def _normalize_service_redirect_target(
+    mode: str,
+    redirect_target: str | None,
+    redirect_target_type: str | None,
+) -> tuple[str | None, str | None]:
+    """Validate and normalize optional redirect-target inputs for service writes."""
+    return _normalize_rule_redirect_target(
+        normalize_service_mode(mode),
+        redirect_target,
+        redirect_target_type,
+        redirect_mode_key="redirected",
+        invalid_translation_key=TRANS_KEY_SERVICE_REDIRECT_TARGET_INVALID,
+        requires_mode_translation_key=(
+            TRANS_KEY_SERVICE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE
+        ),
+    )
+
+
+def _normalize_default_rule_redirect_target(
+    mode: str,
+    redirect_target: str | None,
+    redirect_target_type: str | None,
+) -> tuple[str | None, str | None]:
+    """Validate and normalize optional redirect-target inputs for default rules."""
+    return _normalize_rule_redirect_target(
+        normalize_default_rule_mode(mode),
+        redirect_target,
+        redirect_target_type,
+        redirect_mode_key="redirecting",
+        invalid_translation_key=TRANS_KEY_DEFAULT_RULE_REDIRECT_TARGET_INVALID,
+        requires_mode_translation_key=(
+            TRANS_KEY_DEFAULT_RULE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE
+        ),
+        allow_ip_targets=False,
+    )
 
 
 def _resolve_rule_hostnames(call: ServiceCall) -> tuple[str, ...]:
@@ -1580,6 +2072,60 @@ def _ensure_name_list(value: str | list[str] | None) -> list[str]:
     if isinstance(value, str):
         return [item.strip() for item in value.split(",") if item.strip()]
     return []
+
+
+def _selected_client_alias_selector_values(
+    call: ServiceCall,
+) -> list[tuple[str, str]]:
+    """Return one selected client-alias selector family using stable precedence."""
+    selector_families: tuple[tuple[str, list[str]], ...] = (
+        (
+            SERVICE_FIELD_ENDPOINT_MAC,
+            _ensure_name_list(call.data.get(SERVICE_FIELD_ENDPOINT_MAC)),
+        ),
+        (
+            SERVICE_FIELD_ENDPOINT_NAME,
+            _ensure_name_list(call.data.get(SERVICE_FIELD_ENDPOINT_NAME)),
+        ),
+        (
+            SERVICE_FIELD_ENDPOINT_HOSTNAME,
+            _ensure_name_list(call.data.get(SERVICE_FIELD_ENDPOINT_HOSTNAME)),
+        ),
+        (
+            SERVICE_FIELD_ENDPOINT_IP,
+            _ensure_name_list(call.data.get(SERVICE_FIELD_ENDPOINT_IP)),
+        ),
+    )
+    for selector_kind, selector_values in selector_families:
+        if selector_values:
+            return [
+                (selector_kind, selector_value) for selector_value in selector_values
+            ]
+    return []
+
+
+def _normalize_client_alias(value: str) -> str:
+    """Normalize one requested client alias value."""
+    normalized_value = value.strip()
+    if not normalized_value:
+        raise ServiceValidationError(
+            "Provide a non-empty client alias",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_CLIENT_ALIAS_INVALID,
+        )
+    return normalized_value
+
+
+def _normalize_endpoint_name(value: str) -> str:
+    """Normalize one requested endpoint name value."""
+    normalized_value = value.strip()
+    if not normalized_value:
+        raise ServiceValidationError(
+            "Provide a non-empty endpoint name",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_ENDPOINT_NAME_INVALID,
+        )
+    return normalized_value
 
 
 def _resolve_selected_profile_pks(

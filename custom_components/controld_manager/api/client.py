@@ -60,7 +60,7 @@ class ControlDAPIClient:
                 or self._optional_string(user_payload.get("username"))
             ),
             last_active=self._optional_string(user_payload.get("last_active")),
-            stats_endpoint=self._optional_string(user_payload.get("stats_endpoint")),
+            stats_endpoint=self._extract_stats_endpoint(user_payload),
             status=self._optional_string(user_payload.get("status")),
             safe_countries=safe_countries,
         )
@@ -127,6 +127,80 @@ class ControlDAPIClient:
                 "endpointId[]": [endpoint_id],
             },
         )
+
+    async def async_get_analytics_clients(
+        self,
+        stats_endpoint: str,
+        *,
+        endpoint_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch analytics client rows, optionally scoped to one parent endpoint."""
+        params = {"endpointId": endpoint_id} if endpoint_id is not None else None
+        payload = await self._async_get_external_json(
+            f"{self._analytics_base_url(stats_endpoint)}/v2/client",
+            params=params,
+        )
+        body = self._extract_body_mapping(payload)
+        items = body.get("items")
+        if not isinstance(items, dict):
+            raise ControlDApiResponseError(
+                "Control D analytics response is missing the expected 'items' mapping"
+            )
+        return items
+
+    async def async_set_endpoint_alias(
+        self,
+        stats_endpoint: str,
+        *,
+        device_id: str,
+        client_id: str,
+        alias: str,
+    ) -> None:
+        """Set one analytics client alias on the analytics host."""
+        await self._async_request_url(
+            "POST",
+            f"{self._analytics_base_url(stats_endpoint)}/client/alias",
+            payload=alias,
+            params={"deviceId": device_id, "clientId": client_id},
+        )
+
+    async def async_clear_endpoint_alias(
+        self,
+        stats_endpoint: str,
+        *,
+        device_id: str,
+        client_id: str,
+    ) -> None:
+        """Clear one analytics client alias on the analytics host."""
+        await self._async_request_url(
+            "DELETE",
+            f"{self._analytics_base_url(stats_endpoint)}/client/alias",
+            payload=None,
+            params={"deviceId": device_id, "clientId": client_id},
+        )
+
+    async def async_rename_endpoint(
+        self,
+        device_id: str,
+        *,
+        name: str,
+    ) -> None:
+        """Rename one Control D endpoint using the validated devices contract."""
+        await self._async_request("PUT", f"/devices/{device_id}", {"name": name})
+
+    async def async_set_endpoint_analytics_logging(
+        self,
+        device_id: str,
+        *,
+        stats: int,
+    ) -> None:
+        """Update one endpoint analytics logging level using the devices contract."""
+        await self._async_request("PUT", f"/devices/{device_id}", {"stats": stats})
+
+    @classmethod
+    def extract_stats_endpoint(cls, payload: dict[str, Any]) -> str | None:
+        """Return the analytics endpoint token from one raw user payload."""
+        return cls._extract_stats_endpoint(payload)
 
     async def _async_get_scoped_analytics(
         self,
@@ -397,12 +471,19 @@ class ControlDAPIClient:
         *,
         enabled: bool,
         action_do: int,
+        via: str | None = None,
+        via_v6: str | None = None,
     ) -> None:
         """Update one profile service row using the current action model."""
+        payload: dict[str, Any] = {"do": action_do, "status": int(enabled)}
+        if via is not None:
+            payload["via"] = via
+        if via_v6 is not None:
+            payload["via_v6"] = via_v6
         await self._async_request(
             "PUT",
             f"/profiles/{profile_pk}/services/{service_pk}",
-            {"do": action_do, "status": int(enabled)},
+            payload,
         )
 
     async def async_set_profile_rule(
@@ -438,6 +519,8 @@ class ControlDAPIClient:
         group_pk: str | None,
         comment: str,
         ttl: int | None,
+        via: str | None = None,
+        via_v6: str | None = None,
     ) -> None:
         """Update one profile rule using the rich hostname-based contract."""
         payload: dict[str, Any] = {
@@ -449,6 +532,10 @@ class ControlDAPIClient:
             "group": 0 if group_pk is None else int(group_pk),
             "comment": comment,
         }
+        if via is not None:
+            payload["via"] = via
+        if via_v6 is not None:
+            payload["via_v6"] = via_v6
         if ttl is not None:
             payload["ttl"] = ttl
         await self._async_request("PUT", f"/profiles/{profile_pk}/rules", payload)
@@ -463,6 +550,8 @@ class ControlDAPIClient:
         group_pk: str | None,
         comment: str,
         ttl: int | None,
+        via: str | None = None,
+        via_v6: str | None = None,
     ) -> None:
         """Create one or more profile rules using the browser-backed contract."""
         payload: dict[str, Any] = {
@@ -474,6 +563,10 @@ class ControlDAPIClient:
             "group": 0 if group_pk is None else int(group_pk),
             "comment": comment,
         }
+        if via is not None:
+            payload["via"] = via
+        if via_v6 is not None:
+            payload["via_v6"] = via_v6
         if ttl is not None:
             payload["ttl"] = ttl
         await self._async_request("POST", f"/profiles/{profile_pk}/rules", payload)
@@ -562,7 +655,7 @@ class ControlDAPIClient:
         self,
         method: str,
         url: str,
-        payload: dict[str, Any] | None = None,
+        payload: dict[str, Any] | str | None = None,
         *,
         params: dict[str, Any] | None = None,
     ) -> Any:
@@ -639,6 +732,17 @@ class ControlDAPIClient:
     def _optional_string(value: Any) -> str | None:
         """Return an optional string field from a payload."""
         return value if isinstance(value, str) and value else None
+
+    @classmethod
+    def _extract_stats_endpoint(cls, payload: dict[str, Any]) -> str | None:
+        """Return the analytics endpoint token from user or org payloads."""
+        if stats_endpoint := cls._optional_string(payload.get("stats_endpoint")):
+            return stats_endpoint
+
+        org_payload = payload.get("org")
+        if not isinstance(org_payload, dict):
+            return None
+        return cls._optional_string(org_payload.get("stats_endpoint"))
 
     @staticmethod
     def _analytics_base_url(stats_endpoint: str) -> str:

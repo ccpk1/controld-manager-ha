@@ -89,12 +89,16 @@ class ProfileManager(BaseManager):
         *,
         enabled: bool,
         action_do: int,
+        via: str | None,
+        via_v6: str | None,
     ) -> None:
         """Update one cached service row after a successful upstream write."""
         self.runtime.registry.services_by_profile[profile_pk][service_pk] = replace(
             service_row,
             enabled=enabled,
             action_do=action_do,
+            via=via,
+            via_v6=via_v6,
         )
 
     def _update_cached_option(
@@ -231,18 +235,60 @@ class ProfileManager(BaseManager):
     def _service_write_payload(
         mode: str,
         service_row: ControlDService,
-    ) -> tuple[bool, int]:
+        redirect_target: str | None = None,
+        redirect_target_type: str | None = None,
+    ) -> tuple[bool, int, str | None, str | None]:
         """Translate one Home Assistant service mode into upstream fields."""
         normalized_mode = normalize_service_mode(mode)
         enabled = normalized_mode != "off"
         action_do = service_row.action_do
+        via: str | None = None
+        via_v6: str | None = None
         if normalized_mode == "blocked":
             action_do = 0
         elif normalized_mode == "bypassed":
             action_do = 1
         elif normalized_mode == "redirected":
-            action_do = 2
-        return enabled, action_do
+            if redirect_target is None or redirect_target_type is None:
+                action_do = 3
+                via = service_row.unlock_location or "LOCAL"
+            elif redirect_target_type == "location":
+                action_do = 3
+                via = redirect_target
+            elif redirect_target_type == "ipv4":
+                action_do = 2
+                via = redirect_target
+            else:
+                action_do = 2
+                via_v6 = redirect_target
+        return enabled, action_do, via, via_v6
+
+    @staticmethod
+    def _rule_redirect_write_payload(
+        action_do: int,
+        redirect_target: str | None,
+        redirect_target_type: str | None,
+    ) -> tuple[int, str | None, str | None]:
+        """Translate explicit rule redirect targets into upstream payload fields."""
+        if redirect_target is None or redirect_target_type is None:
+            return action_do, None, None
+        if redirect_target_type == "location":
+            return 3, redirect_target, None
+        if redirect_target_type == "ipv4":
+            return 2, redirect_target, None
+        return 2, None, redirect_target
+
+    @staticmethod
+    def _default_rule_write_payload(
+        mode: str,
+        redirect_target: str | None = None,
+        redirect_target_type: str | None = None,
+    ) -> tuple[int, str | None]:
+        """Translate one default-rule mode into upstream fields."""
+        action_do, via = default_rule_action_from_mode(mode)
+        if action_do != 3 or redirect_target is None or redirect_target_type is None:
+            return action_do, via
+        return action_do, redirect_target
 
     @staticmethod
     def _toggle_option_write_payload(
@@ -409,12 +455,14 @@ class ProfileManager(BaseManager):
     ) -> None:
         """Set the selected mode for one service rule."""
         service_row = self._service_row(profile_pk, service_pk)
-        enabled, action_do = self._service_write_payload(mode, service_row)
+        enabled, action_do, via, via_v6 = self._service_write_payload(mode, service_row)
         await self.runtime.client.async_set_profile_service(
             profile_pk,
             service_pk,
             enabled=enabled,
             action_do=action_do,
+            via=via,
+            via_v6=via_v6,
         )
         self._update_cached_service(
             profile_pk,
@@ -422,6 +470,8 @@ class ProfileManager(BaseManager):
             service_row,
             enabled=enabled,
             action_do=action_do,
+            via=via,
+            via_v6=via_v6,
         )
         self._schedule_runtime_refresh()
 
@@ -431,9 +481,13 @@ class ProfileManager(BaseManager):
         mode: str,
         *,
         service_rows_by_profile: dict[str, dict[str, ControlDService]] | None = None,
+        redirect_target: str | None = None,
+        redirect_target_type: str | None = None,
     ) -> None:
         """Set the selected mode for one or more services across profiles."""
-        updated_services: list[tuple[str, str, ControlDService, bool, int]] = []
+        updated_services: list[
+            tuple[str, str, ControlDService, bool, int, str | None, str | None]
+        ] = []
 
         for profile_pk, service_pks in profile_services.items():
             for service_pk in service_pks:
@@ -444,9 +498,22 @@ class ProfileManager(BaseManager):
                     service_row = service_rows_by_profile[profile_pk][service_pk]
                 else:
                     service_row = self._service_row(profile_pk, service_pk)
-                enabled, action_do = self._service_write_payload(mode, service_row)
+                enabled, action_do, via, via_v6 = self._service_write_payload(
+                    mode,
+                    service_row,
+                    redirect_target,
+                    redirect_target_type,
+                )
                 updated_services.append(
-                    (profile_pk, service_pk, service_row, enabled, action_do)
+                    (
+                        profile_pk,
+                        service_pk,
+                        service_row,
+                        enabled,
+                        action_do,
+                        via,
+                        via_v6,
+                    )
                 )
 
         await asyncio.gather(
@@ -456,18 +523,38 @@ class ProfileManager(BaseManager):
                     service_pk,
                     enabled=enabled,
                     action_do=action_do,
+                    via=via,
+                    via_v6=via_v6,
                 )
-                for profile_pk, service_pk, _, enabled, action_do in updated_services
+                for (
+                    profile_pk,
+                    service_pk,
+                    _,
+                    enabled,
+                    action_do,
+                    via,
+                    via_v6,
+                ) in updated_services
             )
         )
 
-        for profile_pk, service_pk, service_row, enabled, action_do in updated_services:
+        for (
+            profile_pk,
+            service_pk,
+            service_row,
+            enabled,
+            action_do,
+            via,
+            via_v6,
+        ) in updated_services:
             self._update_cached_service(
                 profile_pk,
                 service_pk,
                 service_row,
                 enabled=enabled,
                 action_do=action_do,
+                via=via,
+                via_v6=via_v6,
             )
 
         self._schedule_runtime_refresh()
@@ -620,10 +707,21 @@ class ProfileManager(BaseManager):
         )
         self._schedule_runtime_refresh()
 
-    async def async_set_default_rule_mode(self, profile_pk: str, mode: str) -> None:
+    async def async_set_default_rule_mode(
+        self,
+        profile_pk: str,
+        mode: str,
+        *,
+        redirect_target: str | None = None,
+        redirect_target_type: str | None = None,
+    ) -> None:
         """Set the current default-rule mode for one profile."""
         default_rule_row = self._default_rule_row(profile_pk)
-        action_do, via = default_rule_action_from_mode(mode)
+        action_do, via = self._default_rule_write_payload(
+            mode,
+            redirect_target,
+            redirect_target_type,
+        )
         await self.runtime.client.async_set_profile_default_rule(
             profile_pk,
             action_do=action_do,
@@ -639,10 +737,19 @@ class ProfileManager(BaseManager):
         self._schedule_runtime_refresh()
 
     async def async_set_default_rules_mode(
-        self, profile_pks: frozenset[str], mode: str
+        self,
+        profile_pks: frozenset[str],
+        mode: str,
+        *,
+        redirect_target: str | None = None,
+        redirect_target_type: str | None = None,
     ) -> None:
         """Set the default-rule mode across one or more targeted profiles."""
-        action_do, via = default_rule_action_from_mode(mode)
+        action_do, via = self._default_rule_write_payload(
+            mode,
+            redirect_target,
+            redirect_target_type,
+        )
         updated_default_rules: list[tuple[str, ControlDDefaultRule]] = [
             (profile_pk, self._default_rule_row(profile_pk))
             for profile_pk in profile_pks
@@ -761,6 +868,8 @@ class ProfileManager(BaseManager):
         mode: str | None,
         ttl: int | None,
         comment: str | None,
+        redirect_target: str | None,
+        redirect_target_type: str | None,
     ) -> None:
         """Update one or more selected rules across profiles."""
         updated_rules: list[
@@ -774,6 +883,8 @@ class ProfileManager(BaseManager):
                 int | None,
                 int | None,
                 bool,
+                str | None,
+                str | None,
             ]
         ] = []
 
@@ -795,7 +906,16 @@ class ProfileManager(BaseManager):
                     ttl=ttl,
                     comment=comment,
                 )
-                uses_rich_update = comment is not None or ttl is not None
+                next_action_do, via, via_v6 = self._rule_redirect_write_payload(
+                    next_action_do,
+                    redirect_target,
+                    redirect_target_type,
+                )
+                uses_rich_update = (
+                    comment is not None
+                    or ttl is not None
+                    or redirect_target is not None
+                )
                 updated_rules.append(
                     (
                         profile_pk,
@@ -807,6 +927,8 @@ class ProfileManager(BaseManager):
                         payload_ttl,
                         payload_ttl,
                         uses_rich_update,
+                        via,
+                        via_v6,
                     )
                 )
 
@@ -821,6 +943,8 @@ class ProfileManager(BaseManager):
                         group_pk=rule_row.group_pk,
                         comment=next_comment,
                         ttl=payload_ttl,
+                        via=via,
+                        via_v6=via_v6,
                     )
                     if uses_rich_update
                     else self.runtime.client.async_set_profile_rule(
@@ -843,6 +967,8 @@ class ProfileManager(BaseManager):
                     payload_ttl,
                     _,
                     uses_rich_update,
+                    via,
+                    via_v6,
                 ) in updated_rules
             )
         )
@@ -856,6 +982,8 @@ class ProfileManager(BaseManager):
             next_comment,
             _,
             cached_ttl,
+            _,
+            _,
             _,
         ) in updated_rules:
             self._update_cached_rule(
@@ -881,10 +1009,22 @@ class ProfileManager(BaseManager):
         mode: str | None,
         ttl: int | None,
         comment: str | None,
+        redirect_target: str | None,
+        redirect_target_type: str | None,
     ) -> None:
         """Create one or more rules across one or more selected profiles."""
         create_requests: list[
-            tuple[str, str | None, str | None, bool, int, str, int | None]
+            tuple[
+                str,
+                str | None,
+                str | None,
+                bool,
+                int,
+                str,
+                int | None,
+                str | None,
+                str | None,
+            ]
         ] = []
 
         for profile_pk in profile_pks:
@@ -902,6 +1042,11 @@ class ProfileManager(BaseManager):
                     comment=comment,
                 )
             )
+            next_action_do, via, via_v6 = self._rule_redirect_write_payload(
+                next_action_do,
+                redirect_target,
+                redirect_target_type,
+            )
             create_requests.append(
                 (
                     profile_pk,
@@ -911,6 +1056,8 @@ class ProfileManager(BaseManager):
                     next_action_do,
                     next_comment,
                     next_ttl,
+                    via,
+                    via_v6,
                 )
             )
 
@@ -925,6 +1072,18 @@ class ProfileManager(BaseManager):
                     comment=next_comment,
                     ttl=next_ttl,
                 )
+                if via is None and via_v6 is None
+                else self.runtime.client.async_create_profile_rules(
+                    profile_pk,
+                    list(hostnames),
+                    enabled=next_enabled,
+                    action_do=next_action_do,
+                    group_pk=group_pk,
+                    comment=next_comment,
+                    ttl=next_ttl,
+                    via=via,
+                    via_v6=via_v6,
+                )
                 for (
                     profile_pk,
                     group_pk,
@@ -933,6 +1092,8 @@ class ProfileManager(BaseManager):
                     next_action_do,
                     next_comment,
                     next_ttl,
+                    via,
+                    via_v6,
                 ) in create_requests
             )
         )
@@ -945,6 +1106,8 @@ class ProfileManager(BaseManager):
             next_action_do,
             next_comment,
             next_ttl,
+            _,
+            _,
         ) in create_requests:
             for hostname in hostnames:
                 self._create_cached_rule(
