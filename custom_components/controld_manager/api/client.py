@@ -128,6 +128,80 @@ class ControlDAPIClient:
             },
         )
 
+    async def async_get_analytics_clients(
+        self,
+        stats_endpoint: str,
+        *,
+        endpoint_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch analytics client rows, optionally scoped to one parent endpoint."""
+        params = {"endpointId": endpoint_id} if endpoint_id is not None else None
+        payload = await self._async_get_external_json(
+            f"{self._analytics_base_url(stats_endpoint)}/v2/client",
+            params=params,
+        )
+        body = self._extract_body_mapping(payload)
+        items = body.get("items")
+        if not isinstance(items, dict):
+            raise ControlDApiResponseError(
+                "Control D analytics response is missing the expected 'items' mapping"
+            )
+        return items
+
+    async def async_set_endpoint_alias(
+        self,
+        stats_endpoint: str,
+        *,
+        device_id: str,
+        client_id: str,
+        alias: str,
+    ) -> None:
+        """Set one analytics client alias on the analytics host."""
+        await self._async_request_url(
+            "POST",
+            f"{self._analytics_base_url(stats_endpoint)}/client/alias",
+            payload=alias,
+            params={"deviceId": device_id, "clientId": client_id},
+        )
+
+    async def async_clear_endpoint_alias(
+        self,
+        stats_endpoint: str,
+        *,
+        device_id: str,
+        client_id: str,
+    ) -> None:
+        """Clear one analytics client alias on the analytics host."""
+        await self._async_request_url(
+            "DELETE",
+            f"{self._analytics_base_url(stats_endpoint)}/client/alias",
+            payload=None,
+            params={"deviceId": device_id, "clientId": client_id},
+        )
+
+    async def async_rename_endpoint(
+        self,
+        device_id: str,
+        *,
+        name: str,
+    ) -> None:
+        """Rename one Control D endpoint using the validated devices contract."""
+        await self._async_request("PUT", f"/devices/{device_id}", {"name": name})
+
+    async def async_set_endpoint_analytics_logging(
+        self,
+        device_id: str,
+        *,
+        stats: int,
+    ) -> None:
+        """Update one endpoint analytics logging level using the devices contract."""
+        await self._async_request("PUT", f"/devices/{device_id}", {"stats": stats})
+
+    @classmethod
+    def extract_stats_endpoint(cls, payload: dict[str, Any]) -> str | None:
+        """Return the analytics endpoint token from one raw user payload."""
+        return cls._extract_stats_endpoint(payload)
+
     async def _async_get_scoped_analytics(
         self,
         stats_endpoint: str,
@@ -581,7 +655,7 @@ class ControlDAPIClient:
         self,
         method: str,
         url: str,
-        payload: dict[str, Any] | None = None,
+        payload: dict[str, Any] | str | None = None,
         *,
         params: dict[str, Any] | None = None,
     ) -> Any:

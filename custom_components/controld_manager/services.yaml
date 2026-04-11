@@ -68,6 +68,151 @@ enable_profile:
       selector:
         text:
 
+set_client_alias:
+  name: Set client alias
+  description: Set one alias across one or more Control D clients resolved from MAC address, endpoint name, hostname, or IP address within one selected config entry.
+  fields:
+    endpoint_mac:
+      required: false
+      example: |
+        ["50:eb:71:b6:78:3a", "3c:52:a1:11:22:33"]
+      selector:
+        text:
+    endpoint_name:
+      required: false
+      example: |
+        ["Chads-Phone", "Kitchen Tablet"]
+      selector:
+        text:
+    endpoint_hostname:
+      required: false
+      example: |
+        ["KadensSpyPhone", "living-room-apple-tv"]
+      selector:
+        text:
+    endpoint_ip:
+      required: false
+      example: |
+        ["192.168.202.244", "192.168.202.245"]
+      selector:
+        text:
+    parent_endpoint_name:
+      required: false
+      example: "Firewalla-VLAN60"
+      selector:
+        text:
+    alias:
+      required: true
+      example: "Kids iPhone"
+      selector:
+        text:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
+clear_client_alias:
+  name: Clear client alias
+  description: Clear one alias across one or more Control D clients resolved from MAC address, endpoint name, hostname, or IP address within one selected config entry.
+  fields:
+    endpoint_mac:
+      required: false
+      example: |
+        ["50:eb:71:b6:78:3a", "3c:52:a1:11:22:33"]
+      selector:
+        text:
+    endpoint_name:
+      required: false
+      example: |
+        ["Chads-Phone", "Kitchen Tablet"]
+      selector:
+        text:
+    endpoint_hostname:
+      required: false
+      example: |
+        ["KadensSpyPhone", "living-room-apple-tv"]
+      selector:
+        text:
+    endpoint_ip:
+      required: false
+      example: |
+        ["192.168.202.244", "192.168.202.245"]
+      selector:
+        text:
+    parent_endpoint_name:
+      required: false
+      example: "Firewalla-VLAN60"
+      selector:
+        text:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
+rename_endpoint:
+  name: Rename endpoint
+  description: Rename one or more Control D endpoints resolved by current endpoint name within one selected config entry.
+  fields:
+    endpoint_name:
+      required: false
+      example: |
+        ["Chads-Phone", "Kitchen Tablet"]
+      selector:
+        text:
+    new_name:
+      required: true
+      example: "Kids iPhone"
+      selector:
+        text:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
+set_endpoint_analytics_logging:
+  name: Set endpoint analytics logging
+  description: Update the Control D endpoint analytics logging level for one or more endpoints resolved by current endpoint name within one selected config entry.
+  fields:
+    endpoint_name:
+      required: false
+      example: |
+        ["Chads-Phone", "Kitchen Tablet"]
+      selector:
+        text:
+    mode:
+      required: true
+      example: "Full"
+      selector:
+        select:
+          options:
+            - None
+            - Some
+            - Full
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
 set_filter_state:
   name: Set filter state
   description: Enable or disable one or more Control D filters by raw key or user-facing name across the selected profiles.

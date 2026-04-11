@@ -493,3 +493,121 @@ async def test_client_fetches_endpoint_analytics_with_profile_and_endpoint_scope
         ["asnozvs6a7"],
         ["asnozvs6a7"],
     ]
+
+
+async def test_client_fetches_analytics_clients_for_one_parent_endpoint() -> None:
+    """Scope analytics client reads to one parent endpoint when requested."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    analytics_request = AsyncMock(
+        return_value={
+            "body": {
+                "items": {
+                    "461wtt4eyr": {
+                        "clients": {
+                            "2476a6ca95d7": {
+                                "host": "KadensSpyPhone",
+                                "ip": "192.168.202.244",
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    )
+
+    with patch.object(client, "_async_get_external_json", analytics_request):
+        items = await client.async_get_analytics_clients(
+            "america",
+            endpoint_id="461wtt4eyr",
+        )
+
+    assert items == {
+        "461wtt4eyr": {
+            "clients": {
+                "2476a6ca95d7": {
+                    "host": "KadensSpyPhone",
+                    "ip": "192.168.202.244",
+                }
+            }
+        }
+    }
+    analytics_request.assert_awaited_once_with(
+        "https://america.analytics.controld.com/v2/client",
+        params={"endpointId": "461wtt4eyr"},
+    )
+
+
+async def test_client_sets_endpoint_alias_on_analytics_host() -> None:
+    """Send the observed alias-set contract to the analytics host."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    alias_request = AsyncMock(return_value=None)
+
+    with patch.object(client, "_async_request_url", alias_request):
+        await client.async_set_endpoint_alias(
+            "america",
+            device_id="461wtt4eyr",
+            client_id="2476a6ca95d7",
+            alias="Kadens-Phone",
+        )
+
+    alias_request.assert_awaited_once_with(
+        "POST",
+        "https://america.analytics.controld.com/client/alias",
+        payload="Kadens-Phone",
+        params={"deviceId": "461wtt4eyr", "clientId": "2476a6ca95d7"},
+    )
+
+
+async def test_client_clears_endpoint_alias_on_analytics_host() -> None:
+    """Send the observed alias-clear contract to the analytics host."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    alias_request = AsyncMock(return_value=None)
+
+    with patch.object(client, "_async_request_url", alias_request):
+        await client.async_clear_endpoint_alias(
+            "america",
+            device_id="461wtt4eyr",
+            client_id="2476a6ca95d7",
+        )
+
+    alias_request.assert_awaited_once_with(
+        "DELETE",
+        "https://america.analytics.controld.com/client/alias",
+        payload=None,
+        params={"deviceId": "461wtt4eyr", "clientId": "2476a6ca95d7"},
+    )
+
+
+async def test_client_renames_endpoint_with_devices_contract() -> None:
+    """Send the validated endpoint-rename contract to the devices API."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    request = AsyncMock(return_value=None)
+
+    with patch.object(client, "_async_request", request):
+        await client.async_rename_endpoint("device-1", name="Kids iPhone")
+
+    request.assert_awaited_once_with(
+        "PUT",
+        "/devices/device-1",
+        {"name": "Kids iPhone"},
+    )
+
+
+async def test_client_sets_endpoint_analytics_logging_with_devices_contract() -> None:
+    """Send the validated endpoint analytics logging contract to the devices API."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    request = AsyncMock(return_value=None)
+
+    with patch.object(client, "_async_request", request):
+        await client.async_set_endpoint_analytics_logging("device-1", stats=2)
+
+    request.assert_awaited_once_with(
+        "PUT",
+        "/devices/device-1",
+        {"stats": 2},
+    )

@@ -52,13 +52,13 @@ This repository is not part of Home Assistant Core, but it is intentionally buil
 - Manager-based architecture: business logic lives in the manager layer, while entities, services, and flows stay thin.
 - Coordinator-owned refresh: one bounded polling path drives inventory, profile detail, endpoint activity, and analytics refresh.
 - Opt-in expansion: high-cardinality profile surfaces stay selective so Home Assistant only creates what you actually want to manage.
-- Supportability: reauthentication, reconfigure, diagnostics, translated exceptions, and unavailable or recovery logging are already part of the implementation.
+- Supportability: reauthentication, reconfigure, diagnostics, translated exceptions, and unavailable or recovery logging are part of the implementation.
 
 The repository tracks this work in `custom_components/controld_manager/quality_scale.yaml` and documents its durable standards in `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT_STANDARDS.md`, and `docs/QUALITY_REFERENCE.md`.
 
 ## ✨ What it enables
 
-Control D Manager is already more than a basic status integration. It gives Home Assistant a practical operating surface for day-to-day DNS policy control.
+Control D Manager goes beyond a basic status integration. It gives Home Assistant a practical operating surface for day-to-day DNS policy control.
 
 ### Highlights
 
@@ -82,10 +82,14 @@ That opt-in model matters with Control D because the available surface is enormo
 
 When a dashboard switch is not the right tool, the integration exposes shared services for direct automation.
 
-Current service surface:
+Service surface:
 
 - `controld_manager.disable_profile`
 - `controld_manager.enable_profile`
+- `controld_manager.set_client_alias`
+- `controld_manager.clear_client_alias`
+- `controld_manager.rename_endpoint`
+- `controld_manager.set_endpoint_analytics_logging`
 - `controld_manager.set_filter_state`
 - `controld_manager.set_service_state`
 - `controld_manager.set_option_state`
@@ -95,7 +99,7 @@ Current service surface:
 - `controld_manager.delete_rule`
 - `controld_manager.get_catalog`
 
-This makes it possible to target profiles by name or identity, create or expire custom rules from automations, adjust service modes in the background, and query copyable catalogs for filters, services, rules, or profile options.
+This makes it possible to target profiles by name or identity, clean up endpoint naming, tune endpoint analytics logging, apply or clear downstream client aliases for router-segmented clients, create or expire custom rules from automations, adjust service modes in the background, and query copyable catalogs for filters, services, rules, or profile options.
 
 ### Analytics and endpoint visibility
 
@@ -118,11 +122,10 @@ Control D pairs especially well with environments that already use profile-based
 | --- | --- |
 | Profile devices | Dedicated Home Assistant devices for the Control D account and each managed profile, giving rules, controls, analytics, and endpoints a clean home. |
 | Dynamic routing | Change supported service modes such as Off, Blocked, Bypassed, or Redirected from Home Assistant. |
+| Endpoint hygiene | Rename endpoints, tune endpoint analytics logging, and clean up client aliases from Home Assistant without turning those high-churn surfaces into extra entities. |
 | Custom rule exposure | Opt in to expose selected rule folders or individual custom rules as Home Assistant controls. |
 | Tamper-detection hooks | Cross-reference endpoint activity with router or firewall visibility to spot likely DNS bypass behavior. |
 | Stateless pausing | Temporarily disable a profile with a duration while Control D handles the upstream countdown. |
-
-
 
 ## ❤️ Support the project
 

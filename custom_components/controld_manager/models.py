@@ -67,6 +67,16 @@ DEFAULT_RULE_MODE_LABELS: dict[str, str] = {
     DEFAULT_RULE_MODE_REDIRECTING: "Redirecting",
 }
 
+ENDPOINT_ANALYTICS_NONE = "none"
+ENDPOINT_ANALYTICS_SOME = "some"
+ENDPOINT_ANALYTICS_FULL = "full"
+
+ENDPOINT_ANALYTICS_MODE_LABELS: dict[str, str] = {
+    ENDPOINT_ANALYTICS_NONE: "None",
+    ENDPOINT_ANALYTICS_SOME: "Some",
+    ENDPOINT_ANALYTICS_FULL: "Full",
+}
+
 
 @dataclass(slots=True, frozen=True)
 class ControlDUser:
@@ -123,6 +133,45 @@ class ControlDEndpointSummary:
     attached_profiles: tuple[ControlDAttachedProfile, ...] = ()
     associated_client_count: int = 0
     parent_device_id: str | None = None
+
+
+def build_client_alias_target_key(
+    parent_endpoint_device_id: str, client_id: str
+) -> str:
+    """Build a stable in-memory key for one client alias target."""
+    return f"client|{parent_endpoint_device_id}|{client_id}"
+
+
+@dataclass(slots=True, frozen=True)
+class ControlDClientAliasTarget:
+    """Normalized client-scoped target metadata for alias mutations."""
+
+    target_key: str
+    source_kind: str
+    endpoint_device_id: str | None
+    endpoint_pk: str | None
+    endpoint_name: str | None
+    owning_profile_pk: str | None
+    parent_endpoint_device_id: str
+    parent_endpoint_name: str | None
+    client_id: str
+    client_alias: str | None = None
+    client_hostname: str | None = None
+    client_ip_address: str | None = None
+    client_mac_address: str | None = None
+
+    @property
+    def display_name(self) -> str:
+        """Return the best available user-facing label for the target."""
+        return (
+            self.client_alias
+            or self.endpoint_name
+            or self.client_hostname
+            or self.client_mac_address
+            or self.parent_endpoint_name
+            or self.endpoint_device_id
+            or self.parent_endpoint_device_id
+        )
 
 
 @dataclass(slots=True, frozen=True)
@@ -557,6 +606,9 @@ class ControlDInventoryPayload:
     service_categories: tuple[dict[str, Any], ...] = ()
     service_catalog: tuple[dict[str, Any], ...] = ()
     account_analytics: ControlDAccountAnalytics | None = None
+    analytics_clients_by_endpoint: dict[str, dict[str, Any]] = field(
+        default_factory=dict
+    )
 
 
 def _build_endpoint_inventory_stats() -> ControlDEndpointInventoryStats:
@@ -578,6 +630,9 @@ class ControlDRegistry:
     )
     profiles: dict[str, ControlDProfileSummary] = field(default_factory=dict)
     endpoints: dict[str, ControlDEndpointSummary] = field(default_factory=dict)
+    client_alias_targets: dict[str, ControlDClientAliasTarget] = field(
+        default_factory=dict
+    )
     filters_by_profile: dict[str, dict[str, ControlDFilter]] = field(
         default_factory=dict
     )
@@ -730,6 +785,45 @@ def normalize_default_rule_mode(mode: str) -> str:
 
     label_map = {label.lower(): key for key, label in DEFAULT_RULE_MODE_LABELS.items()}
     return label_map[normalized]
+
+
+def endpoint_analytics_logging_mode_options() -> tuple[str, ...]:
+    """Return the supported endpoint analytics logging mode keys."""
+    return (
+        ENDPOINT_ANALYTICS_NONE,
+        ENDPOINT_ANALYTICS_SOME,
+        ENDPOINT_ANALYTICS_FULL,
+    )
+
+
+def endpoint_analytics_logging_mode_labels() -> tuple[str, ...]:
+    """Return the supported service-call labels for endpoint analytics logging."""
+    return tuple(
+        ENDPOINT_ANALYTICS_MODE_LABELS[mode]
+        for mode in endpoint_analytics_logging_mode_options()
+    )
+
+
+def normalize_endpoint_analytics_logging_mode(mode: str) -> str:
+    """Normalize an endpoint analytics logging label or key into a stable key."""
+    normalized = mode.strip().lower()
+    if normalized in ENDPOINT_ANALYTICS_MODE_LABELS:
+        return normalized
+
+    label_map = {
+        label.lower(): key for key, label in ENDPOINT_ANALYTICS_MODE_LABELS.items()
+    }
+    return label_map[normalized]
+
+
+def endpoint_analytics_stats_value_from_mode(mode: str) -> int:
+    """Translate one endpoint analytics logging mode into the upstream stats value."""
+    normalized = normalize_endpoint_analytics_logging_mode(mode)
+    return {
+        ENDPOINT_ANALYTICS_NONE: 0,
+        ENDPOINT_ANALYTICS_SOME: 1,
+        ENDPOINT_ANALYTICS_FULL: 2,
+    }[normalized]
 
 
 def rule_group_mode_from_action(action_do: int | None, enabled: bool) -> str:

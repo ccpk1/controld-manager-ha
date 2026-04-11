@@ -28,14 +28,21 @@ from custom_components.controld_manager.const import (
     ATTR_SUGGESTED_REDIRECT_TARGET,
     CONF_API_TOKEN,
     DOMAIN,
+    SERVICE_CLEAR_CLIENT_ALIAS,
     SERVICE_CREATE_RULE,
     SERVICE_DELETE_RULE,
     SERVICE_DISABLE_PROFILE,
     SERVICE_ENABLE_PROFILE,
+    SERVICE_FIELD_ALIAS,
     SERVICE_FIELD_CANCEL_EXPIRATION,
     SERVICE_FIELD_CATALOG_TYPE,
     SERVICE_FIELD_COMMENT,
+    SERVICE_FIELD_CONFIG_ENTRY_ID,
+    SERVICE_FIELD_CONFIG_ENTRY_NAME,
     SERVICE_FIELD_ENABLED,
+    SERVICE_FIELD_ENDPOINT_HOSTNAME,
+    SERVICE_FIELD_ENDPOINT_MAC,
+    SERVICE_FIELD_ENDPOINT_NAME,
     SERVICE_FIELD_EXPIRATION_DURATION,
     SERVICE_FIELD_EXPIRE_AT,
     SERVICE_FIELD_FILTER_ID,
@@ -43,8 +50,10 @@ from custom_components.controld_manager.const import (
     SERVICE_FIELD_HOSTNAME,
     SERVICE_FIELD_MINUTES,
     SERVICE_FIELD_MODE,
+    SERVICE_FIELD_NEW_NAME,
     SERVICE_FIELD_OPTION_ID,
     SERVICE_FIELD_OPTION_NAME,
+    SERVICE_FIELD_PARENT_ENDPOINT_NAME,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
     SERVICE_FIELD_REDIRECT_TARGET,
@@ -55,7 +64,10 @@ from custom_components.controld_manager.const import (
     SERVICE_FIELD_SERVICE_NAME,
     SERVICE_FIELD_VALUE,
     SERVICE_GET_CATALOG,
+    SERVICE_RENAME_ENDPOINT,
+    SERVICE_SET_CLIENT_ALIAS,
     SERVICE_SET_DEFAULT_RULE_STATE,
+    SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING,
     SERVICE_SET_FILTER_STATE,
     SERVICE_SET_OPTION_STATE,
     SERVICE_SET_RULE_STATE,
@@ -212,6 +224,87 @@ def _inventory(instance_id: str, owning_profile_pk: str) -> ControlDInventoryPay
     )
 
 
+def _alias_inventory(
+    instance_id: str,
+    owning_profile_pk: str,
+    *,
+    endpoint_name: str = "Chads-Phone",
+    endpoint_hostname: str = "KadensSpyPhone",
+    endpoint_ip: str = "192.168.202.244",
+    endpoint_mac: str = "50:eb:71:b6:78:3a",
+    parent_endpoint_name: str = "Firewalla",
+) -> tuple[ControlDInventoryPayload, dict[str, dict[str, object]]]:
+    """Return inventory and analytics client rows for alias-target tests."""
+    inventory = _inventory(instance_id, owning_profile_pk)
+    inventory = ControlDInventoryPayload(
+        user=inventory.user,
+        profiles=inventory.profiles,
+        devices=(
+            {
+                **inventory.devices[0],
+                "name": parent_endpoint_name,
+            },
+            {
+                **inventory.devices[1],
+                "name": endpoint_name,
+                "parent_device": {
+                    "device_id": "router-1",
+                    "client_id": "2476a6ca95d7",
+                },
+            },
+        ),
+    )
+    analytics_clients_by_endpoint: dict[str, dict[str, object]] = {
+        "router-1": {
+            "clients": {
+                "2476a6ca95d7": {
+                    "alias": endpoint_name,
+                    "host": endpoint_hostname,
+                    "ip": endpoint_ip,
+                    "mac": endpoint_mac,
+                }
+            }
+        }
+    }
+    return inventory, analytics_clients_by_endpoint
+
+
+def _analytics_only_alias_inventory(
+    instance_id: str,
+    owning_profile_pk: str,
+    *,
+    endpoint_hostname: str = "KadensSpyPhone",
+    endpoint_ip: str = "192.168.202.244",
+    endpoint_mac: str = "50:eb:71:b6:78:3a",
+    parent_endpoint_name: str = "Firewalla",
+) -> tuple[ControlDInventoryPayload, dict[str, dict[str, object]]]:
+    """Return inventory where aliasable clients exist only in analytics data."""
+    inventory = _inventory(instance_id, owning_profile_pk)
+    inventory = ControlDInventoryPayload(
+        user=inventory.user,
+        profiles=inventory.profiles,
+        devices=(
+            {
+                **inventory.devices[0],
+                "name": parent_endpoint_name,
+            },
+        ),
+    )
+    analytics_clients_by_endpoint: dict[str, dict[str, object]] = {
+        "router-1": {
+            "clients": {
+                "2476a6ca95d7": {
+                    "alias": "Chads-Phone",
+                    "host": endpoint_hostname,
+                    "ip": endpoint_ip,
+                    "mac": endpoint_mac,
+                }
+            }
+        }
+    }
+    return inventory, analytics_clients_by_endpoint
+
+
 def _account_analytics() -> ControlDAccountAnalytics:
     """Return representative account analytics for entity tests."""
     return ControlDAccountAnalytics(
@@ -250,7 +343,11 @@ def _profile_analytics(profile_pk: str) -> ControlDAccountAnalytics:
 
 
 async def _async_setup_entry(
-    hass, entry: MockConfigEntry, inventory: ControlDInventoryPayload
+    hass,
+    entry: MockConfigEntry,
+    inventory: ControlDInventoryPayload,
+    *,
+    analytics_clients_by_endpoint: dict[str, dict[str, object]] | None = None,
 ) -> None:
     """Set up a mock config entry with a patched inventory fetch."""
     entry.add_to_hass(hass)
@@ -294,6 +391,10 @@ async def _async_setup_entry(
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
             new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value=analytics_clients_by_endpoint or {}),
         ),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -2216,6 +2317,597 @@ async def test_enable_service_requires_explicit_entry(hass) -> None:
             DOMAIN,
             SERVICE_ENABLE_PROFILE,
             {},
+            blocking=True,
+        )
+
+
+async def test_set_client_alias_supports_endpoint_mac_selector(hass) -> None:
+    """The client-alias service should resolve MAC addresses within one entry."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    inventory, analytics_clients = _alias_inventory("user-123", "profile-1")
+    await _async_setup_entry(
+        hass,
+        entry,
+        inventory,
+        analytics_clients_by_endpoint=analytics_clients,
+    )
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_endpoint_alias = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CLIENT_ALIAS,
+        {
+            SERVICE_FIELD_ENDPOINT_MAC: "50:eb:71:b6:78:3a",
+            SERVICE_FIELD_ALIAS: "Kids iPhone",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_endpoint_alias.assert_awaited_once_with(
+        "america",
+        device_id="router-1",
+        client_id="2476a6ca95d7",
+        alias="Kids iPhone",
+    )
+    runtime.coordinator.async_refresh.assert_awaited_once()
+
+
+async def test_set_client_alias_supports_analytics_only_hostname_selector(hass) -> None:
+    """Hostname selectors should work even when no standalone endpoint row exists."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    inventory, analytics_clients = _analytics_only_alias_inventory(
+        "user-123", "profile-1"
+    )
+    await _async_setup_entry(
+        hass,
+        entry,
+        inventory,
+        analytics_clients_by_endpoint=analytics_clients,
+    )
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_endpoint_alias = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CLIENT_ALIAS,
+        {
+            SERVICE_FIELD_ENDPOINT_HOSTNAME: "KadensSpyPhone",
+            SERVICE_FIELD_ALIAS: "Kids iPhone",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_endpoint_alias.assert_awaited_once_with(
+        "america",
+        device_id="router-1",
+        client_id="2476a6ca95d7",
+        alias="Kids iPhone",
+    )
+    runtime.coordinator.async_refresh.assert_awaited_once()
+
+
+async def test_clear_client_alias_supports_endpoint_name(hass) -> None:
+    """The clear-client-alias service should resolve endpoint names."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    inventory, analytics_clients = _alias_inventory("user-123", "profile-1")
+    await _async_setup_entry(
+        hass,
+        entry,
+        inventory,
+        analytics_clients_by_endpoint=analytics_clients,
+    )
+
+    runtime = entry.runtime_data
+    runtime.client.async_clear_endpoint_alias = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CLEAR_CLIENT_ALIAS,
+        {SERVICE_FIELD_ENDPOINT_NAME: "Chads-Phone"},
+        blocking=True,
+    )
+
+    runtime.client.async_clear_endpoint_alias.assert_awaited_once_with(
+        "america",
+        device_id="router-1",
+        client_id="2476a6ca95d7",
+    )
+    runtime.coordinator.async_refresh.assert_awaited_once()
+
+
+async def test_set_client_alias_rejects_ambiguous_hostname_without_parent_name(
+    hass,
+) -> None:
+    """Hostname selectors should require parent narrowing when duplicates exist."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    inventory = ControlDInventoryPayload(
+        user={
+            "id": "user-123",
+            "PK": "account-user-123",
+            "stats_endpoint": "america",
+            "safe_countries": ["US", "CA"],
+        },
+        profiles=({"PK": "profile-1", "name": "Primary", "disable": None},),
+        devices=(
+            {
+                "device_id": "router-1",
+                "PK": "endpoint-pk-router-1",
+                "name": "Firewalla-VLAN60",
+                "last_activity": 1775067385,
+                "profile": {"PK": "profile-1", "name": "Primary"},
+            },
+            {
+                "device_id": "router-2",
+                "PK": "endpoint-pk-router-2",
+                "name": "Firewalla-VLAN70",
+                "last_activity": 1775067385,
+                "profile": {"PK": "profile-1", "name": "Primary"},
+            },
+            {
+                "device_id": "device-1",
+                "PK": "endpoint-pk-1",
+                "name": "Kids-Phone",
+                "last_activity": 1775067384,
+                "profile": {"PK": "profile-1", "name": "Primary"},
+                "parent_device": {
+                    "device_id": "router-1",
+                    "client_id": "client-1",
+                },
+            },
+            {
+                "device_id": "device-2",
+                "PK": "endpoint-pk-2",
+                "name": "Guest-Phone",
+                "last_activity": 1775067384,
+                "profile": {"PK": "profile-1", "name": "Primary"},
+                "parent_device": {
+                    "device_id": "router-2",
+                    "client_id": "client-2",
+                },
+            },
+        ),
+    )
+    await _async_setup_entry(
+        hass,
+        entry,
+        inventory,
+        analytics_clients_by_endpoint={
+            "router-1": {
+                "clients": {
+                    "client-1": {
+                        "host": "duplicate-host",
+                        "ip": "192.168.202.10",
+                        "mac": "50:eb:71:b6:78:3a",
+                    }
+                }
+            },
+            "router-2": {
+                "clients": {
+                    "client-2": {
+                        "host": "duplicate-host",
+                        "ip": "192.168.202.11",
+                        "mac": "50:eb:71:b6:78:3b",
+                    }
+                }
+            },
+        },
+    )
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_CLIENT_ALIAS,
+            {
+                SERVICE_FIELD_ENDPOINT_HOSTNAME: "duplicate-host",
+                SERVICE_FIELD_ALIAS: "Shared Host",
+            },
+            blocking=True,
+        )
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_endpoint_alias = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CLIENT_ALIAS,
+        {
+            SERVICE_FIELD_ENDPOINT_HOSTNAME: "duplicate-host",
+            SERVICE_FIELD_PARENT_ENDPOINT_NAME: "Firewalla-VLAN60",
+            SERVICE_FIELD_ALIAS: "Shared Host",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_endpoint_alias.assert_awaited_once_with(
+        "america",
+        device_id="router-1",
+        client_id="client-1",
+        alias="Shared Host",
+    )
+
+
+async def test_set_client_alias_prefers_config_entry_id_over_name(hass) -> None:
+    """The client-alias service should use config_entry_id before name."""
+    entry_one = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-one", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry_two = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-two", "entry_name": "Control D Cabin"},
+        unique_id="user-456",
+        title="Control D Cabin",
+    )
+    inventory_one, analytics_one = _alias_inventory("user-123", "profile-1")
+    inventory_two, analytics_two = _alias_inventory(
+        "user-456",
+        "profile-1",
+        endpoint_name="Cabin-Phone",
+        endpoint_hostname="CabinPhone",
+        endpoint_ip="192.168.203.10",
+        endpoint_mac="60:eb:71:b6:78:3a",
+        parent_endpoint_name="Cabin-Firewalla",
+    )
+    await _async_setup_entry(
+        hass,
+        entry_one,
+        inventory_one,
+        analytics_clients_by_endpoint=analytics_one,
+    )
+    await _async_setup_entry(
+        hass,
+        entry_two,
+        inventory_two,
+        analytics_clients_by_endpoint=analytics_two,
+    )
+
+    entry_one.runtime_data.client.async_set_endpoint_alias = AsyncMock()
+    entry_one.runtime_data.coordinator.async_refresh = AsyncMock()
+    entry_two.runtime_data.client.async_set_endpoint_alias = AsyncMock()
+    entry_two.runtime_data.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CLIENT_ALIAS,
+        {
+            SERVICE_FIELD_CONFIG_ENTRY_ID: entry_one.entry_id,
+            SERVICE_FIELD_CONFIG_ENTRY_NAME: entry_two.title,
+            SERVICE_FIELD_ENDPOINT_NAME: "Chads-Phone",
+            SERVICE_FIELD_ALIAS: "Kids iPhone",
+        },
+        blocking=True,
+    )
+
+    entry_one.runtime_data.client.async_set_endpoint_alias.assert_awaited_once()
+    entry_two.runtime_data.client.async_set_endpoint_alias.assert_not_awaited()
+
+
+async def test_set_client_alias_surfaces_upstream_failures(hass) -> None:
+    """The client-alias service should map upstream write failures cleanly."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    inventory, analytics_clients = _alias_inventory("user-123", "profile-1")
+    await _async_setup_entry(
+        hass,
+        entry,
+        inventory,
+        analytics_clients_by_endpoint=analytics_clients,
+    )
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_endpoint_alias = AsyncMock(
+        side_effect=ControlDApiConnectionError("offline")
+    )
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_CLIENT_ALIAS,
+            {
+                SERVICE_FIELD_ENDPOINT_MAC: "50:eb:71:b6:78:3a",
+                SERVICE_FIELD_ALIAS: "Kids iPhone",
+            },
+            blocking=True,
+        )
+
+
+async def test_rename_endpoint_supports_endpoint_name(hass) -> None:
+    """The endpoint rename service should resolve current endpoint names."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_rename_endpoint = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_RENAME_ENDPOINT,
+        {
+            SERVICE_FIELD_ENDPOINT_NAME: "Chads-Phone",
+            SERVICE_FIELD_NEW_NAME: "Kids iPhone",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_rename_endpoint.assert_awaited_once_with(
+        "device-1",
+        name="Kids iPhone",
+    )
+    runtime.coordinator.async_refresh.assert_awaited_once()
+
+
+async def test_rename_endpoint_rejects_ambiguous_names(hass) -> None:
+    """Endpoint rename should reject duplicate endpoint names within one entry."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    inventory = ControlDInventoryPayload(
+        user={
+            "id": "user-123",
+            "PK": "account-user-123",
+            "stats_endpoint": "america",
+            "safe_countries": ["US", "CA"],
+        },
+        profiles=({"PK": "profile-1", "name": "Primary", "disable": None},),
+        devices=(
+            {
+                "device_id": "device-1",
+                "PK": "endpoint-pk-1",
+                "name": "Shared Device",
+                "last_activity": 1775067384,
+                "profile": {"PK": "profile-1", "name": "Primary"},
+            },
+            {
+                "device_id": "device-2",
+                "PK": "endpoint-pk-2",
+                "name": "Shared Device",
+                "last_activity": 1775067384,
+                "profile": {"PK": "profile-1", "name": "Primary"},
+            },
+        ),
+    )
+    await _async_setup_entry(hass, entry, inventory)
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_RENAME_ENDPOINT,
+            {
+                SERVICE_FIELD_ENDPOINT_NAME: "Shared Device",
+                SERVICE_FIELD_NEW_NAME: "Kids iPhone",
+            },
+            blocking=True,
+        )
+
+
+async def test_rename_endpoint_prefers_config_entry_id_over_name(hass) -> None:
+    """Endpoint rename should use config_entry_id before config_entry_name."""
+    entry_one = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-one", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry_two = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-two", "entry_name": "Control D Cabin"},
+        unique_id="user-456",
+        title="Control D Cabin",
+    )
+    await _async_setup_entry(hass, entry_one, _inventory("user-123", "profile-1"))
+    await _async_setup_entry(hass, entry_two, _inventory("user-456", "profile-1"))
+
+    entry_one.runtime_data.client.async_rename_endpoint = AsyncMock()
+    entry_one.runtime_data.coordinator.async_refresh = AsyncMock()
+    entry_two.runtime_data.client.async_rename_endpoint = AsyncMock()
+    entry_two.runtime_data.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_RENAME_ENDPOINT,
+        {
+            SERVICE_FIELD_CONFIG_ENTRY_ID: entry_one.entry_id,
+            SERVICE_FIELD_CONFIG_ENTRY_NAME: entry_two.title,
+            SERVICE_FIELD_ENDPOINT_NAME: "Chads-Phone",
+            SERVICE_FIELD_NEW_NAME: "Kids iPhone",
+        },
+        blocking=True,
+    )
+
+    entry_one.runtime_data.client.async_rename_endpoint.assert_awaited_once()
+    entry_two.runtime_data.client.async_rename_endpoint.assert_not_awaited()
+
+
+async def test_rename_endpoint_surfaces_upstream_failures(hass) -> None:
+    """Endpoint rename should map upstream write failures cleanly."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_rename_endpoint = AsyncMock(
+        side_effect=ControlDApiConnectionError("offline")
+    )
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_RENAME_ENDPOINT,
+            {
+                SERVICE_FIELD_ENDPOINT_NAME: "Chads-Phone",
+                SERVICE_FIELD_NEW_NAME: "Kids iPhone",
+            },
+            blocking=True,
+        )
+
+
+async def test_set_endpoint_analytics_logging_supports_endpoint_name(hass) -> None:
+    """Endpoint analytics logging should resolve current endpoint names."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_endpoint_analytics_logging = AsyncMock()
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING,
+        {
+            SERVICE_FIELD_ENDPOINT_NAME: "Chads-Phone",
+            SERVICE_FIELD_MODE: "Full",
+        },
+        blocking=True,
+    )
+
+    runtime.client.async_set_endpoint_analytics_logging.assert_awaited_once_with(
+        "device-1",
+        stats=2,
+    )
+    runtime.coordinator.async_refresh.assert_awaited_once()
+
+
+async def test_set_endpoint_analytics_logging_rejects_invalid_mode(hass) -> None:
+    """Endpoint analytics logging should reject unsupported mode labels."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING,
+            {
+                SERVICE_FIELD_ENDPOINT_NAME: "Chads-Phone",
+                SERVICE_FIELD_MODE: "Verbose",
+            },
+            blocking=True,
+        )
+
+
+async def test_set_endpoint_analytics_logging_prefers_config_entry_id_over_name(
+    hass,
+) -> None:
+    """Endpoint analytics logging should use config_entry_id before name."""
+    entry_one = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-one", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry_two = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-two", "entry_name": "Control D Cabin"},
+        unique_id="user-456",
+        title="Control D Cabin",
+    )
+    await _async_setup_entry(hass, entry_one, _inventory("user-123", "profile-1"))
+    await _async_setup_entry(hass, entry_two, _inventory("user-456", "profile-1"))
+
+    entry_one.runtime_data.client.async_set_endpoint_analytics_logging = AsyncMock()
+    entry_one.runtime_data.coordinator.async_refresh = AsyncMock()
+    entry_two.runtime_data.client.async_set_endpoint_analytics_logging = AsyncMock()
+    entry_two.runtime_data.coordinator.async_refresh = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING,
+        {
+            SERVICE_FIELD_CONFIG_ENTRY_ID: entry_one.entry_id,
+            SERVICE_FIELD_CONFIG_ENTRY_NAME: entry_two.title,
+            SERVICE_FIELD_ENDPOINT_NAME: "Chads-Phone",
+            SERVICE_FIELD_MODE: "Some",
+        },
+        blocking=True,
+    )
+
+    entry_one.runtime_data.client.async_set_endpoint_analytics_logging.assert_awaited_once()
+    entry_two.runtime_data.client.async_set_endpoint_analytics_logging.assert_not_awaited()
+
+
+async def test_set_endpoint_analytics_logging_surfaces_upstream_failures(
+    hass,
+) -> None:
+    """Endpoint analytics logging should map upstream write failures cleanly."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    runtime = entry.runtime_data
+    runtime.client.async_set_endpoint_analytics_logging = AsyncMock(
+        side_effect=ControlDApiConnectionError("offline")
+    )
+    runtime.coordinator.async_refresh = AsyncMock()
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING,
+            {
+                SERVICE_FIELD_ENDPOINT_NAME: "Chads-Phone",
+                SERVICE_FIELD_MODE: "None",
+            },
             blocking=True,
         )
 

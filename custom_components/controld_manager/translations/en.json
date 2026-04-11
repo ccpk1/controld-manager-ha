@@ -104,8 +104,29 @@
     "profile_target_required": {
       "message": "Select at least one Control D profile by ID or name."
     },
+    "client_alias_target_required": {
+      "message": "Select at least one Control D client target by MAC address, endpoint name, hostname, or IP address."
+    },
     "filter_target_required": {
       "message": "Select at least one Control D filter by ID or name."
+    },
+    "client_alias_target_not_found": {
+      "message": "The selected Control D client-alias target could not be resolved."
+    },
+    "client_alias_target_ambiguous": {
+      "message": "The selected Control D client-alias target matches more than one client. Add Parent endpoint name or use a more specific selector."
+    },
+    "endpoint_target_required": {
+      "message": "Select at least one Control D endpoint by current endpoint name."
+    },
+    "endpoint_target_not_found": {
+      "message": "The selected Control D endpoint target could not be resolved."
+    },
+    "endpoint_target_ambiguous": {
+      "message": "The selected Control D endpoint target matches more than one endpoint. Add a config entry selector or use a more specific current endpoint name."
+    },
+    "endpoint_name_invalid": {
+      "message": "Provide a non-empty endpoint name value."
     },
     "profile_target_not_found": {
       "message": "The selected Control D profile target could not be resolved."
@@ -161,6 +182,18 @@
     "enable_profiles_failed": {
       "message": "Unable to enable the targeted Control D profiles."
     },
+    "rename_endpoints_failed": {
+      "message": "Unable to rename the targeted Control D endpoints."
+    },
+    "set_endpoint_analytics_logging_failed": {
+      "message": "Unable to update the targeted Control D endpoint analytics logging levels."
+    },
+    "set_client_aliases_failed": {
+      "message": "Unable to set the targeted Control D client aliases."
+    },
+    "clear_client_aliases_failed": {
+      "message": "Unable to clear the targeted Control D client aliases."
+    },
     "create_rules_failed": {
       "message": "Unable to create the selected Control D rules."
     },
@@ -211,6 +244,9 @@
     },
     "option_mutation_required": {
       "message": "Provide a compatible mutation for the selected Control D profile options."
+    },
+    "client_alias_invalid": {
+      "message": "Provide a non-empty client alias value."
     },
     "set_services_failed": {
       "message": "Unable to update the targeted Control D services."
@@ -329,6 +365,122 @@
         "profile_name": {
           "name": "Profile names",
           "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "set_client_alias": {
+      "name": "Set client alias",
+      "description": "Set one alias across one or more Control D clients resolved from MAC address, endpoint name, hostname, or IP address within one selected config entry.",
+      "fields": {
+        "endpoint_mac": {
+          "name": "Endpoint MAC addresses",
+          "description": "Required unless you provide Endpoint names, Endpoint hostnames, or Endpoint IP addresses. Enter one or more client MAC addresses, separated by commas, such as 50:eb:71:b6:78:3a,3c:52:a1:11:22:33. If multiple selector families are provided, Endpoint MAC addresses take precedence."
+        },
+        "endpoint_name": {
+          "name": "Endpoint names",
+          "description": "Required unless you provide Endpoint MAC addresses, Endpoint hostnames, or Endpoint IP addresses. Enter one or more Control D endpoint names, separated by commas, such as Chads-Phone,Kitchen Tablet. This is the current Control D device label for the targeted client row."
+        },
+        "endpoint_hostname": {
+          "name": "Endpoint hostnames",
+          "description": "Required unless you provide Endpoint MAC addresses, Endpoint names, or Endpoint IP addresses. Enter one or more analytics hostnames, separated by commas, such as KadensSpyPhone,living-room-apple-tv."
+        },
+        "endpoint_ip": {
+          "name": "Endpoint IP addresses",
+          "description": "Required unless you provide Endpoint MAC addresses, Endpoint names, or Endpoint hostnames. Enter one or more client IP addresses, separated by commas."
+        },
+        "parent_endpoint_name": {
+          "name": "Parent endpoint name",
+          "description": "Optional. Narrow ambiguous hostname, name, or IP matches to one parent endpoint such as Firewalla-VLAN60."
+        },
+        "alias": {
+          "name": "Alias",
+          "description": "Required. The non-empty alias value to write for the selected Control D clients."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "clear_client_alias": {
+      "name": "Clear client alias",
+      "description": "Clear one alias across one or more Control D clients resolved from MAC address, endpoint name, hostname, or IP address within one selected config entry.",
+      "fields": {
+        "endpoint_mac": {
+          "name": "Endpoint MAC addresses",
+          "description": "Required unless you provide Endpoint names, Endpoint hostnames, or Endpoint IP addresses. Enter one or more client MAC addresses, separated by commas, such as 50:eb:71:b6:78:3a,3c:52:a1:11:22:33. If multiple selector families are provided, Endpoint MAC addresses take precedence."
+        },
+        "endpoint_name": {
+          "name": "Endpoint names",
+          "description": "Required unless you provide Endpoint MAC addresses, Endpoint hostnames, or Endpoint IP addresses. Enter one or more Control D endpoint names, separated by commas, such as Chads-Phone,Kitchen Tablet. This is the current Control D device label for the targeted client row."
+        },
+        "endpoint_hostname": {
+          "name": "Endpoint hostnames",
+          "description": "Required unless you provide Endpoint MAC addresses, Endpoint names, or Endpoint IP addresses. Enter one or more analytics hostnames, separated by commas, such as KadensSpyPhone,living-room-apple-tv."
+        },
+        "endpoint_ip": {
+          "name": "Endpoint IP addresses",
+          "description": "Required unless you provide Endpoint MAC addresses, Endpoint names, or Endpoint hostnames. Enter one or more client IP addresses, separated by commas."
+        },
+        "parent_endpoint_name": {
+          "name": "Parent endpoint name",
+          "description": "Optional. Narrow ambiguous hostname, name, or IP matches to one parent endpoint such as Firewalla-VLAN60."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "rename_endpoint": {
+      "name": "Rename endpoint",
+      "description": "Rename one or more Control D endpoints resolved by current endpoint name within one selected config entry.",
+      "fields": {
+        "endpoint_name": {
+          "name": "Current endpoint names",
+          "description": "Required. Enter one or more current Control D endpoint names, separated by commas, such as Chads-Phone,Kitchen Tablet. When a name is ambiguous inside one config entry, use a more specific current name."
+        },
+        "new_name": {
+          "name": "New endpoint name",
+          "description": "Required. The non-empty endpoint name value to write to the selected Control D endpoints."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "set_endpoint_analytics_logging": {
+      "name": "Set endpoint analytics logging",
+      "description": "Update the Control D endpoint analytics logging level for one or more endpoints resolved by current endpoint name within one selected config entry.",
+      "fields": {
+        "endpoint_name": {
+          "name": "Current endpoint names",
+          "description": "Required. Enter one or more current Control D endpoint names, separated by commas, such as Chads-Phone,Kitchen Tablet. When a name is ambiguous inside one config entry, use a more specific current name."
+        },
+        "mode": {
+          "name": "Analytics logging",
+          "description": "Required. Select None, Some, or Full. These map exactly to the validated Control D endpoint stats values 0, 1, and 2."
         },
         "config_entry_id": {
           "name": "Configuration Entry ID",

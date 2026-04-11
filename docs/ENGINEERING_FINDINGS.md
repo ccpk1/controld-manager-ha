@@ -156,6 +156,9 @@ Observed and verified:
   - `profile`
   - `profile2`
   - `parent_device`
+- `parent_device` can be a mapping with both:
+  - `device_id`
+  - `client_id`
 - docs also mention:
   - `/devices/users`
   - `/devices/routers`
@@ -166,6 +169,37 @@ Settled interpretation:
 - endpoint discovery should come from `GET /devices`
 - profile membership should be derived from attached profile objects such as `profile` and `profile2`
 - `GET /devices` is account- or organization-scoped inventory, not a documented profile-scoped list endpoint
+- top-level device rows from `/devices` are Control D endpoints
+- some endpoint rows also represent clients that sit under another endpoint and expose that relationship through `parent_device.device_id` and `parent_device.client_id`
+
+### Client-versus-endpoint scope is now explicit
+
+Observed and verified:
+
+- a row such as `Firewalla-VLAN60` is a top-level endpoint with its own
+  `device_id`
+- rows such as `Chads-Phone` and `Kadens-Phone` can appear as top-level endpoint
+  inventory records while also exposing:
+  - `parent_device.device_id = <parent endpoint>`
+  - `parent_device.client_id = <analytics client>`
+- analytics client reads can be scoped by parent endpoint with:
+  - `GET https://<stats_endpoint>.analytics.controld.com/v2/client?endpointId=<device_id>`
+
+Settled interpretation:
+
+- endpoint and client are not interchangeable terms in the Control D contract
+- endpoint identity remains anchored to the top-level `/devices` row `device_id`
+- client identity for alias work is a separate analytics-scoped concept carried by
+  `parent_device.client_id`
+- analytics client reads scoped by parent endpoint through
+  `GET https://<stats_endpoint>.analytics.controld.com/v2/client?endpointId=<device_id>`
+  should be treated as the authoritative read path for client alias visibility
+- a physical user device may therefore participate in two related but distinct
+  contracts:
+  - endpoint-scoped updates through `/devices/{device_id}`
+  - client-scoped alias updates through `/client/alias?deviceId=<parent>&clientId=<client>`
+- the integration should not overload endpoint unique IDs or endpoint entity
+  identity with client alias identity
 
 ### Multi-profile endpoint attachment is settled for v1
 
@@ -202,6 +236,59 @@ Settled interpretation:
 - explicit endpoint inventory is not the same thing as every latent child client relationship
 - endpoint discovery for v1 must remain based on explicit published inventory records
 - parent-child metadata is useful context, but not a substitute for endpoint discovery
+- client relationships under an endpoint are valid mutation targets for some
+  later features, but they are not a reason to create separate Home Assistant
+  devices or endpoint entities automatically
+
+### Endpoint updates and client aliases are separate mutation families
+
+Observed and verified:
+
+- endpoint updates use the core API host and a dedicated endpoint write path:
+  - `PUT /devices/{device_id}`
+- observed endpoint update payloads include:
+  - rename:
+    - `{"name":"Chads-Phone2"}`
+  - analytics-setting writes:
+    - `{"stats":0}`
+    - `{"stats":1}`
+    - `{"stats":2}`
+- observed UI labels for those endpoint analytics-setting writes are:
+  - analytics none -> `stats = 0`
+  - analytics some -> `stats = 1`
+  - analytics full -> `stats = 2`
+- a successful endpoint update returns the updated endpoint row and message:
+  - `"Endpoint has been updated"`
+- client aliases use the analytics host and a different write contract:
+  - `POST /client/alias?deviceId=<parent endpoint>&clientId=<client id>`
+  - body is a raw JSON string alias value
+  - `DELETE /client/alias?deviceId=<parent endpoint>&clientId=<client id>`
+
+Settled interpretation:
+
+- endpoint renames and endpoint analytics-setting changes are endpoint-scoped
+  mutations on `/devices/{device_id}`
+- the `stats` field is not just a generic counter in this write contract; it is
+  an endpoint-scoped logging or analytics level controlled by the web UI
+- current proven endpoint analytics-setting values are:
+  - `0` = none
+  - `1` = some
+  - `2` = full
+- client aliases are client-scoped mutations on the analytics host and should
+  not be described as endpoint renames
+- these two mutation families are related through the same physical device, but
+  they must remain separate in implementation planning, runtime modeling, and
+  user-facing terminology
+- for alias refresh behavior, the integration should rely on analytics client
+  data rather than requiring endpoint inventory payloads to mirror alias values
+
+Implementation consequence:
+
+- a later endpoint-settings feature can safely treat endpoint rename and
+  endpoint analytics-setting writes as part of one endpoint-scoped mutation
+  family on `/devices/{device_id}`
+- if the integration exposes endpoint analytics settings later, the user-facing
+  values should map to the proven UI semantics `None`, `Some`, and `Full`
 
 ### Duplicate endpoint names are a real problem
 
@@ -217,6 +304,8 @@ Settled interpretation:
 - endpoint identity must remain anchored to `device_id`
 - endpoint names are presentation only
 - Home Assistant-owned `entity_id` disambiguation is sufficient for v1
+- endpoint names are also mutable through `PUT /devices/{device_id}`, which
+  further confirms that they cannot be used as stable identifiers
 
 ## External filter findings
 

@@ -30,10 +30,12 @@ from custom_components.controld_manager.managers import (
 )
 from custom_components.controld_manager.models import (
     ControlDAccountAnalytics,
+    ControlDClientAliasTarget,
     ControlDInventoryPayload,
     ControlDOptions,
     ControlDProfileDetailPayload,
     ControlDRegistry,
+    build_client_alias_target_key,
 )
 
 OPTION_CATALOG = (
@@ -135,6 +137,64 @@ def _sample_inventory() -> ControlDInventoryPayload:
                 "parent_device": {"device_id": "router-1"},
             },
         ),
+    )
+
+
+def _client_alias_inventory() -> ControlDInventoryPayload:
+    """Return inventory with one explicit client alias relationship."""
+    inventory = _sample_inventory()
+    return ControlDInventoryPayload(
+        user=inventory.user,
+        profiles=inventory.profiles,
+        devices=(
+            inventory.devices[0],
+            {
+                "device_id": "device-1",
+                "PK": "endpoint-pk-1",
+                "name": "Chads-Phone",
+                "last_activity": 1775067384,
+                "profile": {"PK": "profile-1", "name": "Primary"},
+                "profile2": {"PK": "profile-2", "name": "Secondary"},
+                "parent_device": {
+                    "device_id": "router-1",
+                    "client_id": "2476a6ca95d7",
+                },
+            },
+        ),
+        analytics_clients_by_endpoint={
+            "router-1": {
+                "clients": {
+                    "2476a6ca95d7": {
+                        "alias": "Chads-Phone",
+                        "host": "KadensSpyPhone",
+                        "ip": "192.168.202.244",
+                        "mac": "50:eb:71:b6:78:3a",
+                    }
+                }
+            }
+        },
+    )
+
+
+def _analytics_only_client_alias_inventory() -> ControlDInventoryPayload:
+    """Return inventory where aliasable clients exist only in analytics data."""
+    inventory = _sample_inventory()
+    return ControlDInventoryPayload(
+        user=inventory.user,
+        profiles=inventory.profiles,
+        devices=(inventory.devices[0],),
+        analytics_clients_by_endpoint={
+            "router-1": {
+                "clients": {
+                    "2476a6ca95d7": {
+                        "alias": "Chads-Phone",
+                        "host": "KadensSpyPhone",
+                        "ip": "192.168.202.244",
+                        "mac": "50:eb:71:b6:78:3a",
+                    }
+                }
+            }
+        },
     )
 
 
@@ -247,6 +307,238 @@ def test_integration_manager_reads_org_stats_endpoint_fallback() -> None:
 
     assert registry.user is not None
     assert registry.user.stats_endpoint == "us-east1-org01"
+
+
+def test_integration_manager_builds_client_alias_targets() -> None:
+    """Client alias targets should join devices rows with analytics client data."""
+    device_manager = DeviceManager()
+    entity_manager = EntityManager()
+    integration_manager = IntegrationManager(
+        profile_manager=ProfileManager(),
+        endpoint_manager=EndpointManager(),
+        device_manager=device_manager,
+        entity_manager=entity_manager,
+    )
+
+    with (
+        patch.object(device_manager, "sync_registry"),
+        patch.object(entity_manager, "sync_registry"),
+    ):
+        integration_manager.attach_runtime(
+            cast(Any, SimpleNamespace(options=ControlDOptions()))
+        )
+        registry = integration_manager.build_registry(_client_alias_inventory())
+
+    target = registry.client_alias_targets[
+        build_client_alias_target_key("router-1", "2476a6ca95d7")
+    ]
+    assert target == ControlDClientAliasTarget(
+        target_key=build_client_alias_target_key("router-1", "2476a6ca95d7"),
+        source_kind="client",
+        endpoint_device_id="device-1",
+        endpoint_pk="endpoint-pk-1",
+        endpoint_name="Chads-Phone",
+        owning_profile_pk="profile-1",
+        parent_endpoint_device_id="router-1",
+        parent_endpoint_name="Firewalla",
+        client_id="2476a6ca95d7",
+        client_alias="Chads-Phone",
+        client_hostname="KadensSpyPhone",
+        client_ip_address="192.168.202.244",
+        client_mac_address="50:eb:71:b6:78:3a",
+    )
+
+
+def test_integration_manager_builds_analytics_only_client_alias_targets() -> None:
+    """Analytics-only client rows should still become aliasable service targets."""
+    device_manager = DeviceManager()
+    entity_manager = EntityManager()
+    integration_manager = IntegrationManager(
+        profile_manager=ProfileManager(),
+        endpoint_manager=EndpointManager(),
+        device_manager=device_manager,
+        entity_manager=entity_manager,
+    )
+
+    with (
+        patch.object(device_manager, "sync_registry"),
+        patch.object(entity_manager, "sync_registry"),
+    ):
+        integration_manager.attach_runtime(
+            cast(Any, SimpleNamespace(options=ControlDOptions()))
+        )
+        registry = integration_manager.build_registry(
+            _analytics_only_client_alias_inventory()
+        )
+
+    target = registry.client_alias_targets[
+        build_client_alias_target_key("router-1", "2476a6ca95d7")
+    ]
+    assert target.source_kind == "analytics_client"
+    assert target.endpoint_device_id is None
+    assert target.parent_endpoint_name == "Firewalla"
+    assert target.client_hostname == "KadensSpyPhone"
+    assert target.client_mac_address == "50:eb:71:b6:78:3a"
+
+
+def test_endpoint_manager_resolves_analytics_only_client_alias_targets_by_mac() -> None:
+    """MAC selectors should resolve analytics-only alias targets."""
+    endpoint_manager = EndpointManager()
+    runtime = cast(
+        Any,
+        SimpleNamespace(
+            registry=SimpleNamespace(
+                client_alias_targets={
+                    build_client_alias_target_key("router-1", "2476a6ca95d7"): (
+                        ControlDClientAliasTarget(
+                            target_key=build_client_alias_target_key(
+                                "router-1", "2476a6ca95d7"
+                            ),
+                            source_kind="analytics_client",
+                            endpoint_device_id=None,
+                            endpoint_pk=None,
+                            endpoint_name="Chads-Phone",
+                            owning_profile_pk=None,
+                            parent_endpoint_device_id="router-1",
+                            parent_endpoint_name="Firewalla-VLAN60",
+                            client_id="2476a6ca95d7",
+                            client_alias="Chads-Phone",
+                            client_hostname="KadensSpyPhone",
+                            client_ip_address="192.168.202.244",
+                            client_mac_address="50:eb:71:b6:78:3a",
+                        )
+                    )
+                }
+            )
+        ),
+    )
+    endpoint_manager.attach_runtime(runtime)
+
+    assert (
+        endpoint_manager.resolve_client_alias_target(
+            endpoint_mac="50-EB-71-B6-78-3A"
+        ).client_id
+        == "2476a6ca95d7"
+    )
+
+
+def test_endpoint_manager_resolves_client_alias_targets_by_supported_selectors() -> (
+    None
+):
+    """Client alias lookups should resolve by MAC, name, hostname, and IP."""
+    endpoint_manager = EndpointManager()
+    runtime = cast(
+        Any,
+        SimpleNamespace(
+            registry=SimpleNamespace(
+                client_alias_targets={
+                    build_client_alias_target_key("router-1", "2476a6ca95d7"): (
+                        ControlDClientAliasTarget(
+                            target_key=build_client_alias_target_key(
+                                "router-1", "2476a6ca95d7"
+                            ),
+                            source_kind="client",
+                            endpoint_device_id="device-1",
+                            endpoint_pk="endpoint-pk-1",
+                            endpoint_name="Chads-Phone",
+                            owning_profile_pk="profile-1",
+                            parent_endpoint_device_id="router-1",
+                            parent_endpoint_name="Firewalla-VLAN60",
+                            client_id="2476a6ca95d7",
+                            client_alias="Chads-Phone",
+                            client_hostname="KadensSpyPhone",
+                            client_ip_address="192.168.202.244",
+                            client_mac_address="50:eb:71:b6:78:3a",
+                        )
+                    )
+                }
+            )
+        ),
+    )
+    endpoint_manager.attach_runtime(runtime)
+
+    assert (
+        endpoint_manager.resolve_client_alias_target(
+            endpoint_mac="50-EB-71-B6-78-3A"
+        ).client_id
+        == "2476a6ca95d7"
+    )
+    assert (
+        endpoint_manager.resolve_client_alias_target(
+            endpoint_name="Chads-Phone"
+        ).client_id
+        == "2476a6ca95d7"
+    )
+    assert (
+        endpoint_manager.resolve_client_alias_target(
+            endpoint_hostname="KadensSpyPhone"
+        ).client_id
+        == "2476a6ca95d7"
+    )
+    assert (
+        endpoint_manager.resolve_client_alias_target(
+            endpoint_ip="192.168.202.244"
+        ).client_id
+        == "2476a6ca95d7"
+    )
+
+
+def test_endpoint_manager_rejects_ambiguous_client_alias_targets() -> None:
+    """Client alias lookups should reject ambiguous convenience selectors."""
+    endpoint_manager = EndpointManager()
+    runtime = cast(
+        Any,
+        SimpleNamespace(
+            registry=SimpleNamespace(
+                client_alias_targets={
+                    build_client_alias_target_key("router-1", "client-1"): (
+                        ControlDClientAliasTarget(
+                            target_key=build_client_alias_target_key(
+                                "router-1", "client-1"
+                            ),
+                            source_kind="client",
+                            endpoint_device_id="device-1",
+                            endpoint_pk="endpoint-pk-1",
+                            endpoint_name="Chads-Phone",
+                            owning_profile_pk="profile-1",
+                            parent_endpoint_device_id="router-1",
+                            parent_endpoint_name="Firewalla-VLAN60",
+                            client_id="client-1",
+                            client_hostname="duplicate-host",
+                        )
+                    ),
+                    build_client_alias_target_key("router-2", "client-2"): (
+                        ControlDClientAliasTarget(
+                            target_key=build_client_alias_target_key(
+                                "router-2", "client-2"
+                            ),
+                            source_kind="client",
+                            endpoint_device_id="device-2",
+                            endpoint_pk="endpoint-pk-2",
+                            endpoint_name="Paytons-Phone",
+                            owning_profile_pk="profile-2",
+                            parent_endpoint_device_id="router-2",
+                            parent_endpoint_name="Firewalla-VLAN70",
+                            client_id="client-2",
+                            client_hostname="duplicate-host",
+                        )
+                    ),
+                }
+            )
+        ),
+    )
+    endpoint_manager.attach_runtime(runtime)
+
+    with pytest.raises(ValueError, match="Ambiguous"):
+        endpoint_manager.resolve_client_alias_target(endpoint_hostname="duplicate-host")
+
+    assert (
+        endpoint_manager.resolve_client_alias_target(
+            endpoint_hostname="duplicate-host",
+            parent_endpoint_name="Firewalla-VLAN60",
+        ).client_id
+        == "client-1"
+    )
 
 
 def test_integration_manager_preserves_filter_fallback_and_service_modes() -> None:
@@ -653,6 +945,72 @@ async def test_setup_entry_creates_entry_scoped_runtime(hass) -> None:
     assert runtime.sync_status.last_successful_refresh is not None
     assert runtime.sync_status.last_refresh_error is None
     assert runtime.sync_status.consecutive_failed_refreshes == 0
+
+
+async def test_setup_entry_populates_client_alias_targets_from_analytics_clients(
+    hass,
+) -> None:
+    """Setup should populate client alias targets from analytics client reads."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value"},
+        unique_id="user-123",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_client_alias_inventory()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_sample_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: (
+                    _sample_profile_analytics(profile_pk)
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(return_value=ControlDProfileDetailPayload()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(
+                return_value={
+                    "router-1": {
+                        "clients": {
+                            "2476a6ca95d7": {
+                                "alias": "Chads-Phone",
+                                "host": "KadensSpyPhone",
+                                "ip": "192.168.202.244",
+                                "mac": "50:eb:71:b6:78:3a",
+                            }
+                        }
+                    }
+                }
+            ),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    runtime = entry.runtime_data
+    target = runtime.registry.client_alias_targets[
+        build_client_alias_target_key("router-1", "2476a6ca95d7")
+    ]
+    assert target.endpoint_device_id == "device-1"
+    assert target.parent_endpoint_name == "Firewalla"
+    assert target.client_hostname == "KadensSpyPhone"
 
 
 async def test_coordinator_refresh_raises_auth_failed_for_reauth(hass) -> None:

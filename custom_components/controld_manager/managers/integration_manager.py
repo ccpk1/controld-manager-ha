@@ -63,6 +63,11 @@ class IntegrationManager(BaseManager):
             ),
             profiles=profiles,
             endpoints=endpoints,
+            client_alias_targets=self._endpoint_manager.normalize_client_alias_targets(
+                inventory.devices,
+                endpoints,
+                inventory.analytics_clients_by_endpoint,
+            ),
             filters_by_profile={
                 profile_pk: self._normalize_filters(
                     detail.filters,
