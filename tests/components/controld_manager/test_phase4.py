@@ -1,5 +1,7 @@
 """Entity and service tests for Control D Manager."""
 
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -28,11 +30,13 @@ from custom_components.controld_manager.const import (
     ATTR_SUGGESTED_REDIRECT_TARGET,
     CONF_API_TOKEN,
     DOMAIN,
+    RULE_TARGET_ALL_ENTITIES,
     SERVICE_CLEAR_CLIENT_ALIAS,
     SERVICE_CREATE_RULE,
     SERVICE_DELETE_RULE,
     SERVICE_DISABLE_PROFILE,
     SERVICE_ENABLE_PROFILE,
+    SERVICE_EXPOSURE_MANUAL,
     SERVICE_FIELD_ALIAS,
     SERVICE_FIELD_CANCEL_EXPIRATION,
     SERVICE_FIELD_CATALOG_TYPE,
@@ -65,6 +69,7 @@ from custom_components.controld_manager.const import (
     SERVICE_FIELD_VALUE,
     SERVICE_GET_CATALOG,
     SERVICE_RENAME_ENDPOINT,
+    SERVICE_SELECTOR_AUTOMATIC,
     SERVICE_SET_CLIENT_ALIAS,
     SERVICE_SET_DEFAULT_RULE_STATE,
     SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING,
@@ -383,6 +388,18 @@ async def _async_setup_entry(
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
             new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
         ),
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
@@ -1011,8 +1028,7 @@ async def test_filter_and_service_selects_update_expected_modes(hass) -> None:
         options=ControlDOptions(
             profile_policies={
                 "profile-1": ControlDProfilePolicy(
-                    allowed_service_categories=frozenset({"audio"}),
-                    auto_enable_service_switches=True,
+                    allowed_service_categories=frozenset({SERVICE_SELECTOR_AUTOMATIC}),
                 )
             }
         ).as_mapping(),
@@ -1126,8 +1142,7 @@ async def test_service_select_recognizes_location_redirect_state(hass) -> None:
         options=ControlDOptions(
             profile_policies={
                 "profile-1": ControlDProfilePolicy(
-                    allowed_service_categories=frozenset({"audio"}),
-                    auto_enable_service_switches=True,
+                    allowed_service_categories=frozenset({SERVICE_SELECTOR_AUTOMATIC}),
                 )
             }
         ).as_mapping(),
@@ -1175,6 +1190,18 @@ async def test_service_select_recognizes_location_redirect_state(hass) -> None:
             new=AsyncMock(return_value=OPTION_CATALOG),
         ),
         patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
             new=AsyncMock(return_value=SERVICE_CATEGORIES),
         ),
@@ -1213,8 +1240,7 @@ async def test_service_select_reports_special_redirect_target_types(
         options=ControlDOptions(
             profile_policies={
                 "profile-1": ControlDProfilePolicy(
-                    allowed_service_categories=frozenset({"audio"}),
-                    auto_enable_service_switches=True,
+                    allowed_service_categories=frozenset({SERVICE_SELECTOR_AUTOMATIC}),
                 )
             }
         ).as_mapping(),
@@ -1260,6 +1286,18 @@ async def test_service_select_reports_special_redirect_target_types(
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
             new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
         ),
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
@@ -1459,6 +1497,10 @@ async def test_excluded_profile_device_is_removed_from_registry(hass) -> None:
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
             new=AsyncMock(return_value=SERVICE_CATALOG),
         ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
     ):
         await runtime.active_coordinator.async_refresh()
         await hass.async_block_till_done()
@@ -1547,6 +1589,10 @@ async def test_removed_rule_entities_are_pruned_from_entity_registry(hass) -> No
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
             new=AsyncMock(return_value=SERVICE_CATALOG),
         ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
     ):
         await runtime.active_coordinator.async_refresh()
         await hass.async_block_till_done()
@@ -1603,8 +1649,13 @@ async def test_removed_dynamic_entities_are_pruned_across_platforms(hass) -> Non
     assert adult_mode_entity_id is not None
 
     runtime = entry.runtime_data
+
     runtime.options = ControlDOptions(
-        profile_policies={"profile-1": ControlDProfilePolicy()}
+        profile_policies={
+            "profile-1": ControlDProfilePolicy(
+                service_exposure_mode=SERVICE_EXPOSURE_MANUAL,
+            )
+        }
     )
 
     with (
@@ -1638,12 +1689,28 @@ async def test_removed_dynamic_entities_are_pruned_across_platforms(hass) -> Non
             new=AsyncMock(return_value=OPTION_CATALOG),
         ),
         patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
             new=AsyncMock(return_value=SERVICE_CATEGORIES),
         ),
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
             new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
         ),
     ):
         await runtime.active_coordinator.async_refresh()
@@ -1655,6 +1722,853 @@ async def test_removed_dynamic_entities_are_pruned_across_platforms(hass) -> Non
     assert entity_registry.async_get(advanced_select_entity_id) is None
     assert entity_registry.async_get(social_filter_entity_id) is None
     assert entity_registry.async_get(adult_mode_entity_id) is None
+
+
+async def test_automatic_service_entities_prune_on_manual_transition(
+    hass,
+) -> None:
+    """Automatic services should include off rows and remove auto-only rows later."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({SERVICE_SELECTOR_AUTOMATIC}),
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+
+    automatic_categories = [
+        {"PK": "audio", "name": "Audio", "count": 18},
+        {"PK": "social", "name": "Social", "count": 10},
+    ]
+    automatic_catalog = [
+        {
+            "PK": "amazonmusic",
+            "name": "Amazon Music",
+            "category": "audio",
+            "warning": "",
+            "unlock_location": "JFK",
+        },
+        {
+            "PK": "facebook",
+            "name": "Facebook",
+            "category": "social",
+            "warning": "",
+            "unlock_location": "JFK",
+        },
+    ]
+    automatic_detail = _detail_payload(
+        "profile-1", include_services=True, include_rules=False
+    )
+    automatic_detail = replace(
+        automatic_detail,
+        services=(
+            {
+                "PK": "amazonmusic",
+                "name": "Amazon Music",
+                "category": "audio",
+                "warning": "",
+                "unlock_location": "JFK",
+                "action": {"do": 1, "status": 1},
+            },
+            {
+                "PK": "facebook",
+                "name": "Facebook",
+                "category": "social",
+                "warning": "",
+                "unlock_location": "JFK",
+                "action": {"do": 0, "status": 0},
+            },
+        ),
+    )
+
+    entry.add_to_hass(hass)
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    automatic_detail
+                    if profile_pk == "profile-1"
+                    else _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=automatic_categories),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=automatic_catalog),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entity_registry = er.async_get(hass)
+    audio_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+    social_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::facebook"
+    )
+
+    assert audio_entity_id is not None
+    assert social_entity_id is not None
+    social_entry = entity_registry.async_get(social_entity_id)
+    assert social_entry is not None
+    assert social_entry.disabled_by is None
+
+    runtime = entry.runtime_data
+    runtime.options = ControlDOptions(
+        profile_policies={
+            "profile-1": ControlDProfilePolicy(
+                allowed_service_categories=frozenset({"audio"}),
+            )
+        }
+    )
+    with (
+        patch.object(
+            runtime.client,
+            "async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, *, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        await runtime.active_coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    assert entity_registry.async_get(audio_entity_id) is not None
+    assert entity_registry.async_get(social_entity_id) is None
+
+
+async def test_new_manual_service_category_adds_category_only_entities_disabled(
+    hass,
+) -> None:
+    """Adding a manual service category should disable new category-only entities."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({SERVICE_SELECTOR_AUTOMATIC}),
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+
+    service_categories = [
+        {"PK": "audio", "name": "Audio", "count": 2},
+    ]
+    service_catalog = [
+        {
+            "PK": "amazonmusic",
+            "name": "Amazon Music",
+            "category": "audio",
+            "warning": "",
+            "unlock_location": "JFK",
+        },
+        {
+            "PK": "applemusic",
+            "name": "Apple Music",
+            "category": "audio",
+            "warning": "",
+            "unlock_location": "JFK",
+        },
+    ]
+    automatic_detail = replace(
+        _detail_payload("profile-1", include_services=True, include_rules=False),
+        services=(
+            {
+                "PK": "amazonmusic",
+                "name": "Amazon Music",
+                "category": "audio",
+                "warning": "",
+                "unlock_location": "JFK",
+                "action": {"do": 1, "status": 1},
+            },
+        ),
+    )
+
+    entry.add_to_hass(hass)
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    automatic_detail
+                    if profile_pk == "profile-1"
+                    else _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=service_categories),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=service_catalog),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entity_registry = er.async_get(hass)
+    amazon_music_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+    apple_music_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::applemusic"
+    )
+
+    assert amazon_music_entity_id is not None
+    assert apple_music_entity_id is None
+    assert hass.states.get(amazon_music_entity_id) is not None
+
+    runtime = entry.runtime_data
+    runtime.options = ControlDOptions(
+        profile_policies={
+            "profile-1": ControlDProfilePolicy(
+                allowed_service_categories=frozenset({"audio"}),
+            )
+        }
+    )
+    with (
+        patch.object(
+            runtime.client,
+            "async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, *, include_services, include_rules: (
+                    automatic_detail
+                    if profile_pk == "profile-1"
+                    else _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_categories",
+            new=AsyncMock(return_value=service_categories),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_catalog",
+            new=AsyncMock(return_value=service_catalog),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        await runtime.active_coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    apple_music_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::applemusic"
+    )
+    assert apple_music_entity_id is not None
+    apple_music_entry = entity_registry.async_get(apple_music_entity_id)
+    assert apple_music_entry is not None
+    assert apple_music_entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert hass.states.get(apple_music_entity_id) is None
+
+    amazon_music_entry = entity_registry.async_get(amazon_music_entity_id)
+    assert amazon_music_entry is not None
+    assert amazon_music_entry.disabled_by is None
+    assert hass.states.get(amazon_music_entity_id) is not None
+
+
+async def test_options_flow_manual_service_category_adds_disabled_entities(
+    hass,
+) -> None:
+    """Editing a manual profile should keep newly added category services disabled."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    service_exposure_mode=SERVICE_EXPOSURE_MANUAL,
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    service_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+    assert service_entity_id is None
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profiles",
+            new=AsyncMock(
+                return_value=[
+                    {"PK": "profile-1", "name": "Primary"},
+                    {"PK": "profile-2", "name": "Secondary"},
+                ]
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_groups",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_rules",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        flow_id = result["flow_id"]
+
+        result = await hass.config_entries.options.async_configure(
+            flow_id, {"next_step_id": "select_profile"}
+        )
+        assert result["type"] == "form"
+
+        result = await hass.config_entries.options.async_configure(
+            flow_id, {"profile_pk": "profile-1"}
+        )
+        assert result["type"] == "form"
+
+        result = await hass.config_entries.options.async_configure(
+            flow_id,
+            {
+                "managed_in_home_assistant": True,
+                "expose_external_filters": False,
+                "advanced_profile_options": False,
+                "allowed_service_categories": ["audio"],
+                "exposed_custom_rules": [],
+                "endpoint_sensors_enabled": False,
+                "endpoint_inactivity_threshold_minutes": 15,
+            },
+        )
+
+    assert result["type"] == "menu"
+    assert entry.options["profile_policies"]["profile-1"][
+        "allowed_service_categories"
+    ] == ["audio"]
+    assert "service_exposure_mode" not in entry.options["profile_policies"]["profile-1"]
+
+    service_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+    assert service_entity_id is not None
+    service_entry = entity_registry.async_get(service_entity_id)
+    assert service_entry is not None
+    assert service_entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert hass.states.get(service_entity_id) is None
+
+
+async def test_manual_service_select_stays_integration_disabled_across_sync(
+    hass,
+) -> None:
+    """Manual-category service selects should not be re-enabled by migration."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({"audio"}),
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    service_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+
+    assert service_entity_id is not None
+    service_entry = entity_registry.async_get(service_entity_id)
+    assert service_entry is not None
+    assert service_entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert hass.states.get(service_entity_id) is None
+
+    runtime = entry.runtime_data
+    with (
+        patch.object(
+            runtime.client,
+            "async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, *, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        await runtime.active_coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    service_entry = entity_registry.async_get(service_entity_id)
+    assert service_entry is not None
+    assert service_entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert hass.states.get(service_entity_id) is None
+
+
+async def test_setup_prunes_stale_service_registry_entries_for_manual_profiles(
+    hass,
+) -> None:
+    """Setup should remove stale service registry entries when services are absent."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    service_exposure_mode=SERVICE_EXPOSURE_MANUAL,
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    entry.add_to_hass(hass)
+
+    entity_registry = er.async_get(hass)
+    stale_entry = entity_registry.async_get_or_create(
+        "select",
+        DOMAIN,
+        "user-123::profile::profile-1::service::amazonmusic",
+        config_entry=entry,
+        original_name="Services / Audio / Amazon Music",
+        has_entity_name=True,
+        translation_key="profile_service",
+    )
+
+    assert stale_entry.disabled_by is None
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert (
+        entity_registry.async_get_entity_id(
+            "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+        )
+        is None
+    )
+
+
+async def test_existing_service_select_stays_enabled_on_automatic_to_manual_transition(
+    hass,
+) -> None:
+    """Existing service selects should stay enabled when still eligible manually."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    allowed_service_categories=frozenset({SERVICE_SELECTOR_AUTOMATIC}),
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    service_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+
+    assert service_entity_id is not None
+    assert hass.states.get(service_entity_id) is not None
+
+    runtime = entry.runtime_data
+    runtime.options = ControlDOptions(
+        profile_policies={
+            "profile-1": ControlDProfilePolicy(
+                allowed_service_categories=frozenset({"audio"}),
+            )
+        }
+    )
+    with (
+        patch.object(
+            runtime.client,
+            "async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, *, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        await runtime.active_coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    service_entry = entity_registry.async_get(service_entity_id)
+    assert service_entry is not None
+    assert service_entry.disabled_by is None
+    assert hass.states.get(service_entity_id) is not None
+
+
+async def test_all_rules_sentinel_exposes_live_rule_entities(hass) -> None:
+    """The all-rules sentinel should expose all live rule folders and rules."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    exposed_custom_rules=frozenset({RULE_TARGET_ALL_ENTITIES}),
+                )
+            }
+        ).as_mapping(),
+        unique_id="user-123",
+        title="Control D Home",
+    )
+
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    assert (
+        entity_registry.async_get_entity_id(
+            "select", DOMAIN, "user-123::profile::profile-1::rule_group::1"
+        )
+        is not None
+    )
+    assert (
+        entity_registry.async_get_entity_id(
+            "switch", DOMAIN, "user-123::profile::profile-1::rule::root|example.com"
+        )
+        is not None
+    )
+    assert (
+        entity_registry.async_get_entity_id(
+            "switch", DOMAIN, "user-123::profile::profile-1::rule::group:1|example2.com"
+        )
+        is not None
+    )
 
 
 async def test_sync_button_runs_manual_refresh(hass) -> None:
@@ -1932,6 +2846,30 @@ async def test_enable_service_prefers_config_entry_id_over_name(hass) -> None:
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
             new=AsyncMock(return_value=OPTION_CATALOG),
         ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
     ):
         assert await hass.config_entries.async_setup(entry_one.entry_id)
         await hass.async_block_till_done()
@@ -2064,6 +3002,30 @@ async def test_disable_service_prefers_config_entry_id_over_name(hass) -> None:
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
             new=AsyncMock(return_value=OPTION_CATALOG),
         ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
     ):
         assert await hass.config_entries.async_setup(entry_one.entry_id)
         await hass.async_block_till_done()
@@ -2139,6 +3101,30 @@ async def test_disable_service_rejects_mixed_instance_targets(hass) -> None:
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
             new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
         ),
     ):
         assert await hass.config_entries.async_setup(entry_one.entry_id)
@@ -2304,6 +3290,30 @@ async def test_enable_service_requires_explicit_entry(hass) -> None:
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
             new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
         ),
     ):
         assert await hass.config_entries.async_setup(entry_one.entry_id)
@@ -2980,6 +3990,74 @@ async def test_set_filter_state_supports_user_facing_names(hass) -> None:
     } == {"ads", "x-community"}
 
 
+async def test_service_select_is_reenabled_when_previously_integration_disabled(
+    hass,
+) -> None:
+    """Desired service selects should be re-enabled after older disabled defaults."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    service_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+
+    assert service_entity_id is not None
+
+    entity_registry.async_update_entity(
+        service_entity_id,
+        disabled_by=er.RegistryEntryDisabler.INTEGRATION,
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(service_entity_id) is None
+
+    await entry.runtime_data.managers.entity.async_sync_platform("select")
+    await hass.async_block_till_done()
+
+    service_entry = entity_registry.async_get(service_entity_id)
+    assert service_entry is not None
+    assert service_entry.disabled_by is None
+    assert hass.states.get(service_entity_id) is not None
+
+
+async def test_service_select_stays_disabled_when_user_disabled(hass) -> None:
+    """Desired service selects should stay disabled when disabled by the user."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    entity_registry = er.async_get(hass)
+    service_entity_id = entity_registry.async_get_entity_id(
+        "select", DOMAIN, "user-123::profile::profile-1::service::amazonmusic"
+    )
+
+    assert service_entity_id is not None
+
+    entity_registry.async_update_entity(
+        service_entity_id,
+        disabled_by=er.RegistryEntryDisabler.USER,
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(service_entity_id) is None
+
+    await entry.runtime_data.managers.entity.async_sync_platform("select")
+    await hass.async_block_till_done()
+
+    service_entry = entity_registry.async_get(service_entity_id)
+    assert service_entry is not None
+    assert service_entry.disabled_by is er.RegistryEntryDisabler.USER
+    assert hass.states.get(service_entity_id) is None
+
+
 async def test_set_filter_state_prefers_filter_ids_over_names(hass) -> None:
     """The filter service should use raw filter IDs before names."""
     entry = MockConfigEntry(
@@ -3052,6 +4130,30 @@ async def test_set_filter_state_prefers_config_entry_id_over_name(hass) -> None:
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
             new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
         ),
     ):
         assert await hass.config_entries.async_setup(entry_one.entry_id)
@@ -3255,17 +4357,28 @@ async def test_set_service_state_supports_live_lookup_without_enabled_categories
 ) -> None:
     """The service-mode service should still resolve live services.
 
-    This should work even when no service categories are enabled for entities.
+    This should work even when no service categories are selected in options.
     """
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        options=ControlDOptions(
+            profile_policies={
+                "profile-1": ControlDProfilePolicy(
+                    service_exposure_mode=SERVICE_EXPOSURE_MANUAL,
+                )
+            }
+        ).as_mapping(),
         unique_id="user-123",
         title="Control D Home",
     )
     await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
 
     runtime = entry.runtime_data
+    assert (
+        runtime.options.profile_policy("profile-1").allowed_service_categories
+        == frozenset()
+    )
     assert runtime.registry.services_by_profile.get("profile-1", {}) == {}
 
     runtime.client.async_get_service_categories = AsyncMock(
@@ -3779,8 +4892,7 @@ async def test_service_select_reports_off_for_disabled_service(hass) -> None:
         options=ControlDOptions(
             profile_policies={
                 "profile-1": ControlDProfilePolicy(
-                    allowed_service_categories=frozenset({"audio"}),
-                    auto_enable_service_switches=True,
+                    allowed_service_categories=frozenset({SERVICE_SELECTOR_AUTOMATIC}),
                 )
             }
         ).as_mapping(),
@@ -6685,7 +7797,9 @@ async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> N
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
 
     assert diagnostics["entry"][CONF_API_TOKEN] == "**REDACTED**"
-    assert diagnostics["options"] == {}
+    assert diagnostics["options"]["profile_policies"]["profile-1"][
+        "allowed_service_categories"
+    ] == [SERVICE_SELECTOR_AUTOMATIC]
     assert diagnostics["runtime"]["instance_id"] == "user-123"
     assert diagnostics["runtime"]["refresh_intervals"] == {
         "configuration_sync_minutes": 15,
@@ -6697,13 +7811,16 @@ async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> N
         "endpoint_count": 3,
         "discovered_endpoint_count": 2,
         "router_client_count": 1,
-        "service_category_count": 0,
+        "service_category_count": 1,
         "filter_profile_count": 2,
         "service_profile_count": 2,
         "rule_profile_count": 2,
         "option_profile_count": 2,
     }
     assert diagnostics["runtime"]["profiles"]["profile-1"]["name"] == "Primary"
+    assert diagnostics["runtime"]["profiles"]["profile-1"]["service_selector"] == [
+        SERVICE_SELECTOR_AUTOMATIC
+    ]
     assert diagnostics["runtime"]["profiles"]["profile-1"]["filter_count"] == 5
     assert diagnostics["runtime"]["profiles"]["profile-1"]["endpoint_count"] == 3
     assert diagnostics["runtime"]["profiles"]["profile-2"]["endpoint_count"] == 1

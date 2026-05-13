@@ -15,12 +15,17 @@ from custom_components.controld_manager.api import (
     ControlDApiConnectionError,
     ControlDApiResponseError,
 )
-from custom_components.controld_manager.config_flow import ControlDManagerOptionsFlow
+from custom_components.controld_manager.config_flow import (
+    FIELD_EXPOSE_ALL_ACTIVE_SERVICES,
+    FIELD_EXPOSE_ALL_CUSTOM_RULES,
+    ControlDManagerOptionsFlow,
+)
 from custom_components.controld_manager.const import (
     CONF_API_TOKEN,
     DOMAIN,
     TRANS_KEY_CANNOT_CONNECT,
     TRANS_KEY_INVALID_AUTH,
+    TRANS_KEY_SERVICE_SELECTOR_CONFLICT,
     TRANS_KEY_UNKNOWN,
 )
 from custom_components.controld_manager.models import ControlDUser
@@ -242,7 +247,6 @@ async def test_options_flow_edit_profile_exposes_external_filters_and_hides_auto
     )
     flow = ControlDManagerOptionsFlow(entry)
     flow.hass = hass
-    flow._selected_profile_pk = "profile-1"
 
     with (
         patch.object(
@@ -261,7 +265,7 @@ async def test_options_flow_edit_profile_exposes_external_filters_and_hides_auto
             new=AsyncMock(return_value={}),
         ),
     ):
-        result = await flow.async_step_edit_profile()
+        result = await flow.async_step_select_profile({"profile_pk": "profile-1"})
 
     assert result["type"] == FlowResultType.FORM
     schema = result["data_schema"]
@@ -269,9 +273,112 @@ async def test_options_flow_edit_profile_exposes_external_filters_and_hides_auto
     field_names = [marker.schema for marker in schema.schema]
     assert field_names[0] == "managed_in_home_assistant"
     assert field_names[1] == "expose_external_filters"
+    assert field_names[3] == FIELD_EXPOSE_ALL_ACTIVE_SERVICES
+    assert field_names[4] == "allowed_service_categories"
+    assert field_names[5] == FIELD_EXPOSE_ALL_CUSTOM_RULES
     assert field_names[-2] == "endpoint_sensors_enabled"
     assert field_names[-1] == "endpoint_inactivity_threshold_minutes"
     assert "auto_enable_service_switches" not in field_names
+
+
+async def test_options_flow_edit_profile_rejects_mixed_service_selector(hass) -> None:
+    """The automatic service selector cannot be combined with categories."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    flow = ControlDManagerOptionsFlow(entry)
+    flow.hass = hass
+
+    with (
+        patch.object(
+            flow,
+            "_async_get_profile_choices",
+            new=AsyncMock(return_value={"profile-1": "Primary"}),
+        ),
+        patch.object(
+            flow,
+            "_async_get_service_category_choices",
+            new=AsyncMock(return_value={"audio": "Audio"}),
+        ),
+        patch.object(
+            flow,
+            "_async_get_rule_target_choices",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        await flow.async_step_select_profile({"profile_pk": "profile-1"})
+        result = await flow.async_step_edit_profile(
+            {
+                "managed_in_home_assistant": True,
+                "expose_external_filters": False,
+                "advanced_profile_options": False,
+                FIELD_EXPOSE_ALL_ACTIVE_SERVICES: True,
+                "allowed_service_categories": ["audio"],
+                FIELD_EXPOSE_ALL_CUSTOM_RULES: False,
+                "exposed_custom_rules": [],
+                "endpoint_sensors_enabled": False,
+                "endpoint_inactivity_threshold_minutes": 15,
+            }
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {
+        "allowed_service_categories": TRANS_KEY_SERVICE_SELECTOR_CONFLICT
+    }
+
+
+async def test_options_flow_edit_profile_rejects_mixed_all_rules(hass) -> None:
+    """The all-rules sentinel cannot be combined with explicit rule targets."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    flow = ControlDManagerOptionsFlow(entry)
+    flow.hass = hass
+
+    with (
+        patch.object(
+            flow,
+            "_async_get_profile_choices",
+            new=AsyncMock(return_value={"profile-1": "Primary"}),
+        ),
+        patch.object(
+            flow,
+            "_async_get_service_category_choices",
+            new=AsyncMock(return_value={"audio": "Audio"}),
+        ),
+        patch.object(
+            flow,
+            "_async_get_rule_target_choices",
+            new=AsyncMock(
+                return_value={
+                    "rule:root|example.com": "example.com",
+                }
+            ),
+        ),
+    ):
+        await flow.async_step_select_profile({"profile_pk": "profile-1"})
+        result = await flow.async_step_edit_profile(
+            {
+                "managed_in_home_assistant": True,
+                "expose_external_filters": False,
+                "advanced_profile_options": False,
+                FIELD_EXPOSE_ALL_ACTIVE_SERVICES: True,
+                "allowed_service_categories": [],
+                FIELD_EXPOSE_ALL_CUSTOM_RULES: True,
+                "exposed_custom_rules": ["rule:root|example.com"],
+                "endpoint_sensors_enabled": False,
+                "endpoint_inactivity_threshold_minutes": 15,
+            }
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {"exposed_custom_rules": "all_rules_selection_conflict"}
 
 
 async def test_reauth_flow_updates_api_token(hass) -> None:

@@ -386,6 +386,21 @@ Observed and supplied evidence:
 
 - `GET /services/categories` is expected to expose service categories with counts
 - `GET /services/categories/all` is expected to expose the full available service catalog
+- `GET /profiles/{profile_id}/services` returns `body.services`
+- observed profile-scoped service rows include fields such as:
+  - `PK`
+  - `name`
+  - `category`
+  - `warning`
+  - `unlock_location`
+  - `action.do`
+  - `action.status`
+- one supplied `GET /profiles/{profile_id}/services` sample returned only two rows:
+  - `applemusic`
+  - `youtube`
+- the same supplied sample included both:
+  - a returned service row with `action.status = 0`
+  - a returned service row with `action.status = 1`
 - one sampled service catalog contains roughly 987 service items across categories such as `video`, `vendors`, `finance`, `tools`, and `social`
 - profile-scoped service rows do not represent the full catalog size by themselves
 
@@ -393,8 +408,17 @@ Working interpretation:
 
 - services are the true high-cardinality profile surface
 - category is the correct first-class options-flow unit for service exposure
+- `GET /profiles/{profile_id}/services` appears to be a profile-relevant or explicit-service-row surface, not a full service-catalog surface
+- presence in the profile services payload should not be interpreted as `currently enabled`, because a returned row can still expose `action.status = 0`
+- the safer interpretation is that presence in the profile services payload means an explicit service rule row exists for that profile, even when the current mode is Off
 - per-profile service policy should store enabled categories, not a mirrored copy of every service item
 - service entities created from an enabled category should default to disabled in the entity registry, with any default-enabled override treated as advanced and warned
+
+Implementation consequence:
+
+- the integration can continue treating categories as the correct broad options-flow unit for manual service exposure
+- `GET /profiles/{profile_id}/services` is now strong candidate input for a narrower auto-managed entity path based on explicit service rows already present on the profile
+- any future auto-managed service exposure should key off profile-service-row presence rather than assuming the endpoint returns only currently enabled services
 
 ## Service mutation findings
 

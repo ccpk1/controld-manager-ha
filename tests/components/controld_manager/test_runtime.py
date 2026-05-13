@@ -1,5 +1,7 @@
 """Runtime and manager tests for Control D Manager."""
 
+# pylint: disable=protected-access,too-many-lines
+
 from __future__ import annotations
 
 import logging
@@ -19,8 +21,17 @@ from custom_components.controld_manager.api.exceptions import (
     ControlDApiAuthError,
     ControlDApiConnectionError,
 )
-from custom_components.controld_manager.config_flow import ControlDManagerOptionsFlow
-from custom_components.controld_manager.const import CONF_API_TOKEN, DOMAIN
+from custom_components.controld_manager.config_flow import (
+    FIELD_EXPOSE_ALL_ACTIVE_SERVICES,
+    FIELD_EXPOSE_ALL_CUSTOM_RULES,
+    ControlDManagerOptionsFlow,
+)
+from custom_components.controld_manager.const import (
+    CONF_API_TOKEN,
+    DOMAIN,
+    SERVICE_EXPOSURE_MANUAL,
+    SERVICE_SELECTOR_AUTOMATIC,
+)
 from custom_components.controld_manager.managers import (
     DeviceManager,
     EndpointManager,
@@ -34,6 +45,7 @@ from custom_components.controld_manager.models import (
     ControlDInventoryPayload,
     ControlDOptions,
     ControlDProfileDetailPayload,
+    ControlDProfilePolicy,
     ControlDRegistry,
     build_client_alias_target_key,
 )
@@ -645,6 +657,77 @@ def test_integration_manager_preserves_filter_fallback_and_service_modes() -> No
     assert ttl_row.is_enabled is True
 
 
+def test_integration_manager_keeps_automatic_and_manual_services_exclusive() -> None:
+    """Manual categories should not union with automatic explicit service rows."""
+    device_manager = DeviceManager()
+    entity_manager = EntityManager()
+    integration_manager = IntegrationManager(
+        profile_manager=ProfileManager(),
+        endpoint_manager=EndpointManager(),
+        device_manager=device_manager,
+        entity_manager=entity_manager,
+    )
+
+    inventory = ControlDInventoryPayload(
+        user=_sample_inventory().user,
+        profiles=_sample_inventory().profiles,
+        devices=_sample_inventory().devices,
+        profile_details={
+            "profile-1": ControlDProfileDetailPayload(
+                services=(
+                    {
+                        "PK": "amazonmusic",
+                        "name": "Amazon Music",
+                        "category": "audio",
+                        "action": {"do": 1, "status": 1},
+                    },
+                    {
+                        "PK": "facebook",
+                        "name": "Facebook",
+                        "category": "social",
+                        "action": {"do": 0, "status": 0},
+                    },
+                )
+            )
+        },
+        option_catalog=OPTION_CATALOG,
+        service_categories=(
+            {"PK": "audio", "name": "Audio", "count": 1},
+            {"PK": "social", "name": "Social", "count": 1},
+        ),
+        service_catalog=(
+            {"PK": "amazonmusic", "name": "Amazon Music", "category": "audio"},
+            {"PK": "facebook", "name": "Facebook", "category": "social"},
+        ),
+    )
+
+    with (
+        patch.object(device_manager, "sync_registry"),
+        patch.object(entity_manager, "sync_registry"),
+    ):
+        integration_manager.attach_runtime(
+            cast(
+                Any,
+                SimpleNamespace(
+                    options=ControlDOptions(
+                        profile_policies={
+                            "profile-1": ControlDProfilePolicy(
+                                allowed_service_categories=frozenset({"audio"}),
+                            )
+                        }
+                    )
+                ),
+            )
+        )
+        registry = integration_manager.build_registry(inventory)
+
+    assert set(registry.services_by_profile["profile-1"]) == {"amazonmusic"}
+    assert (
+        registry.services_by_profile["profile-1"]["amazonmusic"].current_mode
+        == "bypassed"
+    )
+
+
 async def test_profile_option_write_payload_matches_browser_contract() -> None:
     """Profile option writes should match the browser-verified option contract."""
     async with ClientSession() as session:
@@ -917,6 +1000,18 @@ async def test_setup_entry_creates_entry_scoped_runtime(hass) -> None:
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
             new=AsyncMock(return_value=[]),
         ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -984,6 +1079,14 @@ async def test_setup_entry_populates_client_alias_targets_from_analytics_clients
             new=AsyncMock(return_value=[]),
         ),
         patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
             new=AsyncMock(
                 return_value={
@@ -1047,6 +1150,18 @@ async def test_coordinator_refresh_raises_auth_failed_for_reauth(hass) -> None:
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
             new=AsyncMock(return_value=[]),
         ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -1099,6 +1214,18 @@ async def test_coordinator_requests_last_day_analytics_window(hass) -> None:
         patch(
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
             new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
         ),
         patch(
             "custom_components.controld_manager.coordinator.dt_util.now",
@@ -1165,6 +1292,18 @@ async def test_coordinator_logs_unavailable_once_and_recovery(hass, caplog) -> N
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
             new=AsyncMock(return_value=[]),
         ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -1193,6 +1332,35 @@ async def test_coordinator_logs_unavailable_once_and_recovery(hass, caplog) -> N
             "async_get_profile_option_catalog",
             new=AsyncMock(return_value=[]),
         ),
+        patch.object(
+            runtime.client,
+            "async_get_account_analytics",
+            new=AsyncMock(return_value=_sample_account_analytics()),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: (
+                    _sample_profile_analytics(profile_pk)
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_categories",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
     ):
         for _ in range(2):
             with pytest.raises(UpdateFailed):
@@ -1211,6 +1379,207 @@ async def test_coordinator_logs_unavailable_once_and_recovery(hass, caplog) -> N
     ]
     assert len(unavailable_logs) == 1
     assert len(recovery_logs) == 1
+
+
+async def test_setup_entry_migrates_empty_service_categories_to_automatic(hass) -> None:
+    """Setup should persist the automatic sentinel for empty legacy service state."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value"},
+        options={
+            "profile_policies": {"profile-1": {"allowed_service_categories": ["audio"]}}
+        },
+        unique_id="user-123",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_sample_inventory()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_sample_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: (
+                    _sample_profile_analytics(profile_pk)
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(return_value=ControlDProfileDetailPayload()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    profile_1_policy = entry.options["profile_policies"]["profile-1"]
+    profile_2_policy = entry.options["profile_policies"]["profile-2"]
+    assert profile_1_policy["allowed_service_categories"] == ["audio"]
+    assert profile_2_policy["allowed_service_categories"] == [
+        SERVICE_SELECTOR_AUTOMATIC
+    ]
+    assert "service_exposure_mode" not in profile_1_policy
+    assert "service_exposure_mode" not in profile_2_policy
+    assert "auto_enable_service_switches" not in profile_1_policy
+    assert "auto_enable_service_switches" not in profile_2_policy
+
+
+async def test_setup_entry_migrates_legacy_automatic_mode_without_categories(
+    hass,
+) -> None:
+    """Migrate legacy automatic mode without categories to the selector.
+
+    The migrated value should be the automatic sentinel stored in the selector.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value"},
+        options={
+            "profile_policies": {
+                "profile-1": {"service_exposure_mode": "automatic"},
+            }
+        },
+        unique_id="user-123",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_sample_inventory()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_sample_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: (
+                    _sample_profile_analytics(profile_pk)
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(return_value=ControlDProfileDetailPayload()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    profile_1_policy = entry.options["profile_policies"]["profile-1"]
+    assert profile_1_policy["allowed_service_categories"] == [
+        SERVICE_SELECTOR_AUTOMATIC
+    ]
+    assert "service_exposure_mode" not in profile_1_policy
+    assert "auto_enable_service_switches" not in profile_1_policy
+
+
+async def test_coordinator_requests_services_for_automatic_profiles(hass) -> None:
+    """Automatic service mode should request profile service details."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value"},
+        options={
+            "profile_policies": {
+                "profile-1": {
+                    "allowed_service_categories": [SERVICE_SELECTOR_AUTOMATIC]
+                },
+                "profile-2": {"service_exposure_mode": SERVICE_EXPOSURE_MANUAL},
+            }
+        },
+        unique_id="user-123",
+    )
+    entry.add_to_hass(hass)
+
+    detail_mock = AsyncMock(return_value=ControlDProfileDetailPayload())
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_sample_inventory()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_sample_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: (
+                    _sample_profile_analytics(profile_pk)
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=detail_mock,
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    detail_mock.assert_has_awaits(
+        [
+            call("profile-1", include_services=True, include_rules=False),
+            call("profile-2", include_services=False, include_rules=False),
+        ],
+        any_order=True,
+    )
 
 
 async def test_options_flow_saves_typed_profile_policy(hass) -> None:
@@ -1276,10 +1645,12 @@ async def test_options_flow_saves_typed_profile_policy(hass) -> None:
                 "managed_in_home_assistant": True,
                 "expose_external_filters": True,
                 "advanced_profile_options": True,
+                FIELD_EXPOSE_ALL_ACTIVE_SERVICES: True,
                 "endpoint_sensors_enabled": True,
                 "endpoint_inactivity_threshold_minutes": 20,
-                "allowed_service_categories": ["audio"],
-                "exposed_custom_rules": ["group:1", "rule:root|example.com"],
+                "allowed_service_categories": [],
+                FIELD_EXPOSE_ALL_CUSTOM_RULES: True,
+                "exposed_custom_rules": [],
             },
         )
         assert result["type"] == "menu"
@@ -1306,9 +1677,8 @@ async def test_options_flow_saves_typed_profile_policy(hass) -> None:
         "advanced_profile_options": True,
         "endpoint_sensors_enabled": True,
         "endpoint_inactivity_threshold_minutes": 20,
-        "allowed_service_categories": ["audio"],
-        "auto_enable_service_switches": False,
-        "exposed_custom_rules": ["group:1", "rule:root|example.com"],
+        "allowed_service_categories": [SERVICE_SELECTOR_AUTOMATIC],
+        "exposed_custom_rules": ["system:all_rules"],
     }
 
     assert entry.options["profile_policies"].get("profile-2") is None

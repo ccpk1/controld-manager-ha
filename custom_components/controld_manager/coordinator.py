@@ -19,8 +19,22 @@ from .api import (
     ControlDApiConnectionError,
     ControlDApiResponseError,
 )
-from .const import DOMAIN
-from .models import ControlDInventoryPayload, ControlDManagerRuntime, ControlDRegistry
+from .const import (
+    CONF_ALLOWED_SERVICE_CATEGORIES,
+    CONF_AUTO_ENABLE_SERVICE_SWITCHES,
+    CONF_PROFILE_POLICIES,
+    CONF_SERVICE_EXPOSURE_MODE,
+    DOMAIN,
+    SERVICE_EXPOSURE_AUTOMATIC,
+    SERVICE_SELECTOR_AUTOMATIC,
+)
+from .models import (
+    ControlDInventoryPayload,
+    ControlDManagerRuntime,
+    ControlDOptions,
+    ControlDRefreshIntervals,
+    ControlDRegistry,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -43,8 +57,74 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
             config_entry=entry,
         )
         self._runtime = runtime
+        self._entry = entry
         self._refresh_trigger = "scheduled"
         self._unavailable_logged = False
+
+    def apply_profile_policy_defaults(self, profile_pks: set[str]) -> None:
+        """Persist new profile-policy defaults through the coordinator layer."""
+        raw_options = dict(self._entry.options)
+        raw_profile_policies: dict[str, dict[str, Any]] = {
+            profile_pk: dict(policy)
+            for profile_pk, policy in raw_options.get(CONF_PROFILE_POLICIES, {}).items()
+            if isinstance(profile_pk, str) and isinstance(policy, dict)
+        }
+
+        changed = False
+        for profile_pk in profile_pks:
+            raw_policy = raw_profile_policies.setdefault(profile_pk, {})
+            allowed_service_categories = raw_policy.get(CONF_ALLOWED_SERVICE_CATEGORIES)
+            if (
+                isinstance(allowed_service_categories, list)
+                and allowed_service_categories
+            ):
+                if (
+                    CONF_SERVICE_EXPOSURE_MODE in raw_policy
+                    or CONF_AUTO_ENABLE_SERVICE_SWITCHES in raw_policy
+                ):
+                    raw_policy.pop(CONF_SERVICE_EXPOSURE_MODE, None)
+                    raw_policy.pop(CONF_AUTO_ENABLE_SERVICE_SWITCHES, None)
+                    changed = True
+                continue
+
+            if (
+                raw_policy.get(CONF_SERVICE_EXPOSURE_MODE) == SERVICE_EXPOSURE_AUTOMATIC
+                or CONF_ALLOWED_SERVICE_CATEGORIES not in raw_policy
+            ):
+                raw_policy[CONF_ALLOWED_SERVICE_CATEGORIES] = [
+                    SERVICE_SELECTOR_AUTOMATIC
+                ]
+                changed = True
+
+            if (
+                CONF_SERVICE_EXPOSURE_MODE in raw_policy
+                or CONF_AUTO_ENABLE_SERVICE_SWITCHES in raw_policy
+            ):
+                raw_policy.pop(CONF_SERVICE_EXPOSURE_MODE, None)
+                raw_policy.pop(CONF_AUTO_ENABLE_SERVICE_SWITCHES, None)
+                changed = True
+
+        if not changed:
+            return
+
+        raw_options[CONF_PROFILE_POLICIES] = raw_profile_policies
+        updated_options = ControlDOptions.from_mapping(raw_options)
+        self.hass.config_entries.async_update_entry(
+            self._entry,
+            options=updated_options.as_mapping(),
+        )
+        self._runtime.options = updated_options
+        self._runtime.refresh_intervals = ControlDRefreshIntervals(
+            configuration_sync=updated_options.configuration_sync_interval,
+            profile_analytics=updated_options.profile_analytics_interval,
+            endpoint_analytics=updated_options.endpoint_analytics_interval,
+        )
+        self.update_interval = self._runtime.refresh_intervals.configuration_sync
+
+    def _include_services_for_profile(self, profile_pk: str) -> bool:
+        """Return whether service detail data is needed for one profile."""
+        profile_policy = self._runtime.options.profile_policy(profile_pk)
+        return profile_policy.service_selector_exposes_services
 
     def _raise_update_failure(
         self,
@@ -187,9 +267,7 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
                 {profile["PK"] for profile in inventory.profiles if "PK" in profile}
             )
             needs_service_catalog = any(
-                self._runtime.options.profile_policy(
-                    profile_pk
-                ).allowed_service_categories
+                self._include_services_for_profile(profile_pk)
                 for profile_pk in included_profile_pks
             )
             if included_profile_pks:
@@ -201,10 +279,8 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
                     *(
                         self._runtime.client.async_get_profile_detail(
                             profile_pk,
-                            include_services=bool(
-                                self._runtime.options.profile_policy(
-                                    profile_pk
-                                ).allowed_service_categories
+                            include_services=self._include_services_for_profile(
+                                profile_pk
                             ),
                             include_rules=bool(
                                 self._runtime.options.profile_policy(

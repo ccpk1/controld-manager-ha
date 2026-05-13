@@ -26,6 +26,13 @@ CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES = "endpoint_inactivity_threshold_minu
 CONF_ALLOWED_SERVICE_CATEGORIES = "allowed_service_categories"
 CONF_AUTO_ENABLE_SERVICE_SWITCHES = "auto_enable_service_switches"
 CONF_EXPOSED_CUSTOM_RULES = "exposed_custom_rules"
+CONF_SERVICE_EXPOSURE_MODE = "service_exposure_mode"
+
+SERVICE_SELECTOR_AUTOMATIC = "system:automatic_services"
+SERVICE_SELECTOR_NONE = "system:no_services"
+SERVICE_EXPOSURE_MANUAL = "manual"
+SERVICE_EXPOSURE_AUTOMATIC = "automatic"
+RULE_TARGET_ALL_ENTITIES = "system:all_rules"
 
 REFRESH_GROUP_CONFIGURATION_SYNC = "configuration_sync"
 REFRESH_GROUP_PROFILE_ANALYTICS = "profile_analytics"
@@ -216,7 +223,9 @@ TRANS_KEY_SERVICE_REDIRECT_TARGET_INVALID = "service_redirect_target_invalid"
 TRANS_KEY_SERVICE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE = (
     "service_redirect_target_requires_redirect_mode"
 )
+TRANS_KEY_SERVICE_SELECTOR_CONFLICT = "service_selector_conflict"
 TRANS_KEY_SERVICE_MODE_REJECTED = "service_mode_rejected"
+TRANS_KEY_ALL_RULES_SELECTION_CONFLICT = "all_rules_selection_conflict"
 TRANS_KEY_MANUAL_SYNC_FAILED = "manual_sync_failed"
 TRANS_KEY_FILTER_NOT_FOUND = "filter_not_found"
 TRANS_KEY_FILTER_MODE_UNSUPPORTED = "filter_mode_unsupported"

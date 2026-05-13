@@ -241,7 +241,7 @@ Exposure policy storage contract:
 
 - `ConfigEntry.options` stores compact integration-owned exposure policy, not mirrored Control D catalogs
 - exposure policy may include a small set of global integration settings, but profile-specific exposure choices must live under the immutable profile identifier for that profile
-- each profile policy may independently control profile management state, endpoint-sensor exposure, service-category exposure, category auto-enable behavior, exposed custom-rule targets, and later profile-scoped advanced settings
+- each profile policy may independently control profile management state, endpoint-sensor exposure, one service exposure toggle plus category selector, exposed custom-rule targets plus an all-rules toggle, and later profile-scoped advanced settings
 - live entity creation always derives from the current API data filtered through that stored policy
 
 Per-profile policy direction:
@@ -250,14 +250,17 @@ Per-profile policy direction:
 - users may later disable any profile from participation through the options flow without deleting the config entry
 - endpoint exposure is a per-profile toggle; when disabled, no endpoint entities are created for that profile
 - filter entities are created automatically for every profile and do not require per-item options storage
-- service entities are created dynamically from the current service catalog based on the categories enabled for that profile
-- rule entities are created only for the explicitly selected folder or domain targets stored for that profile
+- service entities are created dynamically from the current service catalog using one compact per-profile policy: a boolean for all active services plus a manual category selector
+- all-active-services means explicit live service rows already present on the Control D profile are exposed as enabled entities
+- manual category selections mean only the selected categories are exposed, and those entities are created disabled by default because some categories can create many entities
+- leaving the all-active-services toggle off and the category selector empty exposes no service entities for that profile
+- rule entities are created from either explicitly selected folder or domain targets stored for that profile or an all-rules toggle, but those two selection modes remain mutually exclusive
 
 Service creation direction:
 
-- service categories are the correct options-flow unit for service exposure in v1
+- new profiles and migrated empty legacy service-category state should default to the all-active-services posture in v1
+- service categories remain the correct options-flow unit for manual service exposure in v1
 - service entities created from an enabled category should default to disabled in the entity registry
-- an explicit override may allow category-created service entities to default to enabled, but that path should be presented as an advanced option with a warning about entity volume
 
 Recommended first endpoint shape:
 
@@ -268,7 +271,7 @@ Recommended first endpoint shape:
 Recommended `ConfigEntry.options` posture:
 
 - store profile policy keyed by immutable profile identifier
-- store service exposure by category, not by full mirrored service catalogs
+- store service exposure policy compactly: one all-active-services toggle plus category selections, not full mirrored service catalogs
 - store explicit rule selections by immutable typed identity, not by display name alone
 - do not store full filter, service, rule, or endpoint payloads in `ConfigEntry.options`
 
@@ -277,7 +280,7 @@ Recommended options-flow structure:
 - follow the Firewalla Local menu pattern: one top-level menu that branches into focused submenus
 - include one integration-settings area for polling and entry-wide behavior
 - include one profile-selector area that lists all live Control D profiles
-- include one per-profile edit form that owns management state, endpoint-sensor exposure, service-category exposure, category auto-enable behavior, and custom-rule exposure
+- include one per-profile edit form that owns management state, endpoint-sensor exposure, service auto-exposure mode, additive service-category exposure, category auto-enable behavior, and custom-rule exposure
 
 ## Service architecture
 
