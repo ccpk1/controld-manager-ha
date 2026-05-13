@@ -19,6 +19,7 @@ from .const import (
     CONF_MANAGED_IN_HOME_ASSISTANT,
     CONF_PROFILE_ANALYTICS_INTERVAL_MINUTES,
     CONF_PROFILE_POLICIES,
+    CONF_SERVICE_EXPOSURE_MODE,
     DEFAULT_CONFIGURATION_SYNC_INTERVAL,
     DEFAULT_ENDPOINT_ANALYTICS_INTERVAL,
     DEFAULT_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
@@ -31,6 +32,11 @@ from .const import (
     RULE_ACTION_BYPASS,
     RULE_ACTION_OFF,
     RULE_ACTION_REDIRECT,
+    RULE_TARGET_ALL_ENTITIES,
+    SERVICE_EXPOSURE_AUTOMATIC,
+    SERVICE_EXPOSURE_MANUAL,
+    SERVICE_SELECTOR_AUTOMATIC,
+    SERVICE_SELECTOR_NONE,
 )
 
 if TYPE_CHECKING:
@@ -241,6 +247,7 @@ class ControlDService:
     name: str
     category_pk: str
     category_name: str
+    auto_exposed: bool
     enabled: bool
     action_do: int
     via: str | None = None
@@ -418,15 +425,44 @@ class ControlDProfilePolicy:
     endpoint_inactivity_threshold_minutes: int = (
         DEFAULT_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES
     )
+    service_exposure_mode: str = SERVICE_EXPOSURE_AUTOMATIC
     allowed_service_categories: frozenset[str] = frozenset()
     auto_enable_service_switches: bool = False
     exposed_custom_rules: frozenset[str] = frozenset()
+
+    @property
+    def service_selector_is_automatic(self) -> bool:
+        """Return whether the service selector is in automatic mode."""
+        if SERVICE_SELECTOR_AUTOMATIC in self.allowed_service_categories:
+            return True
+        return (
+            not self.allowed_service_categories
+            and self.service_exposure_mode == SERVICE_EXPOSURE_AUTOMATIC
+        )
+
+    @property
+    def manual_service_categories(self) -> frozenset[str]:
+        """Return the selected manual service categories only."""
+        return frozenset(
+            category_pk
+            for category_pk in self.allowed_service_categories
+            if category_pk not in {SERVICE_SELECTOR_AUTOMATIC, SERVICE_SELECTOR_NONE}
+        )
+
+    @property
+    def service_selector_exposes_services(self) -> bool:
+        """Return whether the current selector requires service detail data."""
+        return self.service_selector_is_automatic or bool(
+            self.manual_service_categories
+        )
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any] | None) -> Self:
         """Build a typed profile policy from stored entry options."""
         if not isinstance(data, dict):
-            return cls()
+            return cls(
+                allowed_service_categories=frozenset({SERVICE_SELECTOR_AUTOMATIC})
+            )
 
         threshold = data.get(CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES)
         if not isinstance(threshold, int):
@@ -435,6 +471,32 @@ class ControlDProfilePolicy:
             MIN_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
             min(MAX_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES, threshold),
         )
+        legacy_service_exposure_mode = data.get(
+            CONF_SERVICE_EXPOSURE_MODE, SERVICE_EXPOSURE_AUTOMATIC
+        )
+        if legacy_service_exposure_mode not in {
+            SERVICE_EXPOSURE_MANUAL,
+            SERVICE_EXPOSURE_AUTOMATIC,
+        }:
+            legacy_service_exposure_mode = SERVICE_EXPOSURE_AUTOMATIC
+
+        allowed_service_categories = frozenset(
+            item
+            for item in data.get(CONF_ALLOWED_SERVICE_CATEGORIES, [])
+            if isinstance(item, str) and item
+        )
+        if SERVICE_SELECTOR_NONE in allowed_service_categories:
+            allowed_service_categories = frozenset()
+            service_exposure_mode = SERVICE_EXPOSURE_MANUAL
+        elif not allowed_service_categories:
+            if legacy_service_exposure_mode == SERVICE_EXPOSURE_AUTOMATIC:
+                allowed_service_categories = frozenset({SERVICE_SELECTOR_AUTOMATIC})
+            service_exposure_mode = legacy_service_exposure_mode
+        elif SERVICE_SELECTOR_AUTOMATIC in allowed_service_categories:
+            allowed_service_categories = frozenset({SERVICE_SELECTOR_AUTOMATIC})
+            service_exposure_mode = SERVICE_EXPOSURE_AUTOMATIC
+        else:
+            service_exposure_mode = SERVICE_EXPOSURE_MANUAL
 
         return cls(
             managed_in_home_assistant=bool(
@@ -448,11 +510,8 @@ class ControlDProfilePolicy:
                 data.get(CONF_ENDPOINT_SENSORS_ENABLED, False)
             ),
             endpoint_inactivity_threshold_minutes=threshold,
-            allowed_service_categories=frozenset(
-                item
-                for item in data.get(CONF_ALLOWED_SERVICE_CATEGORIES, [])
-                if isinstance(item, str) and item
-            ),
+            service_exposure_mode=service_exposure_mode,
+            allowed_service_categories=allowed_service_categories,
             auto_enable_service_switches=bool(
                 data.get(CONF_AUTO_ENABLE_SERVICE_SWITCHES, False)
             ),
@@ -465,6 +524,13 @@ class ControlDProfilePolicy:
 
     def as_mapping(self) -> dict[str, Any]:
         """Serialize the policy into config-entry options storage."""
+        allowed_service_categories = sorted(self.allowed_service_categories)
+        if (
+            not allowed_service_categories
+            and self.service_exposure_mode == SERVICE_EXPOSURE_MANUAL
+        ):
+            allowed_service_categories = [SERVICE_SELECTOR_NONE]
+
         return {
             CONF_MANAGED_IN_HOME_ASSISTANT: self.managed_in_home_assistant,
             CONF_EXPOSE_EXTERNAL_FILTERS: self.expose_external_filters,
@@ -473,8 +539,7 @@ class ControlDProfilePolicy:
             CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES: (
                 self.endpoint_inactivity_threshold_minutes
             ),
-            CONF_ALLOWED_SERVICE_CATEGORIES: sorted(self.allowed_service_categories),
-            CONF_AUTO_ENABLE_SERVICE_SWITCHES: self.auto_enable_service_switches,
+            CONF_ALLOWED_SERVICE_CATEGORIES: allowed_service_categories,
             CONF_EXPOSED_CUSTOM_RULES: sorted(self.exposed_custom_rules),
         }
 
@@ -482,6 +547,9 @@ class ControlDProfilePolicy:
         self, rules_by_identity: dict[str, ControlDRule]
     ) -> set[str]:
         """Resolve stored explicit rule targets into concrete rule identities."""
+        if RULE_TARGET_ALL_ENTITIES in self.exposed_custom_rules:
+            return set(rules_by_identity)
+
         resolved: set[str] = set()
         for target in self.exposed_custom_rules:
             if target.startswith("rule:"):
@@ -494,6 +562,9 @@ class ControlDProfilePolicy:
         self, groups_by_pk: dict[str, ControlDRuleGroup]
     ) -> set[str]:
         """Resolve stored folder targets into concrete folder identifiers."""
+        if RULE_TARGET_ALL_ENTITIES in self.exposed_custom_rules:
+            return set(groups_by_pk)
+
         return {
             group_pk
             for target in self.exposed_custom_rules

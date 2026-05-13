@@ -232,8 +232,8 @@ class ControlDManagerProfileServiceModeSelect(
             if service_row is not None
             else f"Services / {service_pk}"
         )
-        self._attr_entity_registry_enabled_default = (
-            self.runtime.options.profile_policy(profile_pk).auto_enable_service_switches
+        self._attr_entity_registry_enabled_default = bool(
+            service_row is not None and service_row.auto_exposed
         )
 
     @property

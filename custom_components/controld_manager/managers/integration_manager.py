@@ -15,6 +15,7 @@ from ..models import (
     ControlDInventoryPayload,
     ControlDProfileOption,
     ControlDProfileOptionChoice,
+    ControlDProfilePolicy,
     ControlDRegistry,
     ControlDRule,
     ControlDRuleGroup,
@@ -92,9 +93,7 @@ class IntegrationManager(BaseManager):
                 profile_pk: self._normalize_services(
                     detail.services,
                     service_categories,
-                    self.runtime.options.profile_policy(
-                        profile_pk
-                    ).allowed_service_categories,
+                    self.runtime.options.profile_policy(profile_pk),
                     inventory.service_catalog,
                 )
                 for profile_pk, detail in inventory.profile_details.items()
@@ -163,11 +162,10 @@ class IntegrationManager(BaseManager):
         service_categories = self._normalize_service_categories(
             service_categories_payload
         )
-        enabled_categories = frozenset(service_categories)
         return self._normalize_services(
             services_payload,
             service_categories,
-            enabled_categories,
+            ControlDProfilePolicy(),
             service_catalog_payload,
         )
 
@@ -236,7 +234,9 @@ class IntegrationManager(BaseManager):
                 self._normalize_services(
                     services_payload,
                     service_categories,
-                    frozenset(service_categories),
+                    ControlDProfilePolicy(
+                        allowed_service_categories=frozenset(service_categories),
+                    ),
                     service_catalog_payload,
                 ).values(),
                 key=lambda service_row: (
@@ -464,43 +464,85 @@ class IntegrationManager(BaseManager):
     def _normalize_services(
         services_payload: tuple[dict[str, Any], ...],
         service_categories: dict[str, ControlDServiceCategory],
-        enabled_categories: frozenset[str],
+        profile_policy: ControlDProfilePolicy,
         service_catalog_payload: tuple[dict[str, Any], ...],
     ) -> dict[str, ControlDService]:
-        """Normalize service rows for the categories enabled by policy."""
+        """Normalize service rows for the selector-driven service contract."""
         live_services: dict[str, dict[str, Any]] = {}
         for payload in services_payload:
             service_pk = IntegrationManager._require_string(payload, "PK")
             live_services[service_pk] = payload
 
+        catalog_by_pk: dict[str, dict[str, Any]] = {}
+        for payload in service_catalog_payload:
+            service_pk = IntegrationManager._require_text(payload, "PK")
+            catalog_by_pk[service_pk] = payload
+
         services: dict[str, ControlDService] = {}
+        if profile_policy.service_selector_is_automatic:
+            for service_pk, live_payload in live_services.items():
+                catalog_payload = catalog_by_pk.get(service_pk)
+                service_row = IntegrationManager._build_service_row(
+                    catalog_payload if catalog_payload is not None else live_payload,
+                    live_payload,
+                    service_categories,
+                    auto_exposed=True,
+                )
+                services[service_pk] = service_row
+            return services
+
+        manual_categories = profile_policy.manual_service_categories
+        if not manual_categories:
+            return services
+
         for payload in service_catalog_payload:
             category_pk = IntegrationManager._require_string(payload, "category")
-            if category_pk not in enabled_categories:
+            if category_pk not in manual_categories:
                 continue
-            service_pk = IntegrationManager._require_text(payload, "PK")
-            live_payload = live_services.get(service_pk, {})
-            action = IntegrationManager._mapping_or_empty(live_payload.get("action"))
-            category_name = service_categories.get(category_pk)
-            services[service_pk] = ControlDService(
-                service_pk=service_pk,
-                name=IntegrationManager._require_text(payload, "name"),
-                category_pk=category_pk,
-                category_name=(
-                    category_name.name
-                    if category_name is not None
-                    else category_pk.replace("_", " ").title()
-                ),
-                enabled=bool(action.get("status", 0)),
-                action_do=(int(action["do"]) if "do" in action else 1),
-                via=IntegrationManager._optional_string(action.get("via")),
-                via_v6=IntegrationManager._optional_string(action.get("via_v6")),
-                warning=IntegrationManager._optional_string(payload.get("warning")),
-                unlock_location=IntegrationManager._optional_string(
-                    payload.get("unlock_location")
-                ),
+            service_row = IntegrationManager._build_service_row(
+                payload,
+                live_services.get(IntegrationManager._require_text(payload, "PK")),
+                service_categories,
+                auto_exposed=False,
             )
+            services[service_row.service_pk] = service_row
+
         return services
+
+    @staticmethod
+    def _build_service_row(
+        service_payload: dict[str, Any],
+        live_payload: dict[str, Any] | None,
+        service_categories: dict[str, ControlDServiceCategory],
+        *,
+        auto_exposed: bool,
+    ) -> ControlDService:
+        """Build one normalized service row from catalog and live inputs."""
+        service_pk = IntegrationManager._require_text(service_payload, "PK")
+        category_pk = IntegrationManager._require_string(service_payload, "category")
+        action = IntegrationManager._mapping_or_empty(
+            {} if live_payload is None else live_payload.get("action")
+        )
+        category_name = service_categories.get(category_pk)
+        return ControlDService(
+            service_pk=service_pk,
+            name=IntegrationManager._require_text(service_payload, "name"),
+            category_pk=category_pk,
+            category_name=(
+                category_name.name
+                if category_name is not None
+                else category_pk.replace("_", " ").title()
+            ),
+            auto_exposed=auto_exposed,
+            enabled=bool(action.get("status", 0)),
+            action_do=(int(action["do"]) if "do" in action else 1),
+            via=IntegrationManager._optional_string(action.get("via")),
+            via_v6=IntegrationManager._optional_string(action.get("via_v6")),
+            warning=IntegrationManager._optional_string(service_payload.get("warning")),
+            unlock_location=IntegrationManager._optional_string(
+                service_payload.get("unlock_location")
+            ),
+        )
 
     @staticmethod
     def _normalize_rules(

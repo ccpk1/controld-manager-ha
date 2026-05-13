@@ -257,18 +257,18 @@ Critical rules:
 - not every Control D setting needs a Home Assistant entity
 - prefer a smaller entity set with clear user value over exhaustive API mirroring
 - endpoint telemetry should remain entity-scoped under the owning profile device rather than expanding the Home Assistant device registry
-- high-cardinality profile surfaces such as filters, services, and rules should default to opt-in exposure
+- high-cardinality profile surfaces such as filters and rules should default to opt-in exposure
+- services use one compact exposure policy per profile: the all-active-services toggle exposes explicit live service rows, manual category selections expose only those categories, and leaving both off or empty exposes no services
 - endpoint surfaces should also default to opt-in exposure and should begin with one compact status-oriented entity rather than a large sensor set
 
 ### Options and exposure policy
 
 - `ConfigEntry.options` should store integration-owned exposure policy only, not mirrored upstream catalogs
 - profile-specific exposure choices must be keyed by immutable profile identifier under the entry options
-- profile policy is the correct home for profile management state, endpoint-sensor toggles, enabled service categories, per-profile service auto-enable behavior, exposed custom-rule targets, and later profile-scoped advanced settings such as endpoint inactivity thresholds
+- profile policy is the correct home for profile management state, endpoint-sensor toggles, one all-active-services toggle plus manual service-category selections, exposed custom-rule targets plus the all-rules toggle, and later profile-scoped advanced settings such as endpoint inactivity thresholds
 - filters should not create per-item options-storage burden in v1; they should be created automatically and rely on entity-registry defaults
-- service exposure should be stored by category, not by individual service row, unless a later UI proves that finer control is necessary
+- service exposure should be stored as compact policy, not individual mirrored service rows: one all-active-services toggle and zero-or-more manual categories unless a later UI proves that finer control is necessary
 - service entities created from an enabled category should default to disabled in the entity registry
-- any override that defaults category-created service entities to enabled must be treated as an advanced option and accompanied by a warning about large entity counts
 - rule exposure should store compact typed selections only, never full rule payload mirrors
 - endpoint status should be derived from a configurable per-profile activity threshold if the API continues to expose timestamp-only activity data
 

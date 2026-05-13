@@ -1,5 +1,7 @@
 # Endpoint and client update services
 
+Status: Completed and archived after implementation, documentation updates, and validation coverage.
+
 ## 1. Initiative snapshot
 
 - Goal: add safe Home Assistant write paths for client aliases and the validated endpoint-scoped `/devices/{device_id}` updates.

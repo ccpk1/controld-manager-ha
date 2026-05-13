@@ -8,7 +8,7 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from . import ControlDManagerConfigEntry
-from .const import CONF_API_TOKEN
+from .const import CONF_API_TOKEN, RULE_TARGET_ALL_ENTITIES
 
 TO_REDACT: set[str] = {"api_key", "token", "secret", CONF_API_TOKEN}
 
@@ -88,13 +88,19 @@ async def async_get_config_entry_diagnostics(
                             profile_pk
                         ).endpoint_inactivity_threshold_minutes
                     ),
-                    "allowed_service_categories": sorted(
+                    "service_selector": sorted(
                         runtime.options.profile_policy(
                             profile_pk
                         ).allowed_service_categories
                     ),
                     "exposed_custom_rules": sorted(
                         runtime.options.profile_policy(profile_pk).exposed_custom_rules
+                    ),
+                    "all_rules_selected": (
+                        RULE_TARGET_ALL_ENTITIES
+                        in runtime.options.profile_policy(
+                            profile_pk
+                        ).exposed_custom_rules
                     ),
                     "filter_count": len(
                         registry.filters_by_profile.get(profile_pk, {})

@@ -41,13 +41,18 @@ from .const import (
     MAX_REFRESH_INTERVAL,
     MIN_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
     MIN_REFRESH_INTERVAL,
+    RULE_TARGET_ALL_ENTITIES,
+    SERVICE_SELECTOR_AUTOMATIC,
+    TRANS_KEY_ALL_RULES_SELECTION_CONFLICT,
     TRANS_KEY_CANNOT_CONNECT,
     TRANS_KEY_INVALID_AUTH,
+    TRANS_KEY_SERVICE_SELECTOR_CONFLICT,
     TRANS_KEY_UNKNOWN,
 )
 from .models import (
     ControlDManagerRuntime,
     ControlDOptions,
+    ControlDProfilePolicy,
     ControlDRefreshIntervals,
     ControlDUser,
     build_rule_group_target,
@@ -67,6 +72,9 @@ async def _async_validate_input(
 
 
 STEP_USER_DATA_SCHEMA = vol.Schema({vol.Required(CONF_API_TOKEN): str})
+
+FIELD_EXPOSE_ALL_ACTIVE_SERVICES = "expose_all_active_services"
+FIELD_EXPOSE_ALL_CUSTOM_RULES = "expose_all_custom_rules"
 
 
 class ControlDManagerConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -328,6 +336,40 @@ class ControlDManagerOptionsFlow(OptionsFlow):
 
         profile_policy = self._options.profile_policy(self._selected_profile_pk)
         if user_input is not None:
+            expose_all_active_services = bool(
+                user_input[FIELD_EXPOSE_ALL_ACTIVE_SERVICES]
+            )
+            selected_service_categories = frozenset(
+                str(item) for item in user_input[CONF_ALLOWED_SERVICE_CATEGORIES]
+            )
+            if expose_all_active_services and selected_service_categories:
+                errors[CONF_ALLOWED_SERVICE_CATEGORIES] = (
+                    TRANS_KEY_SERVICE_SELECTOR_CONFLICT
+                )
+
+            expose_all_custom_rules = bool(user_input[FIELD_EXPOSE_ALL_CUSTOM_RULES])
+            selected_rule_targets = frozenset(user_input[CONF_EXPOSED_CUSTOM_RULES])
+            if expose_all_custom_rules and selected_rule_targets:
+                errors[CONF_EXPOSED_CUSTOM_RULES] = (
+                    TRANS_KEY_ALL_RULES_SELECTION_CONFLICT
+                )
+
+            if errors:
+                return self.async_show_form(
+                    step_id="edit_profile",
+                    data_schema=self._build_edit_profile_schema(
+                        profile_policy,
+                        service_categories,
+                        rule_targets,
+                    ),
+                    errors=errors,
+                    description_placeholders={
+                        "profile_name": profiles.get(
+                            self._selected_profile_pk, self._selected_profile_pk
+                        )
+                    },
+                )
+
             profile_policies = dict(self._options.profile_policies)
             profile_policies[self._selected_profile_pk] = replace(
                 profile_policy,
@@ -344,13 +386,20 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                 endpoint_inactivity_threshold_minutes=int(
                     user_input[CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES]
                 ),
-                allowed_service_categories=frozenset(
-                    user_input[CONF_ALLOWED_SERVICE_CATEGORIES]
+                service_exposure_mode=(
+                    "automatic" if expose_all_active_services else "manual"
                 ),
-                auto_enable_service_switches=(
-                    profile_policy.auto_enable_service_switches
+                allowed_service_categories=(
+                    frozenset({SERVICE_SELECTOR_AUTOMATIC})
+                    if expose_all_active_services
+                    else selected_service_categories
                 ),
-                exposed_custom_rules=frozenset(user_input[CONF_EXPOSED_CUSTOM_RULES]),
+                auto_enable_service_switches=False,
+                exposed_custom_rules=(
+                    frozenset({RULE_TARGET_ALL_ENTITIES})
+                    if expose_all_custom_rules
+                    else selected_rule_targets
+                ),
             )
             self._options = replace(self._options, profile_policies=profile_policies)
             await self._async_apply_updated_options()
@@ -358,65 +407,10 @@ class ControlDManagerOptionsFlow(OptionsFlow):
 
         return self.async_show_form(
             step_id="edit_profile",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_MANAGED_IN_HOME_ASSISTANT,
-                        default=profile_policy.managed_in_home_assistant,
-                    ): selector.BooleanSelector(),
-                    vol.Required(
-                        CONF_EXPOSE_EXTERNAL_FILTERS,
-                        default=profile_policy.expose_external_filters,
-                    ): selector.BooleanSelector(),
-                    vol.Required(
-                        CONF_ADVANCED_PROFILE_OPTIONS,
-                        default=profile_policy.advanced_profile_options,
-                    ): selector.BooleanSelector(),
-                    vol.Required(
-                        CONF_ALLOWED_SERVICE_CATEGORIES,
-                        default=sorted(profile_policy.allowed_service_categories),
-                    ): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=[
-                                selector.SelectOptionDict(
-                                    value=category_pk,
-                                    label=label,
-                                )
-                                for category_pk, label in service_categories.items()
-                            ],
-                            multiple=True,
-                            mode=selector.SelectSelectorMode.DROPDOWN,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_EXPOSED_CUSTOM_RULES,
-                        default=sorted(profile_policy.exposed_custom_rules),
-                    ): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=[
-                                selector.SelectOptionDict(value=target, label=label)
-                                for target, label in rule_targets.items()
-                            ],
-                            multiple=True,
-                            mode=selector.SelectSelectorMode.DROPDOWN,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_ENDPOINT_SENSORS_ENABLED,
-                        default=profile_policy.endpoint_sensors_enabled,
-                    ): selector.BooleanSelector(),
-                    vol.Required(
-                        CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
-                        default=profile_policy.endpoint_inactivity_threshold_minutes,
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=MIN_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
-                            max=MAX_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
-                            mode=selector.NumberSelectorMode.BOX,
-                            step=1,
-                        )
-                    ),
-                }
+            data_schema=self._build_edit_profile_schema(
+                profile_policy,
+                service_categories,
+                rule_targets,
             ),
             errors=errors,
             description_placeholders={
@@ -424,6 +418,90 @@ class ControlDManagerOptionsFlow(OptionsFlow):
                     self._selected_profile_pk, self._selected_profile_pk
                 )
             },
+        )
+
+    def _build_edit_profile_schema(
+        self,
+        profile_policy: ControlDProfilePolicy,
+        service_categories: dict[str, str],
+        rule_targets: dict[str, str],
+    ) -> vol.Schema:
+        """Build the per-profile edit schema."""
+        service_category_options = [
+            selector.SelectOptionDict(
+                value=category_pk,
+                label=label,
+            )
+            for category_pk, label in service_categories.items()
+        ]
+
+        return vol.Schema(
+            {
+                vol.Required(
+                    CONF_MANAGED_IN_HOME_ASSISTANT,
+                    default=profile_policy.managed_in_home_assistant,
+                ): selector.BooleanSelector(),
+                vol.Required(
+                    CONF_EXPOSE_EXTERNAL_FILTERS,
+                    default=profile_policy.expose_external_filters,
+                ): selector.BooleanSelector(),
+                vol.Required(
+                    CONF_ADVANCED_PROFILE_OPTIONS,
+                    default=profile_policy.advanced_profile_options,
+                ): selector.BooleanSelector(),
+                vol.Required(
+                    FIELD_EXPOSE_ALL_ACTIVE_SERVICES,
+                    default=profile_policy.service_selector_is_automatic,
+                ): selector.BooleanSelector(),
+                vol.Required(
+                    CONF_ALLOWED_SERVICE_CATEGORIES,
+                    default=sorted(profile_policy.manual_service_categories),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=service_category_options,
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Required(
+                    FIELD_EXPOSE_ALL_CUSTOM_RULES,
+                    default=(
+                        RULE_TARGET_ALL_ENTITIES in profile_policy.exposed_custom_rules
+                    ),
+                ): selector.BooleanSelector(),
+                vol.Required(
+                    CONF_EXPOSED_CUSTOM_RULES,
+                    default=sorted(
+                        target
+                        for target in profile_policy.exposed_custom_rules
+                        if target != RULE_TARGET_ALL_ENTITIES
+                    ),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            selector.SelectOptionDict(value=target, label=label)
+                            for target, label in rule_targets.items()
+                        ],
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Required(
+                    CONF_ENDPOINT_SENSORS_ENABLED,
+                    default=profile_policy.endpoint_sensors_enabled,
+                ): selector.BooleanSelector(),
+                vol.Required(
+                    CONF_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
+                    default=profile_policy.endpoint_inactivity_threshold_minutes,
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=MIN_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
+                        max=MAX_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
+                        mode=selector.NumberSelectorMode.BOX,
+                        step=1,
+                    )
+                ),
+            }
         )
 
     async def async_step_integration_settings(

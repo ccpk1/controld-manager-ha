@@ -57,6 +57,15 @@ class EntityManager(BaseManager):
         registered = self._registered_platforms[platform]
         desired_keys = self._desired_keys(platform)
         desired_unique_ids = self._desired_unique_ids(platform, desired_keys)
+        keys_to_reset: set[str] = set()
+
+        if platform == "select":
+            keys_to_reset = self._async_reenable_automatic_service_selects(
+                registered, desired_unique_ids
+            )
+            for key in keys_to_reset:
+                registered.live_entities.pop(key, None)
+
         live_keys = set(registered.live_entities)
 
         new_keys = desired_keys - live_keys
@@ -80,6 +89,54 @@ class EntityManager(BaseManager):
 
         if platform == "binary_sensor":
             await self._async_reconcile_endpoint_sensor_attachments()
+
+    def _async_reenable_automatic_service_selects(
+        self,
+        registered: RegisteredPlatform,
+        desired_unique_ids: set[str],
+    ) -> set[str]:
+        """Re-enable automatic service selects when the selector now requires it."""
+        entity_registry = er.async_get(self.runtime.active_coordinator.hass)
+        keys_to_reset: set[str] = set()
+
+        for entity_entry in er.async_entries_for_config_entry(
+            entity_registry, self.runtime.entry_id
+        ):
+            if entity_entry.platform != DOMAIN or entity_entry.domain != "select":
+                continue
+            if "::service::" not in entity_entry.unique_id:
+                continue
+            if entity_entry.unique_id not in desired_unique_ids:
+                continue
+            if entity_entry.disabled_by is not er.RegistryEntryDisabler.INTEGRATION:
+                continue
+            service_key = entity_entry.unique_id.removeprefix(
+                f"{self.runtime.instance_id}::"
+            )
+            if not self._is_automatic_service_select(service_key):
+                continue
+
+            entity_registry.async_update_entity(
+                entity_entry.entity_id,
+                disabled_by=None,
+            )
+
+            for key, entity in registered.live_entities.items():
+                if entity.unique_id == entity_entry.unique_id:
+                    keys_to_reset.add(key)
+                    break
+
+        return keys_to_reset
+
+    def _is_automatic_service_select(self, service_key: str) -> bool:
+        """Return whether one desired service select is automatic under policy."""
+        if not service_key.startswith("profile::") or "::service::" not in service_key:
+            return False
+        _, profile_pk, _, service_pk = service_key.split("::", 3)
+        service_row = self.runtime.registry.services_by_profile.get(profile_pk, {}).get(
+            service_pk
+        )
+        return service_row is not None and service_row.auto_exposed
 
     def _desired_unique_ids(self, platform: str, desired_keys: set[str]) -> set[str]:
         """Return the stable unique IDs that should exist for one platform."""

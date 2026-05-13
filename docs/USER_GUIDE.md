@@ -125,13 +125,26 @@ Each profile can be configured with these controls:
 	Turns on the larger profile option set for that profile. These extra controls
 	are added in Home Assistant but stay off by default until you enable the ones
 	you want.
-- Allowed service categories
-	Selects which Control D service categories are created in Home Assistant.
-	New entities from these categories are created disabled by default because
+- Expose all active services
+	Turns on exposure for the current explicit live service rows already present on
+	the Control D profile.
+	This cannot be combined with specific service category selections.
+	This is the default for new entries and for migrated profiles that did not
+	have stored manual categories.
+- Service categories
+	Select one or more categories to expose only those services.
+	This cannot be combined with Expose all active services.
+	New entities from category exposure are created disabled by default because
 	some categories can create a large number of entities.
-- Expose custom rules
+	If no categories are selected and Expose all active services is off, Home
+	Assistant exposes no service entities for that profile.
+- Expose all custom rules
+	Turns on exposure for every current folder and custom rule on that profile.
+	This cannot be combined with specific custom rule selections.
+- Custom rules
 	Lets you expose selected rule folders or individual custom rules as Home
 	Assistant controls.
+	This cannot be combined with Expose all custom rules.
 - Expose endpoint sensors
 	Creates endpoint activity entities for devices that belong to that profile.
 - Endpoint inactivity threshold (minutes)
@@ -141,6 +154,14 @@ Each profile can be configured with these controls:
 The endpoint controls are intentionally kept at the bottom of the profile form
 so the service-category and custom-rule exposure decisions stay grouped
 together.
+
+Home Assistant remembers entity-registry enable or disable choices after an
+entity has been created. The integration handles the normal defaults for newly
+created surfaces and removes entities when an exposure path is no longer
+eligible, but it cannot safely override every manual registry change you may
+have made earlier. After changing options-flow exposure settings, you may still
+need to re-enable or disable some entities to match your preferred registry
+state.
 
 ### Integration settings
 This form controls the active refresh cadence.
@@ -158,6 +179,9 @@ activity, and analytics refresh. Separate polling controls are not exposed.
 Home Assistant diagnostics for a Control D config entry include redacted entry
 data plus a runtime summary of refresh intervals, sync status, registry counts,
 and per-profile policy scope.
+
+That policy scope includes the current service policy for each profile and
+whether Expose all custom rules is active.
 
 When the refresh path fails repeatedly, the integration records one unavailable
 transition and one recovery transition instead of logging the same outage on
@@ -199,8 +223,10 @@ Profile surfaces can include:
 - filter switches
 - filter mode selectors where the upstream filter supports multiple levels
 - profile option switches and selectors
-- service mode selectors for allowed service categories
-- custom rule switches and rule folder selectors
+- service mode selectors for either explicit live service rows or manually
+	selected service categories
+- custom rule switches and rule folder selectors for either explicit manual
+	picks or the Expose all custom rules toggle
 - endpoint status entities for endpoints owned by that profile when enabled
 
 ## Account entities
@@ -412,8 +438,17 @@ In practice:
 
 ### Service mode selectors
 
-Service mode selectors are only created for the service categories you allow in
-the profile options.
+Service mode selectors follow the service exposure controls for each profile.
+
+- turning on Expose all active services exposes only the explicit live service
+	rows already present on the Control D profile
+- selecting manual service categories exposes only services from the categories
+	you choose in the profile options
+- leaving both the all-services toggle off and the category selector empty
+	exposes no service entities for that profile
+
+Expose all active services is the default because it follows the smaller set of
+services you already chose upstream instead of forcing broad category exposure.
 
 Supported options are `Off`, `Blocked`, `Bypassed`, and `Redirected`.
 
@@ -432,14 +467,17 @@ Profile options can appear as either switches or selectors.
 
 ### Custom rules and rule folders
 
-Custom rules are only created for the rule folders or individual rules you
-choose in the profile options.
+Custom rule entities can be created in either of these ways:
+
+- choose specific rule folders or individual rules in the profile options
+- turn on Expose all custom rules for the profile
 
 - a rule folder appears as a selector because you choose a folder-wide action
 - an individual rule appears as a switch because you are simply turning that
 	rule on or off
 - you can expose both a folder and individual rules inside that folder when you
-	want both kinds of control
+	want both kinds of control, but you cannot combine those manual picks with the
+	Expose all custom rules toggle
 
 ### Endpoint status entities
 
@@ -988,12 +1026,20 @@ persistent state across Home Assistant restarts.
 	Control D preferences on the website.
 - If a profile should disappear from Home Assistant, verify that Enable
 	management in Home Assistant is turned off for that profile.
-- If expected service controls are missing, verify that the relevant service
-	categories are enabled for that profile.
+- If expected service controls are missing, verify that either Expose all
+	active services is on for that profile or the relevant service categories are
+	selected for that profile.
 - If expected 3rd-party filter entities are missing, verify that Expose
 	3rd-party filters is turned on for that profile.
-- If expected custom rule controls are missing, verify that the specific rules
-	or rule folders are exposed for that profile.
+- If expected custom rule controls are missing, verify that either Expose all
+	custom rules is on for that profile or the specific rules or rule folders are
+	exposed for that profile.
 - If expected profile options are missing, verify that the profile is managed
 	in Home Assistant and that Expose advanced profile options is turned on when
 	you expect the larger option set.
+- If entities stay enabled or disabled after you change profile exposure
+	settings, remember that Home Assistant keeps entity-registry enable or disable
+	state after entities are created. The integration handles the normal default
+	state for newly created entities and basic cleanup when exposure is removed,
+	but manual registry changes may still require you to re-enable or disable
+	entities yourself.

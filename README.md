@@ -63,7 +63,7 @@ Control D Manager goes beyond a basic status integration. It gives Home Assistan
 ### Highlights
 
 - Zero entity bloat by default: the integration starts with a compact core surface, then lets you opt into the higher-cardinality Control D objects you actually want exposed.
-- Goldilocks entity expansion: Control D can surface thousands of possible filters, services, and options, but Home Assistant only creates the categories and profile surfaces you deliberately enable.
+- Goldilocks entity expansion: Control D can surface thousands of possible filters, services, and options, but Home Assistant only creates the profile surfaces you deliberately enable, with one selector-driven service model that can follow live upstream rows or expose specific categories.
 - Native profile operations: disable profiles, change service modes, adjust filters, modify options, and work with custom rules directly from Home Assistant.
 - Endpoint activity visibility: expose per-endpoint activity entities to see when clients were last active on Control D and which profile currently owns them.
 - Automation-ready service layer: the integration is built for scripts and automations as much as dashboards, including temporary policy changes and copyable catalog discovery.
@@ -72,9 +72,11 @@ Control D Manager goes beyond a basic status integration. It gives Home Assistan
 ### Profile-centric control
 
 - Create one Home Assistant account device per Control D instance and one device per managed profile.
-- Expose profile disable state, filters, filter modes, service modes, profile options, default-rule behavior, and selected custom rules as native Home Assistant entities.
+- Expose profile disable state, filters, filter modes, service modes, profile options, default-rule behavior, and selected or all-live custom rules as native Home Assistant entities.
 - Keep endpoint activity visible through compact endpoint status entities without creating a device-registry explosion.
-- Use the options flow to choose which profiles and high-cardinality surfaces Home Assistant should expose.
+- Use the options flow to choose which profiles and high-cardinality surfaces Home Assistant should expose, including whether a profile should expose all active services, selected service categories, all custom rules, selected custom rules, or no entities for those surfaces.
+
+Home Assistant also remembers entity-registry enable or disable choices after entities are created. Control D Manager handles the normal default-enabled and default-disabled behavior for newly created or removed surfaces, but if you previously changed entity enablement manually you may still need to re-enable or disable some entities after changing options-flow exposure settings.
 
 That opt-in model matters with Control D because the available surface is enormous. The integration is capable of exposing very large numbers of filters, services, and options as Home Assistant entities, but it does so thoughtfully so your registry stays usable instead of turning into a wall of noise.
 
@@ -121,9 +123,9 @@ Control D pairs especially well with environments that already use profile-based
 | Feature | Description |
 | --- | --- |
 | Profile devices | Dedicated Home Assistant devices for the Control D account and each managed profile, giving rules, controls, analytics, and endpoints a clean home. |
-| Dynamic routing | Change supported service modes such as Off, Blocked, Bypassed, or Redirected from Home Assistant. |
+| Dynamic routing | Change supported service modes such as Off, Blocked, Bypassed, or Redirected from Home Assistant with a selector-driven service surface that can follow live upstream rows or selected categories. |
 | Endpoint hygiene | Rename endpoints, tune endpoint analytics logging, and clean up client aliases from Home Assistant without turning those high-churn surfaces into extra entities. |
-| Custom rule exposure | Opt in to expose selected rule folders or individual custom rules as Home Assistant controls. |
+| Custom rule exposure | Opt in to expose selected rule folders, individual custom rules, or the full live rule surface for a profile. |
 | Tamper-detection hooks | Cross-reference endpoint activity with router or firewall visibility to spot likely DNS bypass behavior. |
 | Stateless pausing | Temporarily disable a profile with a duration while Control D handles the upstream countdown. |
 

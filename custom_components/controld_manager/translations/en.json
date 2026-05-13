@@ -35,6 +35,10 @@
     }
   },
   "options": {
+    "error": {
+      "service_selector_conflict": "Expose all active services cannot be combined with specific service category selections.",
+      "all_rules_selection_conflict": "All custom rules cannot be combined with specific folder or rule selections."
+    },
     "step": {
       "init": {
         "title": "Control D settings",
@@ -56,19 +60,23 @@
           "managed_in_home_assistant": "Enable management in Home Assistant",
           "expose_external_filters": "Expose 3rd-party filters",
           "advanced_profile_options": "Expose advanced profile options",
+          "expose_all_active_services": "Expose all active services",
           "endpoint_sensors_enabled": "Expose endpoint sensors",
           "endpoint_inactivity_threshold_minutes": "Endpoint inactivity threshold (minutes)",
-          "allowed_service_categories": "Allowed service categories",
-          "exposed_custom_rules": "Expose custom rules"
+          "allowed_service_categories": "Service categories",
+          "expose_all_custom_rules": "Expose all custom rules",
+          "exposed_custom_rules": "Custom rules"
         },
         "data_description": {
           "managed_in_home_assistant": "Turn off to exclude this profile and remove its entities from Home Assistant.",
           "expose_external_filters": "Create disabled-by-default entities for available 3rd-party filters while still keeping them available to services either way.",
           "advanced_profile_options": "Create the remaining profile option entities for this profile in disabled-by-default state.",
+          "expose_all_active_services": "Turn on to expose the current explicit profile service rows. This cannot be combined with specific service category selections. Leave off to expose only the selected service categories below, or no service entities if no categories are selected.",
           "endpoint_sensors_enabled": "Create telemetry entities for devices under this profile.",
           "endpoint_inactivity_threshold_minutes": "How long before an endpoint is marked as inactive.",
-          "allowed_service_categories": "Select which service categories to create in Home Assistant. New entities from these categories are created disabled by default due to high count in some categories.",
-          "exposed_custom_rules": "Select specific custom rule folders or domains to expose as switches."
+          "allowed_service_categories": "Select one or more categories to expose only those services. This cannot be combined with Expose all active services. Category-created entities are disabled by default.",
+          "expose_all_custom_rules": "Turn on to expose every current folder and custom rule for this profile. This cannot be combined with specific custom rule selections. Leave off to expose only the selected custom rules below, or no custom rule entities if none are selected.",
+          "exposed_custom_rules": "Select specific custom rule folders or domains to expose as switches. This cannot be combined with Expose all custom rules."
         }
       },
       "integration_settings": {
