@@ -18,6 +18,8 @@ from .const import (
     ATTR_ATTACHED_PROFILES,
     ATTR_LAST_ACTIVE,
     ATTR_PARENT_DEVICE_ID,
+    ITEM_NAME_STATUS,
+    ITEM_TYPE_STATUS,
     PURPOSE_ENDPOINT_STATUS,
     TRANS_KEY_ENTITY_ENDPOINT_STATUS,
 )
@@ -75,6 +77,8 @@ class ControlDManagerEndpointStatusBinarySensor(
     _attr_translation_key = TRANS_KEY_ENTITY_ENDPOINT_STATUS
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _purpose = PURPOSE_ENDPOINT_STATUS
+    _item_type = ITEM_TYPE_STATUS
+    _item_name = ITEM_NAME_STATUS
 
     def __init__(
         self,

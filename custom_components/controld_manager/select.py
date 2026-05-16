@@ -20,11 +20,22 @@ from .const import (
     ATTR_SUGGESTED_REDIRECT_TARGET,
     DEFAULT_ENABLED_FILTERS,
     DOMAIN,
+    ITEM_NAME_DEFAULT_RULE,
+    ITEM_TYPE_DEFAULT_RULE,
+    ITEM_TYPE_FILTER_MODE,
+    ITEM_TYPE_OPTION,
+    ITEM_TYPE_RULE_GROUP,
+    ITEM_TYPE_SERVICE,
     PURPOSE_PROFILE_DEFAULT_RULE,
     PURPOSE_PROFILE_FILTER_MODE,
     PURPOSE_PROFILE_OPTION,
     PURPOSE_PROFILE_RULE_GROUP,
     PURPOSE_PROFILE_SERVICE,
+    TAXONOMY_FILTERS,
+    TAXONOMY_OPTIONS,
+    TAXONOMY_RULES,
+    TAXONOMY_RULES_FOLDER,
+    TAXONOMY_SERVICES,
     TRANS_KEY_DEFAULT_RULE_MODE_UNSUPPORTED,
     TRANS_KEY_DEFAULT_RULE_NOT_FOUND,
     TRANS_KEY_DEFAULT_RULE_UPDATE_FAILED,
@@ -129,6 +140,7 @@ class ControlDManagerProfileFilterModeSelect(
 
     _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_FILTER_MODE
     _purpose = PURPOSE_PROFILE_FILTER_MODE
+    _item_type = ITEM_TYPE_FILTER_MODE
 
     def __init__(
         self,
@@ -182,6 +194,17 @@ class ControlDManagerProfileFilterModeSelect(
             return None
         return filter_row.effective_level_title
 
+    @property
+    def item_name(self) -> str:
+        """Return the filter metadata leaf name."""
+        filter_row = self.filter_row
+        return filter_row.name if filter_row is not None else self._filter_pk
+
+    @property
+    def taxonomy_path(self) -> list[str]:
+        """Return the filter taxonomy path."""
+        return [TAXONOMY_FILTERS]
+
     def select_option(self, option: str) -> None:
         """Select option is handled asynchronously by Home Assistant."""
         raise NotImplementedError
@@ -216,6 +239,7 @@ class ControlDManagerProfileServiceModeSelect(
 
     _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_SERVICE
     _purpose = PURPOSE_PROFILE_SERVICE
+    _item_type = ITEM_TYPE_SERVICE
 
     def __init__(
         self,
@@ -262,6 +286,20 @@ class ControlDManagerProfileServiceModeSelect(
         return service_row.current_mode
 
     @property
+    def item_name(self) -> str:
+        """Return the service metadata leaf name."""
+        service_row = self.service_row
+        return service_row.name if service_row is not None else self._service_pk
+
+    @property
+    def taxonomy_path(self) -> list[str]:
+        """Return the service taxonomy path."""
+        service_row = self.service_row
+        if service_row is None:
+            return [TAXONOMY_SERVICES]
+        return [TAXONOMY_SERVICES, service_row.category_name]
+
+    @property
     def extra_state_attributes(self) -> dict[str, object] | None:
         """Return live service metadata including redirect details."""
         attributes = dict(super().extra_state_attributes or {})
@@ -306,6 +344,8 @@ class ControlDManagerProfileDefaultRuleSelect(
 
     _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_DEFAULT_RULE
     _purpose = PURPOSE_PROFILE_DEFAULT_RULE
+    _item_type = ITEM_TYPE_DEFAULT_RULE
+    _item_name = ITEM_NAME_DEFAULT_RULE
 
     def __init__(
         self,
@@ -340,6 +380,11 @@ class ControlDManagerProfileDefaultRuleSelect(
             return None
         return default_rule_row.current_mode
 
+    @property
+    def taxonomy_path(self) -> list[str]:
+        """Return the default-rule taxonomy path."""
+        return [TAXONOMY_OPTIONS]
+
     def select_option(self, option: str) -> None:
         """Select option is handled asynchronously by Home Assistant."""
         raise NotImplementedError
@@ -367,6 +412,7 @@ class ControlDManagerProfileRuleGroupSelect(ControlDManagerProfileEntity, Select
 
     _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_RULE_GROUP
     _purpose = PURPOSE_PROFILE_RULE_GROUP
+    _item_type = ITEM_TYPE_RULE_GROUP
 
     def __init__(
         self,
@@ -410,6 +456,17 @@ class ControlDManagerProfileRuleGroupSelect(ControlDManagerProfileEntity, Select
             return None
         return group_row.current_mode
 
+    @property
+    def item_name(self) -> str:
+        """Return the rule-group metadata leaf name."""
+        group_row = self.group_row
+        return group_row.name if group_row is not None else self._group_pk
+
+    @property
+    def taxonomy_path(self) -> list[str]:
+        """Return the rule-group taxonomy path."""
+        return [TAXONOMY_RULES, TAXONOMY_RULES_FOLDER]
+
     def select_option(self, option: str) -> None:
         """Select option is handled asynchronously by Home Assistant."""
         raise NotImplementedError
@@ -437,6 +494,7 @@ class ControlDManagerProfileOptionSelect(ControlDManagerProfileEntity, SelectEnt
 
     _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_OPTION
     _purpose = PURPOSE_PROFILE_OPTION
+    _item_type = ITEM_TYPE_OPTION
 
     def __init__(
         self,
@@ -487,6 +545,17 @@ class ControlDManagerProfileOptionSelect(ControlDManagerProfileEntity, SelectEnt
         if option_row is None:
             return None
         return option_row.current_select_option
+
+    @property
+    def item_name(self) -> str:
+        """Return the option metadata leaf name."""
+        option_row = self.option_row
+        return option_row.title if option_row is not None else self._option_pk
+
+    @property
+    def taxonomy_path(self) -> list[str]:
+        """Return the option taxonomy path."""
+        return [TAXONOMY_OPTIONS]
 
     def select_option(self, option: str) -> None:
         """Select option is handled asynchronously by Home Assistant."""

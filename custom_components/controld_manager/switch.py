@@ -27,10 +27,19 @@ from .const import (
     DEFAULT_DISABLE_MINUTES,
     DEFAULT_ENABLED_FILTERS,
     DOMAIN,
+    ITEM_NAME_PAUSED,
+    ITEM_TYPE_FILTER,
+    ITEM_TYPE_OPTION,
+    ITEM_TYPE_PROFILE_PAUSE,
+    ITEM_TYPE_RULE,
     PURPOSE_PROFILE_FILTER,
     PURPOSE_PROFILE_OPTION,
     PURPOSE_PROFILE_PAUSE,
     PURPOSE_PROFILE_RULE,
+    TAXONOMY_FILTERS,
+    TAXONOMY_OPTIONS,
+    TAXONOMY_RULES,
+    TAXONOMY_RULES_DOMAIN,
     TRANS_KEY_DISABLE_FILTER_FAILED,
     TRANS_KEY_DISABLE_OPTION_FAILED,
     TRANS_KEY_DISABLE_PROFILE_FAILED,
@@ -113,6 +122,8 @@ class ControlDManagerProfilePausedSwitch(ControlDManagerProfileEntity, SwitchEnt
 
     _attr_translation_key = TRANS_KEY_ENTITY_PAUSED
     _purpose = PURPOSE_PROFILE_PAUSE
+    _item_type = ITEM_TYPE_PROFILE_PAUSE
+    _item_name = ITEM_NAME_PAUSED
 
     def __init__(
         self, config_entry: ConfigEntry[ControlDManagerRuntime], profile_pk: str
@@ -179,6 +190,7 @@ class ControlDManagerProfileFilterSwitch(ControlDManagerProfileEntity, SwitchEnt
 
     _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_FILTER
     _purpose = PURPOSE_PROFILE_FILTER
+    _item_type = ITEM_TYPE_FILTER
 
     def __init__(
         self,
@@ -218,6 +230,17 @@ class ControlDManagerProfileFilterSwitch(ControlDManagerProfileEntity, SwitchEnt
         """Return whether the filter is enabled."""
         filter_row = self.filter_row
         return bool(filter_row is not None and filter_row.enabled)
+
+    @property
+    def item_name(self) -> str:
+        """Return the filter metadata leaf name."""
+        filter_row = self.filter_row
+        return filter_row.name if filter_row is not None else self._filter_pk
+
+    @property
+    def taxonomy_path(self) -> list[str]:
+        """Return the filter taxonomy path."""
+        return [TAXONOMY_FILTERS]
 
     def turn_on(self, **kwargs: object) -> None:
         """Switch turn_on is handled asynchronously by Home Assistant."""
@@ -261,6 +284,7 @@ class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntit
 
     _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_RULE
     _purpose = PURPOSE_PROFILE_RULE
+    _item_type = ITEM_TYPE_RULE
 
     def __init__(
         self,
@@ -300,6 +324,22 @@ class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntit
             and rule_row.enabled
             and not self._rule_is_expired(rule_row)
         )
+
+    @property
+    def item_name(self) -> str:
+        """Return the rule metadata leaf name."""
+        rule_row = self.rule_row
+        if rule_row is None:
+            return self._rule_identity
+        return rule_row.rule_pk
+
+    @property
+    def taxonomy_path(self) -> list[str]:
+        """Return the rule taxonomy path."""
+        rule_row = self.rule_row
+        if rule_row is None or rule_row.group_name is None:
+            return [TAXONOMY_RULES, TAXONOMY_RULES_DOMAIN]
+        return [TAXONOMY_RULES, rule_row.group_name]
 
     @staticmethod
     def _rule_is_expired(rule_row: ControlDRule) -> bool:
@@ -367,6 +407,7 @@ class ControlDManagerProfileOptionSwitch(ControlDManagerProfileEntity, SwitchEnt
 
     _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_OPTION
     _purpose = PURPOSE_PROFILE_OPTION
+    _item_type = ITEM_TYPE_OPTION
 
     def __init__(
         self,
@@ -410,6 +451,17 @@ class ControlDManagerProfileOptionSwitch(ControlDManagerProfileEntity, SwitchEnt
         """Return whether the option is enabled."""
         option_row = self.option_row
         return bool(option_row is not None and option_row.is_enabled)
+
+    @property
+    def item_name(self) -> str:
+        """Return the option metadata leaf name."""
+        option_row = self.option_row
+        return option_row.title if option_row is not None else self._option_pk
+
+    @property
+    def taxonomy_path(self) -> list[str]:
+        """Return the option taxonomy path."""
+        return [TAXONOMY_OPTIONS]
 
     def turn_on(self, **kwargs: object) -> None:
         """Switch turn_on is handled asynchronously by Home Assistant."""

@@ -197,7 +197,9 @@ Rules:
 - `_attr_has_entity_name = True` should be used where appropriate
 - user-facing naming must be translation-backed
 - mutable labels must not affect identity
-- purpose metadata should be exposed when it materially clarifies the entity's role
+- shared metadata should be exposed consistently so entities can be selected programmatically without depending on display names alone
+- the shared metadata contract includes `integration`, `profile_name`, `purpose`, `item_type`, `taxonomy_path`, and `item_name`
+- `taxonomy_path` must describe only the hierarchy above the leaf item and must not duplicate the semantic leaf already represented by `item_type`
 
 ### Entity naming contract
 
