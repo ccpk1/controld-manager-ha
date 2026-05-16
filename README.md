@@ -108,6 +108,7 @@ This makes it possible to target profiles by name or identity, clean up endpoint
 - Account-level and profile-level sensors expose total queries, blocked queries, blocked-query ratio, bypassed queries, redirected queries, and status.
 - A diagnostic `Sync now` button lets you force an immediate refresh after making changes in Control D.
 - Endpoint status entities use last-activity data and profile-level inactivity thresholds to show whether a client is still active.
+- Every entity exposes shared metadata attributes such as `integration`, `profile_name`, `purpose`, `item_type`, `taxonomy_path`, and `item_name`, making dashboards, templates, and automations less dependent on entity-name parsing.
 - Several analytics sensors intentionally align with the `custom:pi-hole` card's expected translation keys, giving you a practical way to reuse existing DNS dashboard layouts.
 
 👉 Check the [Pi-hole card example in the user guide](docs/USER_GUIDE.md#pi-hole-card) for a ready-to-use YAML snippet you can drop into a `custom:pi-hole` dashboard.

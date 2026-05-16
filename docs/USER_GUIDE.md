@@ -229,6 +229,44 @@ Profile surfaces can include:
 	picks or the Expose all custom rules toggle
 - endpoint status entities for endpoints owned by that profile when enabled
 
+### Shared entity metadata
+
+Every entity created by the integration exposes a shared metadata contract in
+its state attributes.
+
+Shared attributes:
+
+- `integration`
+	Always `controld_manager`.
+- `profile_name`
+	Uses `Account` for account-scoped entities, the owning profile name for
+	profile entities, and the current owning profile name for endpoint entities.
+- `purpose`
+	The raw purpose key that explains what the entity controls or represents.
+- `item_type`
+	A stable machine-friendly type such as `status`, `summary_metric`,
+	`analytics_metric`, `filter`, `service`, `rule`, `option`, or
+	`profile_pause`.
+- `taxonomy_path`
+	An ordered list of Control D hierarchy labels above the leaf item. Non-control
+	surfaces usually expose an empty list.
+- `item_name`
+	The leaf item label represented by the entity.
+
+Examples:
+
+- Account status:
+	`profile_name=Account`, `item_type=status`, `taxonomy_path=[]`
+- Profile service select:
+	`profile_name=Primary`, `item_type=service`,
+	`taxonomy_path=["Services", "Audio"]`, `item_name=Amazon Music`
+- Rule switch:
+	`item_type=rule`, `taxonomy_path=["Rules", "Domain"]` or the current rule
+	folder name when the rule belongs to a folder
+
+These attributes are intended to make automations, templates, and dashboard
+filters more robust without relying on entity-name parsing.
+
 ## Account entities
 
 ### Status

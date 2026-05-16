@@ -8,7 +8,16 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTR_PURPOSE
+from .const import (
+    ATTR_INTEGRATION,
+    ATTR_ITEM_NAME,
+    ATTR_ITEM_TYPE,
+    ATTR_PROFILE_NAME,
+    ATTR_PURPOSE,
+    ATTR_TAXONOMY_PATH,
+    DOMAIN,
+    PROFILE_NAME_ACCOUNT,
+)
 from .coordinator import ControlDManagerDataUpdateCoordinator
 from .models import (
     ControlDEndpointSummary,
@@ -22,6 +31,8 @@ class ControlDManagerEntity(CoordinatorEntity[ControlDManagerDataUpdateCoordinat
 
     _attr_has_entity_name = True
     _purpose: str | None = None
+    _item_type: str | None = None
+    _item_name: str | None = None
 
     def __init__(
         self,
@@ -44,11 +55,36 @@ class ControlDManagerEntity(CoordinatorEntity[ControlDManagerDataUpdateCoordinat
         return self._runtime
 
     @property
+    def item_name(self) -> str | None:
+        """Return the metadata leaf label for the entity."""
+        if self._item_name is not None:
+            return self._item_name
+        item_name = getattr(self, "_attr_name", None)
+        if isinstance(item_name, str):
+            return item_name
+        return None
+
+    @property
+    def profile_name(self) -> str | None:
+        """Return the profile context label for the entity."""
+        return None
+
+    @property
+    def taxonomy_path(self) -> list[str]:
+        """Return the ordered metadata hierarchy above the entity leaf."""
+        return []
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Return shared purpose metadata when available."""
-        if self._purpose is None:
-            return None
-        return {ATTR_PURPOSE: self._purpose}
+        """Return shared metadata for the entity."""
+        return {
+            ATTR_INTEGRATION: DOMAIN,
+            ATTR_PROFILE_NAME: self.profile_name,
+            ATTR_PURPOSE: self._purpose,
+            ATTR_ITEM_TYPE: self._item_type,
+            ATTR_TAXONOMY_PATH: self.taxonomy_path,
+            ATTR_ITEM_NAME: self.item_name,
+        }
 
 
 class ControlDManagerInstanceEntity(ControlDManagerEntity):
@@ -59,6 +95,11 @@ class ControlDManagerInstanceEntity(ControlDManagerEntity):
     ) -> None:
         """Initialize an instance-scoped entity."""
         super().__init__(config_entry, "instance", "system", entity_key)
+
+    @property
+    def profile_name(self) -> str:
+        """Return the account-level profile context label."""
+        return PROFILE_NAME_ACCOUNT
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -83,6 +124,14 @@ class ControlDManagerProfileEntity(ControlDManagerEntity):
     def profile(self) -> ControlDProfileSummary | None:
         """Return the current normalized profile model."""
         return self.runtime.registry.profiles.get(self._profile_pk)
+
+    @property
+    def profile_name(self) -> str | None:
+        """Return the current display name for the owning profile."""
+        profile = self.profile
+        if profile is None:
+            return None
+        return profile.name
 
     @property
     def available(self) -> bool:
@@ -113,6 +162,17 @@ class ControlDManagerEndpointEntity(ControlDManagerEntity):
     def endpoint(self) -> ControlDEndpointSummary | None:
         """Return the current normalized endpoint model."""
         return self.runtime.registry.endpoints.get(self._endpoint_device_id)
+
+    @property
+    def profile_name(self) -> str | None:
+        """Return the current display name for the owning profile."""
+        endpoint = self.endpoint
+        if endpoint is None or endpoint.owning_profile_pk is None:
+            return None
+        profile = self.runtime.registry.profiles.get(endpoint.owning_profile_pk)
+        if profile is None:
+            return None
+        return profile.name
 
     @property
     def available(self) -> bool:

@@ -29,6 +29,9 @@ from .const import (
     ATTR_REFRESH_IN_PROGRESS,
     ATTR_ROUTER_CLIENT_COUNT,
     ATTR_STATS_ENDPOINT,
+    ITEM_TYPE_ANALYTICS_METRIC,
+    ITEM_TYPE_STATUS,
+    ITEM_TYPE_SUMMARY_METRIC,
     PURPOSE_INSTANCE_ANALYTICS,
     PURPOSE_INSTANCE_STATUS,
     PURPOSE_INSTANCE_SUMMARY,
@@ -188,6 +191,7 @@ class ControlDManagerStatusSensor(ControlDManagerInstanceEntity, SensorEntity):
     _attr_translation_key = TRANS_KEY_ENTITY_STATUS
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _purpose = PURPOSE_INSTANCE_STATUS
+    _item_type = ITEM_TYPE_STATUS
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
         """Initialize the account-status sensor."""
@@ -220,6 +224,7 @@ class ControlDManagerProfileStatusSensor(ControlDManagerProfileEntity, SensorEnt
     _attr_translation_key = TRANS_KEY_ENTITY_STATUS
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _purpose = PURPOSE_PROFILE_STATUS
+    _item_type = ITEM_TYPE_STATUS
 
     def __init__(
         self,
@@ -289,6 +294,7 @@ class ControlDManagerProfileCountSensor(ControlDManagerInstanceEntity, SensorEnt
     _attr_native_unit_of_measurement = "profiles"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _purpose = PURPOSE_INSTANCE_SUMMARY
+    _item_type = ITEM_TYPE_SUMMARY_METRIC
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
         """Initialize the profile-count sensor."""
@@ -308,6 +314,7 @@ class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEn
     _attr_native_unit_of_measurement = "endpoints"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _purpose = PURPOSE_INSTANCE_SUMMARY
+    _item_type = ITEM_TYPE_SUMMARY_METRIC
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
         """Initialize the endpoint-count sensor."""
@@ -345,6 +352,7 @@ class ControlDManagerProfileEndpointCountSensor(
     _attr_native_unit_of_measurement = "endpoints"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _purpose = PURPOSE_PROFILE_SUMMARY
+    _item_type = ITEM_TYPE_SUMMARY_METRIC
 
     def __init__(
         self,
@@ -371,6 +379,7 @@ class ControlDManagerAccountAnalyticsSensor(
     _purpose = PURPOSE_INSTANCE_ANALYTICS
     _attr_native_unit_of_measurement = "queries"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _item_type = ITEM_TYPE_ANALYTICS_METRIC
 
     @property
     def available(self) -> bool:
@@ -539,6 +548,7 @@ class ControlDManagerProfileAnalyticsSensor(ControlDManagerProfileEntity, Sensor
     _purpose = PURPOSE_PROFILE_ANALYTICS
     _attr_native_unit_of_measurement = "queries"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _item_type = ITEM_TYPE_ANALYTICS_METRIC
 
     @property
     def analytics(self) -> ControlDAccountAnalytics | None:

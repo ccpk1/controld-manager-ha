@@ -12,6 +12,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
     DOMAIN,
+    ITEM_TYPE_ACTION,
     PURPOSE_INSTANCE_ACTION,
     TRANS_KEY_ENTITY_SYNC,
     TRANS_KEY_MANUAL_SYNC_FAILED,
@@ -74,6 +75,7 @@ class ControlDManagerSyncButton(ControlDManagerInstanceEntity, ButtonEntity):
     _attr_translation_key = TRANS_KEY_ENTITY_SYNC
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _purpose = PURPOSE_INSTANCE_ACTION
+    _item_type = ITEM_TYPE_ACTION
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
         """Initialize the manual sync button."""
