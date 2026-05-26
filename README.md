@@ -260,6 +260,8 @@ This software is provided "as is", without warranty of any kind, express or impl
 
 Use this project with appropriate caution, especially when exposing Home Assistant remotely or granting other users access to service calls that can alter Control D behavior.
 
+AI-Assisted Development: In today’s age, leveraging AI is one of the few ways a maintainer can realistically build, thoroughly test, and actively support a truly complex, high-quality open-source project. But to be clear, this integration isn't just blindly "vibe coded." While AI acts as a significant force multiplier for the workflow, human oversight dictates the architecture. Every commit is strictly audited, backed by extensive tests, and measured against rigorous Home Assistant development standards to ensure long-term stability.
+
 ## 📄 License
 
 This project is licensed under the GPL-3.0 license. See [LICENSE](LICENSE).
