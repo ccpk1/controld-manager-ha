@@ -728,6 +728,67 @@ def test_integration_manager_keeps_automatic_and_manual_services_exclusive() -> 
     )
 
 
+def test_integration_manager_logs_malformed_service_catalog_rows(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Malformed service catalog rows should log enough setup context to debug."""
+    device_manager = DeviceManager()
+    entity_manager = EntityManager()
+    integration_manager = IntegrationManager(
+        profile_manager=ProfileManager(),
+        endpoint_manager=EndpointManager(),
+        device_manager=device_manager,
+        entity_manager=entity_manager,
+    )
+
+    inventory = ControlDInventoryPayload(
+        user=_sample_inventory().user,
+        profiles=_sample_inventory().profiles,
+        devices=_sample_inventory().devices,
+        profile_details={
+            "profile-1": ControlDProfileDetailPayload(
+                services=(
+                    {
+                        "PK": "amazonmusic",
+                        "name": "Amazon Music",
+                        "category": "audio",
+                        "action": {"do": 1, "status": 1},
+                    },
+                )
+            )
+        },
+        option_catalog=OPTION_CATALOG,
+        service_categories=({"PK": "audio", "name": "Audio", "count": 1},),
+        service_catalog=(
+            {"PK": "amazonmusic", "name": "Amazon Music", "category": None},
+        ),
+    )
+
+    with (
+        patch.object(device_manager, "sync_registry"),
+        patch.object(entity_manager, "sync_registry"),
+    ):
+        integration_manager.attach_runtime(
+            cast(Any, SimpleNamespace(options=ControlDOptions()))
+        )
+        with (
+            caplog.at_level(
+                logging.DEBUG,
+                logger="custom_components.controld_manager.managers.integration_manager",
+            ),
+            pytest.raises(ValueError, match="category"),
+        ):
+            integration_manager.build_registry(inventory)
+
+    assert (
+        "Service normalization failed while building automatic service row"
+        in caplog.text
+    )
+    assert "profile-1" in caplog.text
+    assert "category" in caplog.text
+    assert "source=catalog" in caplog.text
+
+
 async def test_profile_option_write_payload_matches_browser_contract() -> None:
     """Profile option writes should match the browser-verified option contract."""
     async with ClientSession() as session:
@@ -1176,6 +1237,124 @@ async def test_coordinator_refresh_raises_auth_failed_for_reauth(hass) -> None:
         pytest.raises(ConfigEntryAuthFailed),
     ):
         await runtime.active_coordinator._async_update_data()
+
+
+async def test_coordinator_logs_normalization_stage_failure(hass, caplog) -> None:
+    """Normalization failures should emit a coordinator debug traceback."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value"},
+        unique_id="user-123",
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_inventory",
+            new=AsyncMock(return_value=_sample_inventory()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_sample_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: (
+                    _sample_profile_analytics(profile_pk)
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_detail",
+            new=AsyncMock(return_value=ControlDProfileDetailPayload()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_option_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    runtime = entry.runtime_data
+    runtime.options = ControlDOptions(
+        profile_policies={
+            "profile-1": ControlDProfilePolicy(
+                allowed_service_categories=frozenset({SERVICE_SELECTOR_AUTOMATIC}),
+            )
+        }
+    )
+
+    with (
+        patch.object(
+            runtime.client,
+            "async_get_inventory",
+            new=AsyncMock(return_value=_sample_inventory()),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_detail",
+            new=AsyncMock(
+                return_value=ControlDProfileDetailPayload(
+                    services=(
+                        {
+                            "PK": "amazonmusic",
+                            "name": "Amazon Music",
+                            "category": "audio",
+                            "action": {"do": 1, "status": 1},
+                        },
+                    )
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_option_catalog",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_categories",
+            new=AsyncMock(return_value=[{"PK": "audio", "name": "Audio", "count": 1}]),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_catalog",
+            new=AsyncMock(
+                return_value=[
+                    {"PK": "amazonmusic", "name": "Amazon Music", "category": None}
+                ]
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+        caplog.at_level(
+            logging.DEBUG,
+            logger="custom_components.controld_manager.coordinator",
+        ),
+        pytest.raises(UpdateFailed, match="normalization failed"),
+    ):
+        await runtime.active_coordinator._async_update_data()
+
+    assert "Starting Control D refresh" in caplog.text
+    assert "Fetched service metadata" in caplog.text
+    assert "Control D refresh failed during normalization" in caplog.text
 
 
 async def test_coordinator_requests_last_day_analytics_window(hass) -> None:
