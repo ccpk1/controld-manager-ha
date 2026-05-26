@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import Any
 
@@ -30,6 +31,8 @@ from .endpoint_manager import EndpointManager
 from .entity_manager import EntityManager
 from .profile_manager import ProfileManager
 
+LOGGER = logging.getLogger(__name__)
+
 
 class IntegrationManager(BaseManager):
     """Own entry-scoped registry shaping and shared orchestration."""
@@ -50,14 +53,203 @@ class IntegrationManager(BaseManager):
 
     def build_registry(self, inventory: ControlDInventoryPayload) -> ControlDRegistry:
         """Build a normalized registry from the raw inventory payload."""
-        profiles = self._profile_manager.normalize_profiles(inventory.profiles)
-        included_profile_pks = self.runtime.options.included_profile_pks(set(profiles))
-        endpoints = self._endpoint_manager.normalize_endpoints(inventory.devices)
-        service_categories = self._normalize_service_categories(
-            inventory.service_categories
+        LOGGER.debug(
+            (
+                "Building registry from inventory: profiles=%s devices=%s "
+                "detail_profiles=%s service_categories=%s service_catalog=%s"
+            ),
+            len(inventory.profiles),
+            len(inventory.devices),
+            len(inventory.profile_details),
+            len(inventory.service_categories),
+            len(inventory.service_catalog),
         )
+
+        try:
+            profiles = self._profile_manager.normalize_profiles(inventory.profiles)
+        except ValueError as err:
+            LOGGER.debug(
+                (
+                    "Profile normalization failed while building registry: "
+                    "profile_count=%s err=%s"
+                ),
+                len(inventory.profiles),
+                err,
+            )
+            raise
+
+        included_profile_pks = self.runtime.options.included_profile_pks(set(profiles))
+
+        try:
+            endpoints = self._endpoint_manager.normalize_endpoints(inventory.devices)
+        except ValueError as err:
+            LOGGER.debug(
+                (
+                    "Endpoint normalization failed while building registry: "
+                    "device_count=%s err=%s"
+                ),
+                len(inventory.devices),
+                err,
+            )
+            raise
+
+        try:
+            service_categories = self._normalize_service_categories(
+                inventory.service_categories
+            )
+        except ValueError as err:
+            LOGGER.debug(
+                (
+                    "Service category normalization failed while building "
+                    "registry: category_count=%s err=%s"
+                ),
+                len(inventory.service_categories),
+                err,
+            )
+            raise
+
+        try:
+            user = self._normalize_user(inventory.user)
+        except ValueError as err:
+            LOGGER.debug(
+                "User normalization failed while building registry: err=%s", err
+            )
+            raise
+
+        filters_by_profile: dict[str, dict[str, ControlDFilter]] = {}
+        default_rules_by_profile: dict[str, ControlDDefaultRule] = {}
+        rule_groups_by_profile: dict[str, dict[str, ControlDRuleGroup]] = {}
+        services_by_profile: dict[str, dict[str, ControlDService]] = {}
+        rules_by_profile: dict[str, dict[str, ControlDRule]] = {}
+        options_by_profile: dict[str, dict[str, ControlDProfileOption]] = {}
+
+        for profile_pk, detail in inventory.profile_details.items():
+            if profile_pk not in included_profile_pks:
+                continue
+
+            profile_policy = self.runtime.options.profile_policy(profile_pk)
+            LOGGER.debug(
+                (
+                    "Normalizing profile detail payloads: profile_pk=%s "
+                    "filters=%s external_filters=%s services=%s groups=%s "
+                    "rules=%s options=%s service_mode=%s "
+                    "manual_categories=%s custom_rules=%s "
+                    "endpoint_sensors=%s"
+                ),
+                profile_pk,
+                len(detail.filters),
+                len(detail.external_filters),
+                len(detail.services),
+                len(detail.groups),
+                len(detail.rules),
+                len(detail.options),
+                (
+                    "automatic"
+                    if profile_policy.service_selector_is_automatic
+                    else "manual"
+                ),
+                sorted(profile_policy.manual_service_categories),
+                bool(profile_policy.exposed_custom_rules),
+                profile_policy.endpoint_sensors_enabled,
+            )
+
+            try:
+                filters_by_profile[profile_pk] = self._normalize_filters(
+                    detail.filters,
+                    detail.external_filters,
+                )
+            except ValueError as err:
+                LOGGER.debug(
+                    "Filter normalization failed for profile %s: err=%s",
+                    profile_pk,
+                    err,
+                )
+                raise
+
+            try:
+                default_rule = self._normalize_default_rule(detail.default_rule)
+            except ValueError as err:
+                LOGGER.debug(
+                    "Default rule normalization failed for profile %s: err=%s",
+                    profile_pk,
+                    err,
+                )
+                raise
+            if default_rule is not None:
+                default_rules_by_profile[profile_pk] = default_rule
+
+            try:
+                rule_groups_by_profile[profile_pk] = self._normalize_rule_groups(
+                    detail.groups
+                )
+            except ValueError as err:
+                LOGGER.debug(
+                    "Rule group normalization failed for profile %s: err=%s",
+                    profile_pk,
+                    err,
+                )
+                raise
+
+            try:
+                services_by_profile[profile_pk] = self._normalize_services(
+                    detail.services,
+                    service_categories,
+                    profile_policy,
+                    inventory.service_catalog,
+                )
+            except ValueError as err:
+                LOGGER.debug(
+                    (
+                        "Service normalization failed for profile %s: "
+                        "service_mode=%s manual_categories=%s "
+                        "live_services=%s service_catalog=%s err=%s"
+                    ),
+                    profile_pk,
+                    (
+                        "automatic"
+                        if profile_policy.service_selector_is_automatic
+                        else "manual"
+                    ),
+                    sorted(profile_policy.manual_service_categories),
+                    len(detail.services),
+                    len(inventory.service_catalog),
+                    err,
+                )
+                raise
+
+            try:
+                rules_by_profile[profile_pk] = self._normalize_rules(
+                    detail.groups,
+                    detail.rules,
+                )
+            except ValueError as err:
+                LOGGER.debug(
+                    "Rule normalization failed for profile %s: err=%s",
+                    profile_pk,
+                    err,
+                )
+                raise
+
+            try:
+                options_by_profile[profile_pk] = self._normalize_profile_options(
+                    inventory.option_catalog,
+                    detail.options,
+                )
+            except ValueError as err:
+                LOGGER.debug(
+                    (
+                        "Profile option normalization failed for profile %s: "
+                        "option_catalog=%s state_options=%s err=%s"
+                    ),
+                    profile_pk,
+                    len(inventory.option_catalog),
+                    len(detail.options),
+                    err,
+                )
+                raise
+
         registry = ControlDRegistry(
-            user=self._normalize_user(inventory.user),
+            user=user,
             account_analytics=inventory.account_analytics,
             endpoint_inventory=self._endpoint_manager.summarize_inventory(
                 inventory.devices, endpoints
@@ -69,49 +261,12 @@ class IntegrationManager(BaseManager):
                 endpoints,
                 inventory.analytics_clients_by_endpoint,
             ),
-            filters_by_profile={
-                profile_pk: self._normalize_filters(
-                    detail.filters,
-                    detail.external_filters,
-                )
-                for profile_pk, detail in inventory.profile_details.items()
-                if profile_pk in included_profile_pks
-            },
-            default_rules_by_profile={
-                profile_pk: default_rule
-                for profile_pk, detail in inventory.profile_details.items()
-                if profile_pk in included_profile_pks
-                if (default_rule := self._normalize_default_rule(detail.default_rule))
-                is not None
-            },
-            rule_groups_by_profile={
-                profile_pk: self._normalize_rule_groups(detail.groups)
-                for profile_pk, detail in inventory.profile_details.items()
-                if profile_pk in included_profile_pks
-            },
-            services_by_profile={
-                profile_pk: self._normalize_services(
-                    detail.services,
-                    service_categories,
-                    self.runtime.options.profile_policy(profile_pk),
-                    inventory.service_catalog,
-                )
-                for profile_pk, detail in inventory.profile_details.items()
-                if profile_pk in included_profile_pks
-            },
-            rules_by_profile={
-                profile_pk: self._normalize_rules(detail.groups, detail.rules)
-                for profile_pk, detail in inventory.profile_details.items()
-                if profile_pk in included_profile_pks
-            },
-            options_by_profile={
-                profile_pk: self._normalize_profile_options(
-                    inventory.option_catalog,
-                    detail.options,
-                )
-                for profile_pk, detail in inventory.profile_details.items()
-                if profile_pk in included_profile_pks
-            },
+            filters_by_profile=filters_by_profile,
+            default_rules_by_profile=default_rules_by_profile,
+            rule_groups_by_profile=rule_groups_by_profile,
+            services_by_profile=services_by_profile,
+            rules_by_profile=rules_by_profile,
+            options_by_profile=options_by_profile,
             service_categories=service_categories,
         )
         self._device_manager.sync_registry(registry)
@@ -470,24 +625,79 @@ class IntegrationManager(BaseManager):
         """Normalize service rows for the selector-driven service contract."""
         live_services: dict[str, dict[str, Any]] = {}
         for payload in services_payload:
-            service_pk = IntegrationManager._require_string(payload, "PK")
+            try:
+                service_pk = IntegrationManager._require_string(payload, "PK")
+            except ValueError as err:
+                LOGGER.debug(
+                    (
+                        "Service normalization failed for live service row: "
+                        "fields=%s err=%s"
+                    ),
+                    IntegrationManager._debug_payload_fields(
+                        payload, ("PK", "name", "category", "action")
+                    ),
+                    err,
+                )
+                raise
             live_services[service_pk] = payload
 
         catalog_by_pk: dict[str, dict[str, Any]] = {}
         for payload in service_catalog_payload:
-            service_pk = IntegrationManager._require_text(payload, "PK")
+            try:
+                service_pk = IntegrationManager._require_text(payload, "PK")
+            except ValueError as err:
+                LOGGER.debug(
+                    (
+                        "Service normalization failed for service catalog row "
+                        "PK: fields=%s err=%s"
+                    ),
+                    IntegrationManager._debug_payload_fields(
+                        payload, ("PK", "name", "category")
+                    ),
+                    err,
+                )
+                raise
             catalog_by_pk[service_pk] = payload
 
         services: dict[str, ControlDService] = {}
         if profile_policy.service_selector_is_automatic:
             for service_pk, live_payload in live_services.items():
                 catalog_payload = catalog_by_pk.get(service_pk)
-                service_row = IntegrationManager._build_service_row(
-                    catalog_payload if catalog_payload is not None else live_payload,
-                    live_payload,
-                    service_categories,
-                    auto_exposed=True,
-                )
+                try:
+                    service_row = IntegrationManager._build_service_row(
+                        (
+                            catalog_payload
+                            if catalog_payload is not None
+                            else live_payload
+                        ),
+                        live_payload,
+                        service_categories,
+                        auto_exposed=True,
+                    )
+                except ValueError as err:
+                    LOGGER.debug(
+                        (
+                            "Service normalization failed while building "
+                            "automatic service row: service_pk=%s source=%s "
+                            "payload_fields=%s live_fields=%s err=%s"
+                        ),
+                        service_pk,
+                        "catalog" if catalog_payload is not None else "live",
+                        IntegrationManager._debug_payload_fields(
+                            (
+                                catalog_payload
+                                if catalog_payload is not None
+                                else live_payload
+                            ),
+                            ("PK", "name", "category", "warning", "unlock_location"),
+                        ),
+                        IntegrationManager._debug_payload_fields(
+                            live_payload,
+                            ("PK", "name", "category", "action"),
+                        ),
+                        err,
+                    )
+                    raise
                 services[service_pk] = service_row
             return services
 
@@ -496,15 +706,49 @@ class IntegrationManager(BaseManager):
             return services
 
         for payload in service_catalog_payload:
-            category_pk = IntegrationManager._require_string(payload, "category")
+            try:
+                category_pk = IntegrationManager._require_string(payload, "category")
+            except ValueError as err:
+                LOGGER.debug(
+                    (
+                        "Service normalization failed for manual service "
+                        "catalog row category: fields=%s err=%s"
+                    ),
+                    IntegrationManager._debug_payload_fields(
+                        payload, ("PK", "name", "category")
+                    ),
+                    err,
+                )
+                raise
             if category_pk not in manual_categories:
                 continue
-            service_row = IntegrationManager._build_service_row(
-                payload,
-                live_services.get(IntegrationManager._require_text(payload, "PK")),
-                service_categories,
-                auto_exposed=False,
-            )
+            service_pk = IntegrationManager._require_text(payload, "PK")
+            try:
+                service_row = IntegrationManager._build_service_row(
+                    payload,
+                    live_services.get(service_pk),
+                    service_categories,
+                    auto_exposed=False,
+                )
+            except ValueError as err:
+                LOGGER.debug(
+                    (
+                        "Service normalization failed while building manual "
+                        "service row: service_pk=%s payload_fields=%s "
+                        "live_fields=%s err=%s"
+                    ),
+                    service_pk,
+                    IntegrationManager._debug_payload_fields(
+                        payload,
+                        ("PK", "name", "category", "warning", "unlock_location"),
+                    ),
+                    IntegrationManager._debug_payload_fields(
+                        live_services.get(service_pk),
+                        ("PK", "name", "category", "action"),
+                    ),
+                    err,
+                )
+                raise
             services[service_row.service_pk] = service_row
 
         return services
@@ -754,6 +998,29 @@ class IntegrationManager(BaseManager):
     def _mapping_or_empty(value: Any) -> dict[str, Any]:
         """Return a mapping value or an empty mapping."""
         return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _debug_payload_fields(
+        payload: dict[str, Any] | None, keys: tuple[str, ...]
+    ) -> dict[str, str]:
+        """Return compact debug metadata for selected payload fields."""
+        if not isinstance(payload, dict):
+            return {"payload": "missing"}
+
+        fields: dict[str, str] = {}
+        for key in keys:
+            value = payload.get(key)
+            if value is None:
+                fields[key] = "missing"
+                continue
+            if isinstance(value, dict):
+                fields[key] = f"dict(keys={sorted(value)})"
+                continue
+            if isinstance(value, list | tuple):
+                fields[key] = f"{type(value).__name__}(len={len(value)})"
+                continue
+            fields[key] = f"{type(value).__name__}({value!r})"
+        return fields
 
     @staticmethod
     def _normalize_name(value: str) -> str:

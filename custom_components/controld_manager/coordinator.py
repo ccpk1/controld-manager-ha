@@ -262,13 +262,31 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
         sync_status.last_refresh_trigger = self._refresh_trigger
         sync_status.refresh_in_progress = True
         try:
+            LOGGER.debug(
+                "Starting Control D refresh: trigger=%s entry_id=%s",
+                self._refresh_trigger,
+                self._entry.entry_id,
+            )
             inventory = await self._runtime.client.async_get_inventory()
+            LOGGER.debug(
+                "Fetched Control D inventory: profiles=%s devices=%s",
+                len(inventory.profiles),
+                len(inventory.devices),
+            )
             included_profile_pks = self._runtime.options.included_profile_pks(
                 {profile["PK"] for profile in inventory.profiles if "PK" in profile}
             )
             needs_service_catalog = any(
                 self._include_services_for_profile(profile_pk)
                 for profile_pk in included_profile_pks
+            )
+            LOGGER.debug(
+                (
+                    "Planned profile detail refresh: included_profiles=%s "
+                    "needs_service_catalog=%s"
+                ),
+                sorted(included_profile_pks),
+                needs_service_catalog,
             )
             if included_profile_pks:
                 option_catalog_task = (
@@ -293,6 +311,30 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
                 )
                 option_catalog = detail_results[0]
                 profile_detail_results = detail_results[1:]
+                LOGGER.debug(
+                    "Fetched profile details: profiles=%s option_catalog=%s",
+                    len(profile_detail_results),
+                    len(option_catalog),
+                )
+                service_categories = tuple(
+                    await (
+                        self._runtime.client.async_get_service_categories()
+                        if needs_service_catalog
+                        else asyncio.sleep(0, result=[])
+                    )
+                )
+                service_catalog = tuple(
+                    await (
+                        self._runtime.client.async_get_service_catalog()
+                        if needs_service_catalog
+                        else asyncio.sleep(0, result=[])
+                    )
+                )
+                LOGGER.debug(
+                    "Fetched service metadata: categories=%s catalog_rows=%s",
+                    len(service_categories),
+                    len(service_catalog),
+                )
                 inventory = ControlDInventoryPayload(
                     user=inventory.user,
                     profiles=inventory.profiles,
@@ -305,20 +347,8 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
                         )
                     ),
                     option_catalog=tuple(option_catalog),
-                    service_categories=tuple(
-                        await (
-                            self._runtime.client.async_get_service_categories()
-                            if needs_service_catalog
-                            else asyncio.sleep(0, result=[])
-                        )
-                    ),
-                    service_catalog=tuple(
-                        await (
-                            self._runtime.client.async_get_service_catalog()
-                            if needs_service_catalog
-                            else asyncio.sleep(0, result=[])
-                        )
-                    ),
+                    service_categories=service_categories,
+                    service_catalog=service_catalog,
                 )
             inventory = replace(
                 inventory,
@@ -326,7 +356,23 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
                     await self._async_fetch_analytics_clients_by_endpoint(inventory)
                 ),
             )
+            LOGGER.debug(
+                "Fetched analytics client metadata: parent_endpoints=%s",
+                len(inventory.analytics_clients_by_endpoint),
+            )
+            LOGGER.debug("Building normalized registry from fetched inventory")
             registry = self._runtime.managers.integration.build_registry(inventory)
+            LOGGER.debug(
+                (
+                    "Built normalized registry: profiles=%s endpoints=%s "
+                    "service_profiles=%s option_profiles=%s rule_profiles=%s"
+                ),
+                len(registry.profiles),
+                len(registry.endpoints),
+                len(registry.services_by_profile),
+                len(registry.options_by_profile),
+                len(registry.rules_by_profile),
+            )
         except ControlDApiAuthError as err:
             return self._raise_update_failure(
                 "Control D authentication failed",
@@ -344,6 +390,10 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
                 err,
             )
         except ValueError as err:
+            LOGGER.debug(
+                "Control D refresh failed during normalization",
+                exc_info=True,
+            )
             return self._raise_update_failure(
                 "Control D inventory normalization failed",
                 err,
