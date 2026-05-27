@@ -789,6 +789,63 @@ def test_integration_manager_logs_malformed_service_catalog_rows(
     assert "source=catalog" in caplog.text
 
 
+def test_integration_manager_accepts_numeric_live_service_pk() -> None:
+    """Live service rows should accept numeric IDs and join to catalog rows."""
+    device_manager = DeviceManager()
+    entity_manager = EntityManager()
+    integration_manager = IntegrationManager(
+        profile_manager=ProfileManager(),
+        endpoint_manager=EndpointManager(),
+        device_manager=device_manager,
+        entity_manager=entity_manager,
+    )
+
+    inventory = ControlDInventoryPayload(
+        user=_sample_inventory().user,
+        profiles=_sample_inventory().profiles,
+        devices=_sample_inventory().devices,
+        profile_details={
+            "profile-1": ControlDProfileDetailPayload(
+                services=(
+                    {
+                        "PK": 1688,
+                        "name": 1688,
+                        "category": "shop",
+                        "action": {"do": 0, "status": 1},
+                    },
+                )
+            )
+        },
+        option_catalog=OPTION_CATALOG,
+        service_categories=({"PK": "shop", "name": "Shop", "count": 1},),
+        service_catalog=(
+            {
+                "PK": 1688,
+                "name": "1688",
+                "category": "shop",
+                "unlock_location": "JFK",
+            },
+        ),
+    )
+
+    with (
+        patch.object(device_manager, "sync_registry"),
+        patch.object(entity_manager, "sync_registry"),
+    ):
+        integration_manager.attach_runtime(
+            cast(Any, SimpleNamespace(options=ControlDOptions()))
+        )
+        registry = integration_manager.build_registry(inventory)
+
+    service_row = registry.services_by_profile["profile-1"]["1688"]
+    assert service_row.service_pk == "1688"
+    assert service_row.name == "1688"
+    assert service_row.category_pk == "shop"
+    assert service_row.category_name == "Shop"
+    assert service_row.enabled is True
+    assert service_row.current_mode == "blocked"
+
+
 async def test_profile_option_write_payload_matches_browser_contract() -> None:
     """Profile option writes should match the browser-verified option contract."""
     async with ClientSession() as session:

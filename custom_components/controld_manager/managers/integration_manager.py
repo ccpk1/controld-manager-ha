@@ -626,7 +626,7 @@ class IntegrationManager(BaseManager):
         live_services: dict[str, dict[str, Any]] = {}
         for payload in services_payload:
             try:
-                service_pk = IntegrationManager._require_string(payload, "PK")
+                service_pk = IntegrationManager._require_text(payload, "PK")
             except ValueError as err:
                 LOGGER.debug(
                     (
