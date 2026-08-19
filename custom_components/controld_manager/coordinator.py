@@ -68,15 +68,21 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
         self._entry = entry
         self._refresh_trigger = "scheduled"
         self._unavailable_logged = False
+        # Incremented on every local write. A refresh whose start generation
+        # differs from the current one completed against a snapshot taken
+        # before a newer write, so its result must be discarded.
+        self._write_generation = 0
 
     def schedule_write_verification(self) -> None:
         """Trigger a coalesced verification refresh after a successful write.
 
-        Writes update the cached registry rows optimistically and call listeners
-        immediately, so the UI reflects a change instantly. The refresh is a
-        trailing-edge verification that batches rapid sequential writes into a
-        single request.
+        Writes update the cached registry rows optimistically and call
+        listeners immediately, so the UI reflects a change instantly. The
+        refresh is a trailing-edge verification that batches rapid sequential
+        writes into a single request.
         """
+        self._write_generation += 1
+        self._refresh_trigger = "write"
         self.async_update_listeners()
         self.hass.async_create_task(self.async_request_refresh())
 
@@ -280,6 +286,7 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
         sync_status.last_refresh_attempt = datetime.now(UTC)
         sync_status.last_refresh_trigger = self._refresh_trigger
         sync_status.refresh_in_progress = True
+        start_generation = self._write_generation
         try:
             LOGGER.debug(
                 "Starting Control D refresh: trigger=%s entry_id=%s",
@@ -421,6 +428,16 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
             sync_status.refresh_in_progress = False
 
         registry = await self._async_refresh_analytics(registry)
+
+        if self._write_generation != start_generation:
+            # A write landed while this snapshot was being fetched. The
+            # optimistic registry already reflects that write, and a newer
+            # verification refresh is scheduled. Discard this stale snapshot
+            # so it cannot overwrite the newer optimistic value.
+            LOGGER.debug(
+                "Discarding stale Control D refresh: a write landed during the fetch"
+            )
+            return self._runtime.registry
 
         self._runtime.registry = registry
         if self._unavailable_logged:

@@ -44,7 +44,7 @@ DEFAULT_ENDPOINT_ANALYTICS_INTERVAL = timedelta(minutes=5)
 
 # Cooldown in seconds before a post-write verification refresh is triggered.
 # A trailing-edge debounce batches rapid sequential writes into a single refresh.
-DEFAULT_WRITE_REFRESH_COOLDOWN = 5.0
+DEFAULT_WRITE_REFRESH_COOLDOWN = 10.0
 
 MIN_REFRESH_INTERVAL = timedelta(minutes=5)
 MAX_REFRESH_INTERVAL = timedelta(minutes=60)
