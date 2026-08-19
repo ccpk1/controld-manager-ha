@@ -285,7 +285,7 @@ needs_service_catalog = any(
     for profile_pk in included_profile_pks
 )
 ...
-include_services=bool(
+include_services = bool(
     self._runtime.options.profile_policy(profile_pk).allowed_service_categories
 )
 ```
@@ -436,7 +436,7 @@ Why:
 Current anchor snippet:
 
 ```python
-include_rules=bool(
+include_rules = bool(
     self._runtime.options.profile_policy(profile_pk).exposed_custom_rules
 )
 ```
