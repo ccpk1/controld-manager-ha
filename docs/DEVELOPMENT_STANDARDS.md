@@ -290,8 +290,8 @@ Critical rules:
 - services, flows, and platform files must not construct ad hoc mutation payloads independently once manager APIs exist
 - successful commands may update in-memory runtime state optimistically
 - optimistic changes must remain in memory only
-- the next coordinator refresh remains the source of truth
-- if refreshed state disagrees with optimistic state, the refreshed state wins and the discrepancy must be handled as reconciliation, not hidden silently
+- the next coordinator refresh remains the source of truth when it starts after the last write; a refresh that started before a newer write is stale and must not overwrite it
+- if refreshed state started after the writes it covers and disagrees with optimistic state, the refreshed state wins and the discrepancy must be handled as reconciliation, not hidden silently
 
 ## Runtime registry standards
 
@@ -306,7 +306,7 @@ Critical rules:
 - the current supported model is one bounded configuration-sync poller
 - polling intervals must stay coordinator-owned and bounded; unbounded user-defined polling is forbidden
 - do not document or expose additional pollers until they are implemented and validated
-- after a successful mutation, trigger an immediate refresh of the affected configuration path so the Home Assistant UI reflects the new cloud state promptly
+- after a successful mutation, push the in-memory optimistic state to listeners immediately and schedule a coalesced verification refresh; a trailing-edge debounce batches rapid sequential writes into a single follow-up fetch so the UI reflects the new state without redundant inventory requests
 
 ## Config flow standards
 
