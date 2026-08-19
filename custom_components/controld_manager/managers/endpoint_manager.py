@@ -39,7 +39,7 @@ class EndpointManager(BaseManager):
                 for endpoint in endpoints
             )
         )
-        await self.runtime.active_coordinator.async_refresh()
+        self.runtime.active_coordinator.schedule_write_verification()
 
     async def async_rename_endpoints(
         self,
@@ -58,7 +58,7 @@ class EndpointManager(BaseManager):
         )
         for endpoint in endpoints:
             self._update_cached_endpoint_name(endpoint, name=name)
-        await self.runtime.active_coordinator.async_refresh()
+        self.runtime.active_coordinator.schedule_write_verification()
 
     async def async_set_client_aliases(
         self,
@@ -80,7 +80,7 @@ class EndpointManager(BaseManager):
         )
         for target in targets:
             self._update_cached_client_alias_target(target, alias=alias)
-        await self.runtime.active_coordinator.async_refresh()
+        self.runtime.active_coordinator.schedule_write_verification()
 
     async def async_clear_client_aliases(
         self,
@@ -100,7 +100,7 @@ class EndpointManager(BaseManager):
         )
         for target in targets:
             self._update_cached_client_alias_target(target, alias=None)
-        await self.runtime.active_coordinator.async_refresh()
+        self.runtime.active_coordinator.schedule_write_verification()
 
     def normalize_client_alias_targets(
         self,

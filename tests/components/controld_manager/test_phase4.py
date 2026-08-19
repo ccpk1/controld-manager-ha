@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 import voluptuous as vol
@@ -3349,7 +3350,7 @@ async def test_set_client_alias_supports_endpoint_mac_selector(hass) -> None:
 
     runtime = entry.runtime_data
     runtime.client.async_set_endpoint_alias = AsyncMock()
-    runtime.coordinator.async_refresh = AsyncMock()
+    runtime.coordinator.schedule_write_verification = Mock()
 
     await hass.services.async_call(
         DOMAIN,
@@ -3367,7 +3368,7 @@ async def test_set_client_alias_supports_endpoint_mac_selector(hass) -> None:
         client_id="2476a6ca95d7",
         alias="Kids iPhone",
     )
-    runtime.coordinator.async_refresh.assert_awaited_once()
+    runtime.coordinator.schedule_write_verification.assert_called_once()
 
 
 async def test_set_client_alias_supports_analytics_only_hostname_selector(hass) -> None:
@@ -3390,7 +3391,7 @@ async def test_set_client_alias_supports_analytics_only_hostname_selector(hass) 
 
     runtime = entry.runtime_data
     runtime.client.async_set_endpoint_alias = AsyncMock()
-    runtime.coordinator.async_refresh = AsyncMock()
+    runtime.coordinator.schedule_write_verification = Mock()
 
     await hass.services.async_call(
         DOMAIN,
@@ -3408,7 +3409,7 @@ async def test_set_client_alias_supports_analytics_only_hostname_selector(hass) 
         client_id="2476a6ca95d7",
         alias="Kids iPhone",
     )
-    runtime.coordinator.async_refresh.assert_awaited_once()
+    runtime.coordinator.schedule_write_verification.assert_called_once()
 
 
 async def test_clear_client_alias_supports_endpoint_name(hass) -> None:
@@ -3429,7 +3430,7 @@ async def test_clear_client_alias_supports_endpoint_name(hass) -> None:
 
     runtime = entry.runtime_data
     runtime.client.async_clear_endpoint_alias = AsyncMock()
-    runtime.coordinator.async_refresh = AsyncMock()
+    runtime.coordinator.schedule_write_verification = Mock()
 
     await hass.services.async_call(
         DOMAIN,
@@ -3443,7 +3444,7 @@ async def test_clear_client_alias_supports_endpoint_name(hass) -> None:
         device_id="router-1",
         client_id="2476a6ca95d7",
     )
-    runtime.coordinator.async_refresh.assert_awaited_once()
+    runtime.coordinator.schedule_write_verification.assert_called_once()
 
 
 async def test_set_client_alias_rejects_ambiguous_hostname_without_parent_name(
@@ -3667,7 +3668,7 @@ async def test_rename_endpoint_supports_endpoint_name(hass) -> None:
 
     runtime = entry.runtime_data
     runtime.client.async_rename_endpoint = AsyncMock()
-    runtime.coordinator.async_refresh = AsyncMock()
+    runtime.coordinator.schedule_write_verification = Mock()
 
     await hass.services.async_call(
         DOMAIN,
@@ -3683,7 +3684,7 @@ async def test_rename_endpoint_supports_endpoint_name(hass) -> None:
         "device-1",
         name="Kids iPhone",
     )
-    runtime.coordinator.async_refresh.assert_awaited_once()
+    runtime.coordinator.schedule_write_verification.assert_called_once()
 
 
 async def test_rename_endpoint_rejects_ambiguous_names(hass) -> None:
@@ -3811,7 +3812,7 @@ async def test_set_endpoint_analytics_logging_supports_endpoint_name(hass) -> No
 
     runtime = entry.runtime_data
     runtime.client.async_set_endpoint_analytics_logging = AsyncMock()
-    runtime.coordinator.async_refresh = AsyncMock()
+    runtime.coordinator.schedule_write_verification = Mock()
 
     await hass.services.async_call(
         DOMAIN,
@@ -3827,7 +3828,7 @@ async def test_set_endpoint_analytics_logging_supports_endpoint_name(hass) -> No
         "device-1",
         stats=2,
     )
-    runtime.coordinator.async_refresh.assert_awaited_once()
+    runtime.coordinator.schedule_write_verification.assert_called_once()
 
 
 async def test_set_endpoint_analytics_logging_rejects_invalid_mode(hass) -> None:
@@ -7824,3 +7825,172 @@ async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> N
     assert diagnostics["runtime"]["profiles"]["profile-1"]["filter_count"] == 5
     assert diagnostics["runtime"]["profiles"]["profile-1"]["endpoint_count"] == 3
     assert diagnostics["runtime"]["profiles"]["profile-2"]["endpoint_count"] == 1
+
+
+async def test_stale_refresh_is_discarded_when_write_lands_during_fetch(
+    hass,
+) -> None:
+    """A refresh that started before a write must not clobber the newer value."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    coordinator = entry.runtime_data.coordinator
+    runtime = entry.runtime_data
+
+    # Capture the registry before the refresh so we can prove it is preserved.
+    before = runtime.registry
+
+    # Barrier: hold the inventory fetch until we bump the write generation.
+    release = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def slow_inventory() -> ControlDInventoryPayload:
+        entered.set()
+        await release.wait()
+        return _inventory("user-123", "profile-1")
+
+    with (
+        patch.object(runtime.client, "async_get_inventory", new=slow_inventory),
+        patch.object(
+            runtime.client,
+            "async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        refresh_task = asyncio.create_task(coordinator._async_update_data())
+        await entered.wait()
+
+        # A write lands while the fetch is in flight.
+        coordinator._write_generation += 1
+
+        release.set()
+        result = await refresh_task
+
+    # The stale snapshot must be discarded: the returned registry is the
+    # existing optimistic one, not a freshly built one.
+    assert result is before
+    assert runtime.registry is before
+
+
+async def test_refresh_is_applied_when_no_write_lands_during_fetch(hass) -> None:
+    """A refresh that completes without an intervening write is applied."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    coordinator = entry.runtime_data.coordinator
+    runtime = entry.runtime_data
+    before = runtime.registry
+
+    # Patch the full fetch surface so no real network call escapes the block.
+    with (
+        patch.object(
+            runtime.client,
+            "async_get_inventory",
+            new=AsyncMock(return_value=_inventory("user-123", "profile-1")),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_detail",
+            new=AsyncMock(
+                side_effect=lambda profile_pk, include_services, include_rules: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=include_services,
+                        include_rules=include_rules,
+                    )
+                )
+            ),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_profile_option_catalog",
+            new=AsyncMock(return_value=OPTION_CATALOG),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch.object(
+            runtime.client,
+            "async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        registry = await coordinator._async_update_data()
+
+    # No write occurred during the fetch, so the fresh registry is applied and
+    # is a different object than the pre-refresh one.
+    assert registry is not before
+    assert runtime.registry is registry

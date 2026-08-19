@@ -204,11 +204,8 @@ class ProfileManager(BaseManager):
         self.runtime.registry.rules_by_profile[profile_pk].pop(rule_identity, None)
 
     def _schedule_runtime_refresh(self) -> None:
-        """Push optimistic state to listeners and queue a background refresh."""
-        self.runtime.active_coordinator.async_update_listeners()
-        self.runtime.active_coordinator.hass.async_create_task(
-            self.runtime.active_coordinator.async_refresh()
-        )
+        """Push optimistic state to listeners and queue a coalesced refresh."""
+        self.runtime.active_coordinator.schedule_write_verification()
 
     @staticmethod
     def _resolved_rule_write_state(
@@ -385,7 +382,14 @@ class ProfileManager(BaseManager):
                 for profile_pk in profile_pks
             )
         )
-        await self.runtime.active_coordinator.async_refresh()
+        for profile_pk in profile_pks:
+            profile_row = self.runtime.registry.profiles.get(profile_pk)
+            if profile_row is not None:
+                self.runtime.registry.profiles[profile_pk] = replace(
+                    profile_row,
+                    paused_until=paused_until,
+                )
+        self._schedule_runtime_refresh()
 
     async def async_enable_profiles(self, profile_pks: set[str]) -> None:
         """Enable one or more disabled profiles immediately."""
@@ -395,7 +399,14 @@ class ProfileManager(BaseManager):
                 for profile_pk in profile_pks
             )
         )
-        await self.runtime.active_coordinator.async_refresh()
+        for profile_pk in profile_pks:
+            profile_row = self.runtime.registry.profiles.get(profile_pk)
+            if profile_row is not None:
+                self.runtime.registry.profiles[profile_pk] = replace(
+                    profile_row,
+                    paused_until=None,
+                )
+        self._schedule_runtime_refresh()
 
     async def async_set_filter_enabled(
         self, profile_pk: str, filter_pk: str, enabled: bool

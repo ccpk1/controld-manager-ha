@@ -169,7 +169,7 @@ Current posture:
 - entities do not poll the API directly
 - bulk fetching is preferred when the API supports it
 - polling changes must stay bounded and coordinator-owned
-- after a successful mutation, the integration must request an immediate refresh of the affected configuration state
+- after a successful mutation, the integration pushes the optimistic in-memory state to the UI immediately and schedules a coalesced trailing-edge verification refresh that batches rapid sequential writes into a single follow-up fetch
 
 Rationale: one polling path is the only implemented and supported runtime shape today.
 
