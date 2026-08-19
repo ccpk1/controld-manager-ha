@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 import voluptuous as vol
@@ -3349,7 +3349,7 @@ async def test_set_client_alias_supports_endpoint_mac_selector(hass) -> None:
 
     runtime = entry.runtime_data
     runtime.client.async_set_endpoint_alias = AsyncMock()
-    runtime.coordinator.async_refresh = AsyncMock()
+    runtime.coordinator.schedule_write_verification = Mock()
 
     await hass.services.async_call(
         DOMAIN,
@@ -3367,7 +3367,7 @@ async def test_set_client_alias_supports_endpoint_mac_selector(hass) -> None:
         client_id="2476a6ca95d7",
         alias="Kids iPhone",
     )
-    runtime.coordinator.async_refresh.assert_awaited_once()
+    runtime.coordinator.schedule_write_verification.assert_called_once()
 
 
 async def test_set_client_alias_supports_analytics_only_hostname_selector(hass) -> None:
@@ -3390,7 +3390,7 @@ async def test_set_client_alias_supports_analytics_only_hostname_selector(hass) 
 
     runtime = entry.runtime_data
     runtime.client.async_set_endpoint_alias = AsyncMock()
-    runtime.coordinator.async_refresh = AsyncMock()
+    runtime.coordinator.schedule_write_verification = Mock()
 
     await hass.services.async_call(
         DOMAIN,
@@ -3408,7 +3408,7 @@ async def test_set_client_alias_supports_analytics_only_hostname_selector(hass) 
         client_id="2476a6ca95d7",
         alias="Kids iPhone",
     )
-    runtime.coordinator.async_refresh.assert_awaited_once()
+    runtime.coordinator.schedule_write_verification.assert_called_once()
 
 
 async def test_clear_client_alias_supports_endpoint_name(hass) -> None:
@@ -3429,7 +3429,7 @@ async def test_clear_client_alias_supports_endpoint_name(hass) -> None:
 
     runtime = entry.runtime_data
     runtime.client.async_clear_endpoint_alias = AsyncMock()
-    runtime.coordinator.async_refresh = AsyncMock()
+    runtime.coordinator.schedule_write_verification = Mock()
 
     await hass.services.async_call(
         DOMAIN,
@@ -3443,7 +3443,7 @@ async def test_clear_client_alias_supports_endpoint_name(hass) -> None:
         device_id="router-1",
         client_id="2476a6ca95d7",
     )
-    runtime.coordinator.async_refresh.assert_awaited_once()
+    runtime.coordinator.schedule_write_verification.assert_called_once()
 
 
 async def test_set_client_alias_rejects_ambiguous_hostname_without_parent_name(
@@ -3667,7 +3667,7 @@ async def test_rename_endpoint_supports_endpoint_name(hass) -> None:
 
     runtime = entry.runtime_data
     runtime.client.async_rename_endpoint = AsyncMock()
-    runtime.coordinator.async_refresh = AsyncMock()
+    runtime.coordinator.schedule_write_verification = Mock()
 
     await hass.services.async_call(
         DOMAIN,
@@ -3683,7 +3683,7 @@ async def test_rename_endpoint_supports_endpoint_name(hass) -> None:
         "device-1",
         name="Kids iPhone",
     )
-    runtime.coordinator.async_refresh.assert_awaited_once()
+    runtime.coordinator.schedule_write_verification.assert_called_once()
 
 
 async def test_rename_endpoint_rejects_ambiguous_names(hass) -> None:
@@ -3811,7 +3811,7 @@ async def test_set_endpoint_analytics_logging_supports_endpoint_name(hass) -> No
 
     runtime = entry.runtime_data
     runtime.client.async_set_endpoint_analytics_logging = AsyncMock()
-    runtime.coordinator.async_refresh = AsyncMock()
+    runtime.coordinator.schedule_write_verification = Mock()
 
     await hass.services.async_call(
         DOMAIN,
@@ -3827,7 +3827,7 @@ async def test_set_endpoint_analytics_logging_supports_endpoint_name(hass) -> No
         "device-1",
         stats=2,
     )
-    runtime.coordinator.async_refresh.assert_awaited_once()
+    runtime.coordinator.schedule_write_verification.assert_called_once()
 
 
 async def test_set_endpoint_analytics_logging_rejects_invalid_mode(hass) -> None:

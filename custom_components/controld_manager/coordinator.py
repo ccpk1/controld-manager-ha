@@ -11,6 +11,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -24,6 +25,7 @@ from .const import (
     CONF_AUTO_ENABLE_SERVICE_SWITCHES,
     CONF_PROFILE_POLICIES,
     CONF_SERVICE_EXPOSURE_MODE,
+    DEFAULT_WRITE_REFRESH_COOLDOWN,
     DOMAIN,
     SERVICE_EXPOSURE_AUTOMATIC,
     SERVICE_SELECTOR_AUTOMATIC,
@@ -55,11 +57,28 @@ class ControlDManagerDataUpdateCoordinator(DataUpdateCoordinator[ControlDRegistr
             name=DOMAIN,
             update_interval=runtime.refresh_intervals.configuration_sync,
             config_entry=entry,
+            request_refresh_debouncer=Debouncer(
+                hass,
+                LOGGER,
+                cooldown=DEFAULT_WRITE_REFRESH_COOLDOWN,
+                immediate=False,
+            ),
         )
         self._runtime = runtime
         self._entry = entry
         self._refresh_trigger = "scheduled"
         self._unavailable_logged = False
+
+    def schedule_write_verification(self) -> None:
+        """Trigger a coalesced verification refresh after a successful write.
+
+        Writes update the cached registry rows optimistically and call listeners
+        immediately, so the UI reflects a change instantly. The refresh is a
+        trailing-edge verification that batches rapid sequential writes into a
+        single request.
+        """
+        self.async_update_listeners()
+        self.hass.async_create_task(self.async_request_refresh())
 
     def apply_profile_policy_defaults(self, profile_pks: set[str]) -> None:
         """Persist new profile-policy defaults through the coordinator layer."""

@@ -963,6 +963,7 @@ async def test_ttl_option_toggle_restore_uses_catalog_default() -> None:
             active_coordinator=SimpleNamespace(
                 async_update_listeners=lambda: None,
                 hass=SimpleNamespace(async_create_task=_consume_task),
+                schedule_write_verification=lambda: None,
                 async_refresh=AsyncMock(),
             ),
         ),
