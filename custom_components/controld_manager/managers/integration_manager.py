@@ -583,7 +583,7 @@ class IntegrationManager(BaseManager):
                 title=IntegrationManager._require_string(level_payload, "title"),
                 enabled=bool(level_payload.get("status", 0)),
             )
-            for level_payload in payload.get("levels", [])
+            for level_payload in (payload.get("levels") or [])
             if isinstance(level_payload, dict)
         )
         selected_level_slug = IntegrationManager._optional_string(action.get("lvl"))
@@ -942,7 +942,7 @@ class IntegrationManager(BaseManager):
         account_pk = IntegrationManager._require_string(user_payload, "PK")
         safe_countries = tuple(
             country
-            for country in user_payload.get("safe_countries", [])
+            for country in (user_payload.get("safe_countries") or [])
             if isinstance(country, str)
         )
         return ControlDUser(
