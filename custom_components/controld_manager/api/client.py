@@ -48,7 +48,7 @@ class ControlDAPIClient:
         account_pk = self._require_string(user_payload, "PK")
         safe_countries = tuple(
             country
-            for country in user_payload.get("safe_countries", [])
+            for country in (user_payload.get("safe_countries") or [])
             if isinstance(country, str)
         )
         return ControlDUser(
