@@ -700,11 +700,11 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert "last_refresh_error" not in hass.states.get(status_entity_id).attributes
     assert "router_client_count" not in hass.states.get(status_entity_id).attributes
 
-    profile_device = device_registry.async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    profile_device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-1"), entry.entry_id
     )
-    account_device = device_registry.async_get_device(
-        identifiers={(DOMAIN, "instance::user-123")}
+    account_device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123"), entry.entry_id
     )
     assert profile_device is not None
     assert account_device is not None
@@ -931,8 +931,8 @@ async def test_phase5_policy_enabled_entities_are_created_and_attached(hass) -> 
     grouped_rule_entity_id = entity_registry.async_get_entity_id(
         "switch", DOMAIN, "user-123::profile::profile-1::rule::group:1|example2.com"
     )
-    profile_device = device_registry.async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    profile_device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-1"), entry.entry_id
     )
 
     assert status_entity_id is not None
@@ -1425,6 +1425,22 @@ async def test_endpoint_roaming_reassigns_device_attachment(hass) -> None:
             "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
             new=AsyncMock(return_value=SERVICE_CATALOG),
         ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_account_analytics",
+            new=AsyncMock(return_value=_account_analytics()),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_analytics",
+            new=AsyncMock(
+                side_effect=lambda _endpoint, profile_pk, **_kwargs: _profile_analytics(
+                    profile_pk
+                )
+            ),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_analytics_clients",
+            new=AsyncMock(return_value={}),
+        ),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -1437,8 +1453,8 @@ async def test_endpoint_roaming_reassigns_device_attachment(hass) -> None:
         "binary_sensor", DOMAIN, "user-123::endpoint::device-1::status"
     )
     endpoint_entry = entity_registry.async_get(status_entity_id)
-    secondary_profile_device = device_registry.async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-2")}
+    secondary_profile_device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-2"), entry.entry_id
     )
 
     assert endpoint_entry is not None
@@ -1457,8 +1473,8 @@ async def test_excluded_profile_device_is_removed_from_registry(hass) -> None:
     await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
 
     device_registry = dr.async_get(hass)
-    managed_profile_device = device_registry.async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-2")}
+    managed_profile_device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-2"), entry.entry_id
     )
     assert managed_profile_device is not None
 
@@ -1506,8 +1522,8 @@ async def test_excluded_profile_device_is_removed_from_registry(hass) -> None:
         await runtime.active_coordinator.async_refresh()
         await hass.async_block_till_done()
 
-    removed_profile_device = device_registry.async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-2")}
+    removed_profile_device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-2"), entry.entry_id
     )
     assert removed_profile_device is None
 
@@ -2660,8 +2676,8 @@ async def test_disable_service_supports_profile_id_selector(hass) -> None:
     )
     await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
 
-    profile_device = dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    profile_device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-1"), entry.entry_id
     )
     assert profile_device is not None
 
@@ -2721,8 +2737,8 @@ async def test_disable_service_prefers_profile_ids_over_profile_names(hass) -> N
     )
     await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
 
-    profile_device = dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    profile_device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-1"), entry.entry_id
     )
     assert profile_device is not None
 
@@ -2759,8 +2775,8 @@ async def test_disable_service_rejects_account_device_target(hass) -> None:
     )
     await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
 
-    account_device = dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, "instance::user-123")}
+    account_device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123"), entry.entry_id
     )
     assert account_device is not None
 
@@ -2783,8 +2799,8 @@ async def test_enable_service_supports_profile_id_selector(hass) -> None:
     )
     await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
 
-    profile_device = dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    profile_device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-1"), entry.entry_id
     )
     assert profile_device is not None
 
@@ -2936,8 +2952,8 @@ async def test_enable_service_prefers_profile_ids_over_profile_names(hass) -> No
     )
     await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
 
-    profile_device = dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    profile_device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-1"), entry.entry_id
     )
     assert profile_device is not None
 
@@ -3034,8 +3050,8 @@ async def test_disable_service_prefers_config_entry_id_over_name(hass) -> None:
             assert await hass.config_entries.async_setup(entry_two.entry_id)
             await hass.async_block_till_done()
 
-    target_profile = dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    target_profile = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-1"), entry_one.entry_id
     )
     assert target_profile is not None
 
@@ -3134,8 +3150,8 @@ async def test_disable_service_rejects_mixed_instance_targets(hass) -> None:
             assert await hass.config_entries.async_setup(entry_two.entry_id)
             await hass.async_block_till_done()
 
-    target_profile = dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, "instance::user-456::profile::profile-1")}
+    target_profile = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "instance::user-456::profile::profile-1"), entry_two.entry_id
     )
     assert target_profile is not None
 
@@ -3965,8 +3981,8 @@ async def test_set_filter_state_supports_user_facing_names(hass) -> None:
     )
     await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
 
-    profile_device = dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    profile_device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-1"), entry.entry_id
     )
     assert profile_device is not None
 
@@ -4530,8 +4546,8 @@ async def test_set_service_state_supports_user_facing_names(hass) -> None:
     )
     await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
 
-    profile_device = dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    profile_device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-1"), entry.entry_id
     )
     assert profile_device is not None
 
@@ -5320,8 +5336,8 @@ async def test_set_option_state_supports_select_option_name(hass) -> None:
     )
     await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
 
-    profile_device = dr.async_get(hass).async_get_device(
-        identifiers={(DOMAIN, "instance::user-123::profile::profile-1")}
+    profile_device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "instance::user-123::profile::profile-1"), entry.entry_id
     )
     assert profile_device is not None
 

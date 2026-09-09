@@ -34,7 +34,8 @@ class DeviceManager(BaseManager):
             model=MODEL_INSTANCE,
             name="Account",
         )
-        self._instance_device_id = instance_entry.id
+        instance_device_id = instance_entry.id
+        self._instance_device_id = instance_device_id
 
         current_profile_device_ids: dict[str, str] = {}
         for profile in registry.profiles.values():
@@ -46,7 +47,7 @@ class DeviceManager(BaseManager):
                 manufacturer=MANUFACTURER,
                 model=MODEL_PROFILE,
                 name=profile.name,
-                via_device=self.instance_identifier,
+                via_device_id=instance_device_id,
             )
             current_profile_device_ids[profile.profile_pk] = profile_entry.id
 
@@ -86,14 +87,19 @@ class DeviceManager(BaseManager):
     def profile_device_info(self, profile_pk: str) -> DeviceInfo | None:
         """Return device info for a profile device when it is known."""
         profile = self.runtime.registry.profiles.get(profile_pk)
-        if profile is None or profile_pk not in self._profile_device_ids:
+        instance_device_id = self._instance_device_id
+        if (
+            profile is None
+            or profile_pk not in self._profile_device_ids
+            or instance_device_id is None
+        ):
             return None
         return DeviceInfo(
             identifiers={self.profile_identifier(profile_pk)},
             manufacturer=MANUFACTURER,
             model=MODEL_PROFILE,
             name=profile.name,
-            via_device=self.instance_identifier,
+            via_device_id=instance_device_id,
         )
 
     async def async_attach_entity_to_profile(
