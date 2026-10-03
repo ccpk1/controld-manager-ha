@@ -68,6 +68,7 @@ from .const import (
     SERVICE_FIELD_SERVICE_ID,
     SERVICE_FIELD_SERVICE_NAME,
     SERVICE_FIELD_VALUE,
+    SERVICE_GET_ACCOUNT_OVERVIEW,
     SERVICE_GET_CATALOG,
     SERVICE_RENAME_ENDPOINT,
     SERVICE_SET_CLIENT_ALIAS,
@@ -357,6 +358,12 @@ GET_CATALOG_SERVICE_SCHEMA = vol.Schema(
     }
 )
 
+GET_ACCOUNT_OVERVIEW_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedProfileServiceTarget:
@@ -381,6 +388,13 @@ class ResolvedCatalogServiceTarget:
     entry: ControlDManagerConfigEntry
     profile_pks: frozenset[str]
     catalog_type: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedOverviewServiceTarget:
+    """Resolved service target for the read-only account overview."""
+
+    entry: ControlDManagerConfigEntry
 
 
 @dataclass(frozen=True, slots=True)
@@ -738,6 +752,14 @@ async def async_register_services(hass: HomeAssistant) -> None:
             profile_pks=resolved_target.profile_pks,
         )
 
+    async def async_handle_get_account_overview(call: ServiceCall) -> ServiceResponse:
+        """Return the account overview for one config entry scope."""
+        resolved_target = _resolve_overview_service_target(hass, call)
+        integration_manager = resolved_target.entry.runtime_data.managers.integration
+        return integration_manager.async_build_account_overview_response(
+            config_entry_id=resolved_target.entry.entry_id,
+        )
+
     for legacy_service in ("pause_profile", "resume_profile", "set_filter_enabled"):
         if hass.services.has_service(DOMAIN, legacy_service):
             hass.services.async_remove(DOMAIN, legacy_service)
@@ -839,6 +861,14 @@ async def async_register_services(hass: HomeAssistant) -> None:
             SERVICE_GET_CATALOG,
             async_handle_get_catalog,
             schema=GET_CATALOG_SERVICE_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_GET_ACCOUNT_OVERVIEW):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_ACCOUNT_OVERVIEW,
+            async_handle_get_account_overview,
+            schema=GET_ACCOUNT_OVERVIEW_SERVICE_SCHEMA,
             supports_response=SupportsResponse.ONLY,
         )
 
@@ -961,6 +991,28 @@ def _resolve_catalog_service_target(
         profile_pks=resolved_profiles.profile_pks,
         catalog_type=catalog_type,
     )
+
+
+def _resolve_overview_service_target(
+    hass: HomeAssistant, call: ServiceCall
+) -> ResolvedOverviewServiceTarget:
+    """Resolve a read-only account overview request into one entry."""
+    explicit_entry_ids = set(_ensure_list(call.data.get(SERVICE_FIELD_CONFIG_ENTRY_ID)))
+    config_entry_name = call.data.get(SERVICE_FIELD_CONFIG_ENTRY_NAME)
+    loaded_entries = {
+        entry.entry_id: entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if _entry_runtime(entry) is not None
+    }
+    entry = _resolve_loaded_entry(
+        hass,
+        entry_ids=explicit_entry_ids,
+        entry_name=(config_entry_name if isinstance(config_entry_name, str) else None),
+        loaded_entries=loaded_entries,
+        entity_ids=set(),
+        device_ids=set(),
+    )
+    return ResolvedOverviewServiceTarget(entry=entry)
 
 
 def _resolve_endpoint_service_target(

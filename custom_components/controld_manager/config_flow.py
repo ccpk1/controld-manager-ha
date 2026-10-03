@@ -34,9 +34,11 @@ from .const import (
     CONF_ENTRY_NAME,
     CONF_EXPOSE_EXTERNAL_FILTERS,
     CONF_EXPOSED_CUSTOM_RULES,
+    CONF_LLM_TOOL_MODE,
     CONF_MANAGED_IN_HOME_ASSISTANT,
     DEFAULT_TITLE,
     DOMAIN,
+    LLM_TOOL_MODES,
     MAX_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
     MAX_REFRESH_INTERVAL,
     MIN_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
@@ -49,6 +51,7 @@ from .const import (
     TRANS_KEY_SERVICE_SELECTOR_CONFLICT,
     TRANS_KEY_UNKNOWN,
 )
+from .helpers.llm_support import llm_tools_supported
 from .models import (
     ControlDManagerRuntime,
     ControlDOptions,
@@ -507,37 +510,56 @@ class ControlDManagerOptionsFlow(OptionsFlow):
     async def async_step_integration_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Edit integration-wide polling settings."""
+        """Edit integration-wide polling and AI tool settings."""
         if user_input is not None:
-            self._options = replace(
-                self._options,
-                configuration_sync_interval=timedelta(
+            previous_mode = self._options.llm_tool_mode
+            updates: dict[str, Any] = {
+                "configuration_sync_interval": timedelta(
                     minutes=user_input[CONF_CONFIGURATION_SYNC_INTERVAL_MINUTES]
-                ),
-            )
+                )
+            }
+            if llm_tools_supported():
+                updates["llm_tool_mode"] = user_input[CONF_LLM_TOOL_MODE]
+            self._options = replace(self._options, **updates)
             await self._async_apply_updated_options()
+            if self._options.llm_tool_mode != previous_mode:
+                # The tier decides which tools are registered, so the entry must
+                # reload for the new set to take effect.
+                self.hass.config_entries.async_schedule_reload(self._entry.entry_id)
             return await self.async_step_init()
+
+        settings_schema: dict[Any, Any] = {
+            vol.Required(
+                CONF_CONFIGURATION_SYNC_INTERVAL_MINUTES,
+                default=int(
+                    self._options.configuration_sync_interval.total_seconds() // 60
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=int(MIN_REFRESH_INTERVAL.total_seconds() // 60),
+                    max=int(MAX_REFRESH_INTERVAL.total_seconds() // 60),
+                    mode=selector.NumberSelectorMode.BOX,
+                    step=1,
+                )
+            ),
+        }
+        if llm_tools_supported():
+            settings_schema[
+                vol.Required(
+                    CONF_LLM_TOOL_MODE,
+                    default=self._options.llm_tool_mode,
+                )
+            ] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(LLM_TOOL_MODES),
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    translation_key=CONF_LLM_TOOL_MODE,
+                )
+            )
 
         return self.async_show_form(
             step_id="integration_settings",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_CONFIGURATION_SYNC_INTERVAL_MINUTES,
-                        default=int(
-                            self._options.configuration_sync_interval.total_seconds()
-                            // 60
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=int(MIN_REFRESH_INTERVAL.total_seconds() // 60),
-                            max=int(MAX_REFRESH_INTERVAL.total_seconds() // 60),
-                            mode=selector.NumberSelectorMode.BOX,
-                            step=1,
-                        )
-                    ),
-                }
-            ),
+            data_schema=vol.Schema(settings_schema),
         )
 
     async def _async_get_client(self) -> ControlDAPIClient:

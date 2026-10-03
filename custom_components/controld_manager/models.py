@@ -16,6 +16,7 @@ from .const import (
     CONF_ENDPOINT_SENSORS_ENABLED,
     CONF_EXPOSE_EXTERNAL_FILTERS,
     CONF_EXPOSED_CUSTOM_RULES,
+    CONF_LLM_TOOL_MODE,
     CONF_MANAGED_IN_HOME_ASSISTANT,
     CONF_PROFILE_ANALYTICS_INTERVAL_MINUTES,
     CONF_PROFILE_POLICIES,
@@ -23,7 +24,9 @@ from .const import (
     DEFAULT_CONFIGURATION_SYNC_INTERVAL,
     DEFAULT_ENDPOINT_ANALYTICS_INTERVAL,
     DEFAULT_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
+    DEFAULT_LLM_TOOL_MODE,
     DEFAULT_PROFILE_ANALYTICS_INTERVAL,
+    LLM_TOOL_MODES,
     MAX_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
     MAX_REFRESH_INTERVAL,
     MIN_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
@@ -108,6 +111,30 @@ class ControlDAccountAnalytics:
     blocked_queries_ratio: float | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class ControlDActivityLogPage:
+    """One page of per-record DNS activity, newest first."""
+
+    records: tuple[dict[str, Any], ...] = ()
+    page: int = 0
+    page_size: int = 0
+
+
+@dataclass(slots=True, frozen=True)
+class ControlDDnsVerdict:
+    """Normalized policy verdict for one domain on one endpoint."""
+
+    domain: str
+    record_type: str
+    rcode: int
+    is_blocked: bool
+    profile_pk: str | None = None
+    source: str | None = None
+    action: int | None = None
+    match: str | None = None
+    answers: tuple[str, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -580,6 +607,7 @@ class ControlDOptions:
     configuration_sync_interval: timedelta = DEFAULT_CONFIGURATION_SYNC_INTERVAL
     profile_analytics_interval: timedelta = DEFAULT_PROFILE_ANALYTICS_INTERVAL
     endpoint_analytics_interval: timedelta = DEFAULT_ENDPOINT_ANALYTICS_INTERVAL
+    llm_tool_mode: str = DEFAULT_LLM_TOOL_MODE
     profile_policies: dict[str, ControlDProfilePolicy] = field(default_factory=dict)
 
     @classmethod
@@ -601,6 +629,7 @@ class ControlDOptions:
                 data.get(CONF_ENDPOINT_ANALYTICS_INTERVAL_MINUTES),
                 DEFAULT_ENDPOINT_ANALYTICS_INTERVAL,
             ),
+            llm_tool_mode=_bounded_llm_tool_mode(data.get(CONF_LLM_TOOL_MODE)),
             profile_policies={
                 profile_pk: ControlDProfilePolicy.from_mapping(policy)
                 for profile_pk, policy in data.get(CONF_PROFILE_POLICIES, {}).items()
@@ -620,6 +649,7 @@ class ControlDOptions:
             CONF_ENDPOINT_ANALYTICS_INTERVAL_MINUTES: int(
                 self.endpoint_analytics_interval.total_seconds() // 60
             ),
+            CONF_LLM_TOOL_MODE: self.llm_tool_mode,
             CONF_PROFILE_POLICIES: {
                 profile_pk: policy.as_mapping()
                 for profile_pk, policy in self.profile_policies.items()
@@ -648,6 +678,13 @@ def _bounded_timedelta(value: Any, default: timedelta) -> timedelta:
     max_minutes = int(MAX_REFRESH_INTERVAL.total_seconds() // 60)
     minutes = max(min_minutes, min(max_minutes, minutes))
     return timedelta(minutes=minutes)
+
+
+def _bounded_llm_tool_mode(value: Any) -> str:
+    """Normalize a stored LLM tool mode into the supported tier set."""
+    if isinstance(value, str) and value in LLM_TOOL_MODES:
+        return value
+    return DEFAULT_LLM_TOOL_MODE
 
 
 @dataclass(slots=True, frozen=True)
@@ -726,6 +763,26 @@ class ControlDRegistry:
     def empty(cls) -> Self:
         """Return an empty runtime registry."""
         return cls()
+
+    @property
+    def profile_count(self) -> int:
+        """Return the number of discovered profiles."""
+        return len(self.profiles)
+
+    @property
+    def endpoint_count(self) -> int:
+        """Return the protected endpoint count shown on the account entity."""
+        return self.endpoint_inventory.protected_endpoint_count
+
+    @property
+    def discovered_endpoint_count(self) -> int:
+        """Return the raw endpoint inventory count."""
+        return self.endpoint_inventory.discovered_endpoint_count
+
+    @property
+    def router_client_count(self) -> int:
+        """Return the router-attached client count."""
+        return self.endpoint_inventory.router_client_count
 
     def protected_endpoint_count_for_profile(self, profile_pk: str) -> int:
         """Return the protected endpoint count for one profile."""

@@ -679,3 +679,17 @@ get_catalog:
       required: false
       selector:
         text:
+
+get_account_overview:
+  name: Get account overview
+  description: Return high-level account counts and block statistics for the selected Control D scope.
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:

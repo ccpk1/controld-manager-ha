@@ -10,6 +10,7 @@ from typing import Any
 from homeassistant.util.json import JsonValueType
 
 from ..models import (
+    ControlDAccountAnalytics,
     ControlDDefaultRule,
     ControlDFilter,
     ControlDFilterLevel,
@@ -306,6 +307,86 @@ class IntegrationManager(BaseManager):
             "items": items,
             "text": text,
         }
+
+    def async_build_account_overview_response(
+        self,
+        *,
+        config_entry_id: str,
+    ) -> dict[str, JsonValueType]:
+        """Build the account overview payload.
+
+        Every count here comes from the same registry accessors the account and
+        profile entities use, so the overview can never disagree with a sensor.
+        """
+        registry = self.runtime.registry
+        return {
+            "config_entry_id": config_entry_id,
+            "account": {
+                "region": registry.user.stats_endpoint if registry.user else None,
+                "status": registry.user.status if registry.user else None,
+                "profile_count": registry.profile_count,
+                "endpoint_count": registry.endpoint_count,
+                "discovered_endpoint_count": registry.discovered_endpoint_count,
+                "router_client_count": registry.router_client_count,
+                "analytics": self._serialize_account_analytics(
+                    registry.account_analytics
+                ),
+            },
+            "profiles": self._build_profile_overview_rows(),
+        }
+
+    def _serialize_account_analytics(
+        self, analytics: ControlDAccountAnalytics | None
+    ) -> dict[str, JsonValueType]:
+        """Serialize one analytics window without datetimes."""
+        if analytics is None:
+            return {}
+        return {
+            "total_queries": analytics.total_queries,
+            "blocked_queries": analytics.blocked_queries,
+            "bypassed_queries": analytics.bypassed_queries,
+            "redirected_queries": analytics.redirected_queries,
+            "blocked_queries_ratio": analytics.blocked_queries_ratio,
+            "window_start": (
+                analytics.start_time.isoformat() if analytics.start_time else None
+            ),
+            "window_end": (
+                analytics.end_time.isoformat() if analytics.end_time else None
+            ),
+        }
+
+    def _build_profile_overview_rows(self) -> list[JsonValueType]:
+        """Build one overview row per profile.
+
+        Counts use the same registry accessors as the profile entities, and the
+        analytics values come from the same ``profile_analytics_by_profile``
+        mapping the profile analytics sensors read.
+        """
+        registry = self.runtime.registry
+        rows: list[JsonValueType] = []
+        for profile_pk in self._sorted_profile_pks(frozenset(registry.profiles)):
+            profile = registry.profiles[profile_pk]
+            analytics = registry.profile_analytics_by_profile.get(profile_pk)
+            rows.append(
+                {
+                    "profile_id": profile_pk,
+                    "profile_name": profile.name,
+                    "endpoint_count": (
+                        registry.protected_endpoint_count_for_profile(profile_pk)
+                    ),
+                    "paused": profile.paused_until is not None,
+                    "blocked_queries": (
+                        analytics.blocked_queries if analytics else None
+                    ),
+                    "bypassed_queries": (
+                        analytics.bypassed_queries if analytics else None
+                    ),
+                    "redirected_queries": (
+                        analytics.redirected_queries if analytics else None
+                    ),
+                }
+            )
+        return rows
 
     def build_live_service_rows(
         self,

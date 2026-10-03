@@ -82,11 +82,24 @@
       "integration_settings": {
         "title": "Integration settings",
         "data": {
-          "configuration_sync_interval_minutes": "Configuration sync interval (minutes)"
+          "configuration_sync_interval_minutes": "Configuration sync interval (minutes)",
+          "llm_tool_mode": "AI assistant (MCP) tool access"
         },
         "data_description": {
-          "configuration_sync_interval_minutes": "How often to fetch the currently implemented Control D inventory and configuration data, including profiles, endpoints, filters, options, default rules, and any enabled service or rule catalogs. Default: 15."
+          "configuration_sync_interval_minutes": "How often to fetch the currently implemented Control D inventory and configuration data, including profiles, endpoints, filters, options, default rules, and any enabled service or rule catalogs. Default: 15.",
+          "llm_tool_mode": "How much of the integration an AI assistant or MCP client may reach. This is independent of the entity exposure settings above. Off registers nothing; Summary only sends non-identifying counts; Read only adds names, addresses, and analytics; Read and control adds reversible changes; Full adds destructive actions. Control D has no separate admin gate, so this setting is the only limit on what a connected assistant can change. Requires Home Assistant 2026.10 or newer."
         }
+      }
+    }
+  },
+  "selector": {
+    "llm_tool_mode": {
+      "options": {
+        "off": "Off",
+        "summary_only": "Summary only",
+        "read_only": "Read only",
+        "read_and_control": "Read and control",
+        "full": "Full (includes destructive actions)"
       }
     }
   },
@@ -810,6 +823,20 @@
           "name": "Profile names",
           "description": "Optional. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids. Leave both profile selectors empty to return all managed profiles in the selected config entry scope."
         },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "get_account_overview": {
+      "name": "Get account overview",
+      "description": "Return high-level account counts and block statistics for the selected Control D scope.",
+      "fields": {
         "config_entry_id": {
           "name": "Configuration Entry ID",
           "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."

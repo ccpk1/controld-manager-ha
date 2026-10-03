@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-
-from homeassistant.const import Platform
+from typing import Final
 
 DOMAIN = "controld_manager"
 DEFAULT_TITLE = "Control D"
@@ -56,6 +55,7 @@ CORE_PROFILE_OPTION_TOGGLES = frozenset({"safesearch", "safeyoutube"})
 CORE_PROFILE_OPTION_SELECTS = frozenset({"ai_malware"})
 ADVANCED_PROFILE_OPTION_TOGGLES = frozenset(
     {
+        "block_attacks",
         "block_rfc1918",
         "no_dnssec",
         "spoof_ipv6",
@@ -74,19 +74,35 @@ SUPPORTED_PROFILE_OPTION_SELECTS = (
     CORE_PROFILE_OPTION_SELECTS | ADVANCED_PROFILE_OPTION_SELECTS
 )
 
-PLATFORMS: tuple[Platform, ...] = (
-    Platform.BINARY_SENSOR,
-    Platform.BUTTON,
-    Platform.SENSOR,
-    Platform.SELECT,
-    Platform.SWITCH,
+# Minimum Home Assistant version that supports the LLM tool contract
+# (llm.ToolResult, llm.ToolAnnotations, Tool.integration). Kept here as a pure
+# tuple so this module stays free of version-check logic; the predicate lives in
+# helpers/llm_support.py, which api/ never imports.
+MIN_LLM_TOOLS_HA_VERSION: Final = (2026, 10)
+
+# LLM/MCP tool exposure tiers. The tier is the only write control: Control D
+# writes have no admin gate, so what is registered is what a caller can reach.
+CONF_LLM_TOOL_MODE: Final = "llm_tool_mode"
+LLM_TOOL_MODE_OFF: Final = "off"
+LLM_TOOL_MODE_SUMMARY_ONLY: Final = "summary_only"
+LLM_TOOL_MODE_READ_ONLY: Final = "read_only"
+LLM_TOOL_MODE_READ_AND_CONTROL: Final = "read_and_control"
+LLM_TOOL_MODE_FULL: Final = "full"
+LLM_TOOL_MODES: tuple[str, ...] = (
+    LLM_TOOL_MODE_OFF,
+    LLM_TOOL_MODE_SUMMARY_ONLY,
+    LLM_TOOL_MODE_READ_ONLY,
+    LLM_TOOL_MODE_READ_AND_CONTROL,
+    LLM_TOOL_MODE_FULL,
 )
+DEFAULT_LLM_TOOL_MODE: Final = LLM_TOOL_MODE_SUMMARY_ONLY
 
 SERVICE_CREATE_RULE = "create_rule"
 SERVICE_CLEAR_CLIENT_ALIAS = "clear_client_alias"
 SERVICE_DELETE_RULE = "delete_rule"
 SERVICE_DISABLE_PROFILE = "disable_profile"
 SERVICE_ENABLE_PROFILE = "enable_profile"
+SERVICE_GET_ACCOUNT_OVERVIEW = "get_account_overview"
 SERVICE_GET_CATALOG = "get_catalog"
 SERVICE_RENAME_ENDPOINT = "rename_endpoint"
 SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING = "set_endpoint_analytics_logging"
