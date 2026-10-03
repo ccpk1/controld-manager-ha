@@ -56,11 +56,7 @@ where the data came from**. Mirrors Control D's own vocabulary (e.g. "activity l
 | `get_inventory` | Read | `/profiles`, `/devices`, `/v2/client` | Profiles, endpoints, owning + attached profiles, client counts, parent/child, `is_endpoint` |
 | `get_activity_log` | Read | `/v2/activity-log` | Per-record; filters mirror the dashboard chips; carries `trigger` + `triggerValue` |
 | `test_domain` | Read | `dns.controld.com/<endpoint>` | One endpoint, one domain; `no_log=1`; `RCODE 5` = blocked |
-| `get_block_summary` | Read | `count` | Action counts for a scope/window |
-| `get_top_blocked_domains` | Read | `count/question` | Ranked domains |
-| `get_block_breakdown` | Read | `count/triggerValue` | Ranked filters/services; resolved labels |
-| `get_policy` | Read | profile detail endpoints | Filters, services, options, rules, default rule |
-| `get_catalog` | Read | `get_catalog` service | Global catalog resolution |
+| `get_catalog` | Read | `get_catalog` service | Profile-scoped state for filters, services, rules, options, and default rule |
 | `set_filter_state` | Control | `set_filter_state` | Reversible |
 | `set_service_state` | Control | `set_service_state` | Reversible |
 | `set_option_state` | Control | `set_option_state` | Reversible |
@@ -73,10 +69,13 @@ where the data came from**. Mirrors Control D's own vocabulary (e.g. "activity l
 | `create_rule` | Control | `create_rule` | Additive but **not idempotent**; never `already_in_state`; `undo` = `delete_rule` |
 | `delete_rule` | **Full** | `delete_rule` | Destructive; `confirm: true` |
 
-**Deliberately not proposed:** a separate `get_block_causes` (folded into
-`get_activity_log` + `get_block_breakdown`), a `list_analytics_clients` tool (misnames
-endpoint data), an endpoint-to-profile assignment tool (deferred), any bulk action, and
-any time-series tool (none exists upstream).
+**Deliberately not proposed:** `get_block_summary`, `get_top_blocked_domains`, and
+`get_block_breakdown` (aggregate counts are in `get_account_overview` and
+per-record cause is in `get_activity_log`; the ranked endpoints have too few
+filters to drill into a truncated result), a separate `get_policy` tool
+(`get_catalog` already returns state), a `list_analytics_clients` tool (misnames
+endpoint data), an endpoint-to-profile assignment tool (deferred), any bulk
+action, and any time-series tool (none exists upstream).
 
 ## 4. Envelope shapes (copy the Firewalla contract)
 

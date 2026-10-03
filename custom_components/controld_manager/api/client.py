@@ -231,126 +231,10 @@ class ControlDAPIClient:
         meta = body.get("meta")
         meta_mapping = meta if isinstance(meta, dict) else {}
         return ControlDActivityLogPage(
-            records=tuple(self._normalize_count_rows(queries)),
+            records=tuple(self._normalize_mapping_rows(queries)),
             page=self._optional_int(meta_mapping.get("page"), page),
             page_size=self._optional_int(meta_mapping.get("pageSize"), page_size),
         )
-
-    async def async_get_ranked_domains(
-        self,
-        stats_endpoint: str,
-        *,
-        start_time: datetime,
-        end_time: datetime,
-        action: int = ACTION_BLOCKED,
-        profile_id: str | None = None,
-        endpoint_ids: Sequence[str] | None = None,
-        limit: int | None = None,
-        sort_order: str = "desc",
-    ) -> list[dict[str, Any]]:
-        """Fetch the ranked queried-domain breakdown for one scope and window."""
-        return await self._async_get_ranked_counts(
-            stats_endpoint,
-            "/v2/statistic/count/question",
-            start_time=start_time,
-            end_time=end_time,
-            action=action,
-            profile_id=profile_id,
-            endpoint_ids=endpoint_ids,
-            limit=limit,
-            sort_order=sort_order,
-        )
-
-    async def async_get_trigger_breakdown(
-        self,
-        stats_endpoint: str,
-        *,
-        start_time: datetime,
-        end_time: datetime,
-        trigger: str,
-        action: int = ACTION_BLOCKED,
-        profile_id: str | None = None,
-        endpoint_ids: Sequence[str] | None = None,
-        limit: int | None = None,
-        sort_order: str = "desc",
-    ) -> list[dict[str, Any]]:
-        """Fetch the ranked trigger breakdown for one trigger class and scope."""
-        return await self._async_get_ranked_counts(
-            stats_endpoint,
-            "/v2/statistic/count/triggerValue",
-            start_time=start_time,
-            end_time=end_time,
-            action=action,
-            profile_id=profile_id,
-            endpoint_ids=endpoint_ids,
-            limit=limit,
-            sort_order=sort_order,
-            trigger=trigger,
-        )
-
-    async def async_get_source_countries(
-        self,
-        stats_endpoint: str,
-        *,
-        start_time: datetime,
-        end_time: datetime,
-        action: int = ACTION_BLOCKED,
-        profile_id: str | None = None,
-        endpoint_ids: Sequence[str] | None = None,
-        sort_order: str = "desc",
-    ) -> list[dict[str, Any]]:
-        """Fetch the ranked source-country breakdown for one scope and window."""
-        return await self._async_get_ranked_counts(
-            stats_endpoint,
-            "/v2/statistic/count/srcCountry",
-            start_time=start_time,
-            end_time=end_time,
-            action=action,
-            profile_id=profile_id,
-            endpoint_ids=endpoint_ids,
-            limit=None,
-            sort_order=sort_order,
-        )
-
-    async def _async_get_ranked_counts(
-        self,
-        stats_endpoint: str,
-        path: str,
-        *,
-        start_time: datetime,
-        end_time: datetime,
-        action: int,
-        profile_id: str | None,
-        endpoint_ids: Sequence[str] | None,
-        limit: int | None,
-        sort_order: str,
-        trigger: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Fetch one ranked analytics breakdown and normalize its rows."""
-        params: dict[str, Any] = {
-            **self._analytics_time_params(start_time, end_time),
-            "action[]": str(action),
-            "sortOrder": sort_order,
-        }
-        if profile_id is not None:
-            params["profileId"] = profile_id
-        if endpoint_ids:
-            params["endpointId[]"] = list(endpoint_ids)
-        if limit is not None:
-            params["limit"] = str(limit)
-        if trigger is not None:
-            params["trigger"] = trigger
-
-        payload = await self._async_get_external_json(
-            f"{self._analytics_base_url(stats_endpoint)}{path}", params=params
-        )
-        body = self._extract_body_mapping(payload)
-        counts = body.get("counts")
-        if not isinstance(counts, list):
-            raise ControlDApiResponseError(
-                "Control D analytics response is missing the expected 'counts' list"
-            )
-        return self._normalize_count_rows(counts)
 
     async def async_get_dns_verdict(
         self,
@@ -1067,13 +951,13 @@ class ControlDAPIClient:
         return None
 
     @classmethod
-    def _normalize_count_rows(cls, rows: list[Any]) -> list[dict[str, Any]]:
-        """Normalize ranked analytics rows into value/count mappings."""
+    def _normalize_mapping_rows(cls, rows: list[Any]) -> list[dict[str, Any]]:
+        """Normalize a list of records into mapping rows."""
         normalized_rows: list[dict[str, Any]] = []
         for row in rows:
             if not isinstance(row, dict):
                 raise ControlDApiResponseError(
-                    "Control D analytics counts must contain only mappings"
+                    "Control D response records must contain only mappings"
                 )
             normalized_rows.append(row)
         return normalized_rows

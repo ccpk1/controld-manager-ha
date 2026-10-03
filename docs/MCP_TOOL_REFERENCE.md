@@ -195,20 +195,28 @@ come before controls.
 | `get_activity_log` *(planned)* | "What happened, and why was this blocked?" |
 | `test_domain` *(planned)* | "Would this endpoint block this domain, and by what?" |
 
-### Group 4 — Block analytics *(planned: Phase 2)*
+### Group 4 — Block analytics
 
-| Tool | Answers |
-| --- | --- |
-| `get_block_summary` *(planned)* | "How much is blocked/bypassed/redirected?" |
-| `get_top_blocked_domains` *(planned)* | "What domains are blocked most?" |
-| `get_block_breakdown` *(planned)* | "Which filters or services are doing the blocking?" |
+**Not exposed.** Aggregate block/bypass/redirect counts come from
+`get_account_overview`, and per-record cause comes from `get_activity_log`.
+Control D's ranked breakdown endpoints (`statistic/count/question`,
+`statistic/count/triggerValue`, `statistic/count/srcCountry`) take only
+`profileId`, `endpointId[]`, `action`, and `limit`. A capped ranking cannot be
+narrowed further or paged, so it returns a slice rather than a complete answer.
+Forcing everything through `get_activity_log`, which has the full filter set, is
+strictly better than exposing a surface that cannot be drilled into.
 
 ### Group 5 — Configuration reads *(planned: Phase 2)*
 
 | Tool | Answers |
 | --- | --- |
-| `get_policy` *(planned)* | "What filters, services, options, and rules does this profile have?" |
-| `get_catalog` *(planned)* | "What values can I target?" |
+| `get_catalog` *(planned)* | "What filters, services, options, rules, and default rules exist, and what state are they in?" |
+
+`get_catalog` returns **state**, not just availability: filters carry `enabled`,
+`supports_modes`, and `current_mode`; services carry `current_mode`; rules carry
+`action`, `enabled`, `comment`, and `group`; profile options carry
+`current_value`. There is deliberately **no separate policy tool**, because it
+would be a re-skin of this one.
 
 ### Group 6 — Control *(planned: Phase 3)*
 

@@ -16,10 +16,6 @@ from custom_components.controld_manager.api.exceptions import (
     ControlDApiRateLimitError,
     ControlDApiResponseError,
 )
-from custom_components.controld_manager.utils.analytics_labels import (
-    build_analytics_label_map,
-    resolve_ranked_rows,
-)
 from custom_components.controld_manager.utils.truncation import (
     build_limit_meta,
     build_page_meta,
@@ -125,27 +121,6 @@ async def test_activity_log_rejects_missing_queries() -> None:
         )
 
 
-async def test_ranked_reads_return_normalized_rows() -> None:
-    """Ranked domains, triggers, and countries share one normalized shape."""
-    client = _client()
-    payload = {"body": {"counts": [{"value": "ads", "count": 5}]}}
-
-    for method, kwargs in (
-        (client.async_get_ranked_domains, {}),
-        (client.async_get_trigger_breakdown, {"trigger": "filter"}),
-        (client.async_get_source_countries, {}),
-    ):
-        request = AsyncMock(return_value=payload)
-        with patch.object(client, "_async_get_external_json", request):
-            rows = await method(
-                "america",
-                start_time=_WINDOW_START,
-                end_time=_WINDOW_END,
-                **kwargs,
-            )
-        assert rows == [{"value": "ads", "count": 5}]
-
-
 @pytest.mark.parametrize(
     ("rcode", "expected_blocked"),
     [(0, False), (5, True)],
@@ -241,37 +216,6 @@ async def test_transport_statuses_map_to_typed_errors(
 def test_retryable_signal(error: Exception, retryable: bool) -> None:
     """Each exception class reports whether a retry may help."""
     assert cast(Any, error).retryable is retryable
-
-
-def test_label_map_prefers_catalogs_and_keeps_variants() -> None:
-    """Catalog labels resolve slugs; documented variants come from the alias map."""
-    label_map = build_analytics_label_map(
-        filters=[{"PK": "ads", "name": "Ads & Trackers"}],
-        options=[{"PK": "ai_malware", "title": "AI Malware Filter"}],
-    )
-
-    assert label_map["ads"] == "Ads & Trackers"
-    assert label_map["ai_malware"] == "AI Malware Filter"
-    assert label_map["ads_small"] == "Ads & Trackers - Relaxed"
-
-
-def test_resolve_ranked_rows_keeps_raw_value_and_flags_unmapped() -> None:
-    """Every row keeps its raw value; unresolved slugs are flagged, not invented."""
-    rows = [
-        {"value": "ads", "count": 10},
-        {"value": "mystery_slug", "count": 1},
-    ]
-    resolved = resolve_ranked_rows(rows, {"ads": "Ads & Trackers"})
-
-    assert resolved[0] == {
-        "value": "ads",
-        "label": "Ads & Trackers",
-        "label_resolved": True,
-        "count": 10,
-    }
-    assert resolved[1]["value"] == "mystery_slug"
-    assert resolved[1]["label"] == "mystery_slug"
-    assert resolved[1]["label_resolved"] is False
 
 
 @pytest.mark.parametrize(
