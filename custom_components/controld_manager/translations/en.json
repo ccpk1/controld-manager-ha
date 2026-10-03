@@ -846,6 +846,36 @@
           "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
         }
       }
+    },
+    "get_inventory": {
+      "name": "Get inventory",
+      "description": "Return the Control D account topology: profiles, endpoints, and (with full detail) clients.",
+      "fields": {
+        "detail": {
+          "name": "Detail",
+          "description": "Optional. Defaults to summary. Summary returns profiles and endpoints. Full also returns the client rows under the selected endpoints."
+        },
+        "profile_id": {
+          "name": "Profile IDs",
+          "description": "Optional. One or more Control D profile IDs to narrow the result to. Omit to include every profile."
+        },
+        "endpoint_id": {
+          "name": "Endpoint IDs",
+          "description": "Optional. One or more endpoint device IDs to narrow the result to. Omit to include every endpoint."
+        },
+        "client_limit": {
+          "name": "Client limit",
+          "description": "Optional. Defaults to 100, maximum 500. Caps the client rows returned only when detail is full. The response reports whether the cap was reached."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded. If both Configuration Entry ID and Configuration Entry name are provided, Configuration Entry ID takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
     }
   },
   "entity": {

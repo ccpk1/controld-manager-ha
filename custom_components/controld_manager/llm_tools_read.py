@@ -19,8 +19,13 @@ from homeassistant.helpers import llm
 
 from .const import (
     DOMAIN,
+    SERVICE_FIELD_CLIENT_LIMIT,
     SERVICE_FIELD_CONFIG_ENTRY_ID,
+    SERVICE_FIELD_DETAIL,
+    SERVICE_FIELD_ENDPOINT_ID,
+    SERVICE_FIELD_PROFILE_ID,
     SERVICE_GET_ACCOUNT_OVERVIEW,
+    SERVICE_GET_INVENTORY,
 )
 from .llm_tools_common import format_tool_name
 
@@ -108,6 +113,86 @@ class GetAccountOverviewTool(_ControlDReadTool):
     parameters = vol.Schema({})
     _service = SERVICE_GET_ACCOUNT_OVERVIEW
     _response_type = "account_overview"
+
+
+class GetInventoryTool(_ControlDReadTool):
+    """Report the account topology: profiles, endpoints, and clients."""
+
+    name = format_tool_name("get_inventory")
+    title = "Get inventory"
+    description = (
+        "Report the account's structure: every profile, every endpoint, and "
+        "(with full detail) every client seen under an endpoint. Use it to "
+        "resolve the identifiers and names that the other tools need before "
+        "acting, and to answer questions about how the account is organized.\n"
+        "\n"
+        "The words are not interchangeable. A *profile* is a policy container. "
+        "An *endpoint* is a top-level protected row (a router segment, a ctrld "
+        "instance, or an individually protected device). A *client* is something "
+        "seen under an endpoint. An endpoint reports into its own profile, but "
+        "may be attached to more than one; `attached_profiles` lists them all.\n"
+        "\n"
+        "A client follows its parent endpoint's profile. A client that has been "
+        "made into its own standalone device becomes an endpoint as well: it "
+        "appears in `endpoints` with its own profile, and in `clients` with "
+        "`is_standalone_endpoint: true` and its `own_endpoint_id` set. A client "
+        "with `is_standalone_endpoint: false` only follows its parent.\n"
+        "\n"
+        "Defaults to `detail: summary`, which returns profiles and endpoints but "
+        "no client rows. Use `detail: full` to add clients, and narrow with "
+        "`profile_id` or `endpoint_id` rather than pulling every client in the "
+        "account. Client rows are capped by `client_limit`, and "
+        "`clients_truncated` says whether the cap was hit; narrow the filter "
+        "instead of treating a capped list as complete.\n"
+        "\n"
+        "All counts come from the same runtime state the integration's own "
+        "entities use, so they always agree with the sensors."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Optional(
+                SERVICE_FIELD_DETAIL,
+                default="summary",
+                description=(
+                    "Optional. 'summary' (default) returns profiles and "
+                    "endpoints. 'full' also returns the client rows under the "
+                    "selected endpoints."
+                ),
+            ): vol.In(("summary", "full")),
+            vol.Optional(
+                SERVICE_FIELD_PROFILE_ID,
+                description=(
+                    "Optional. One Control D profile id, or a list of them "
+                    "(from get_account_overview), to narrow the result to those "
+                    "profiles. Omit to include every profile."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_ENDPOINT_ID,
+                description=(
+                    "Optional. One endpoint device_id, or a list of them, to "
+                    "narrow the result. Omit to include every endpoint."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_CLIENT_LIMIT,
+                default=100,
+                description=(
+                    "Optional. Defaults to 100, maximum 500. Caps the client "
+                    "rows returned only when detail is 'full'. `clients_truncated` "
+                    "reports whether the cap was reached, so a capped list is "
+                    "never mistaken for a complete one."
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
+        }
+    )
+    _service = SERVICE_GET_INVENTORY
+    _response_type = "inventory"
+
+
+def build_read_tools(*, entry_id: str) -> list[llm.Tool]:
+    """Return the read tools bound to one config entry."""
+    return [GetInventoryTool(entry_id=entry_id)]
 
 
 def build_account_overview_tools(*, entry_id: str) -> list[llm.Tool]:

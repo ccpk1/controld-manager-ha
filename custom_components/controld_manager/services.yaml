@@ -693,3 +693,45 @@ get_account_overview:
       required: false
       selector:
         text:
+
+get_inventory:
+  name: Get inventory
+  description: "Return the Control D account topology: profiles, endpoints, and (with full detail) clients."
+  fields:
+    detail:
+      required: false
+      default: summary
+      selector:
+        select:
+          options:
+            - summary
+            - full
+    profile_id:
+      required: false
+      example: |
+        ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0"]
+      selector:
+        text:
+    endpoint_id:
+      required: false
+      example: |
+        ["461wtt4eyr"]
+      selector:
+        text:
+    client_limit:
+      required: false
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 500
+          mode: box
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:

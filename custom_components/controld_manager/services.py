@@ -30,6 +30,8 @@ from .api import (
 )
 from .const import (
     DEFAULT_DISABLE_MINUTES,
+    DETAIL_LEVELS,
+    DETAIL_SUMMARY,
     DOMAIN,
     SERVICE_CLEAR_CLIENT_ALIAS,
     SERVICE_CREATE_RULE,
@@ -39,11 +41,14 @@ from .const import (
     SERVICE_FIELD_ALIAS,
     SERVICE_FIELD_CANCEL_EXPIRATION,
     SERVICE_FIELD_CATALOG_TYPE,
+    SERVICE_FIELD_CLIENT_LIMIT,
     SERVICE_FIELD_COMMENT,
     SERVICE_FIELD_CONFIG_ENTRY_ID,
     SERVICE_FIELD_CONFIG_ENTRY_NAME,
+    SERVICE_FIELD_DETAIL,
     SERVICE_FIELD_ENABLED,
     SERVICE_FIELD_ENDPOINT_HOSTNAME,
+    SERVICE_FIELD_ENDPOINT_ID,
     SERVICE_FIELD_ENDPOINT_IP,
     SERVICE_FIELD_ENDPOINT_MAC,
     SERVICE_FIELD_ENDPOINT_NAME,
@@ -70,6 +75,7 @@ from .const import (
     SERVICE_FIELD_VALUE,
     SERVICE_GET_ACCOUNT_OVERVIEW,
     SERVICE_GET_CATALOG,
+    SERVICE_GET_INVENTORY,
     SERVICE_RENAME_ENDPOINT,
     SERVICE_SET_CLIENT_ALIAS,
     SERVICE_SET_DEFAULT_RULE_STATE,
@@ -364,6 +370,20 @@ GET_ACCOUNT_OVERVIEW_SERVICE_SCHEMA = vol.Schema(
     }
 )
 
+GET_INVENTORY_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(SERVICE_FIELD_DETAIL, default=DETAIL_SUMMARY): vol.In(
+            DETAIL_LEVELS
+        ),
+        vol.Optional(SERVICE_FIELD_PROFILE_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_CLIENT_LIMIT, default=100): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=500)
+        ),
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedProfileServiceTarget:
@@ -391,8 +411,8 @@ class ResolvedCatalogServiceTarget:
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedOverviewServiceTarget:
-    """Resolved service target for the read-only account overview."""
+class ResolvedEntryServiceTarget:
+    """Resolved service target for a read-only, entry-scoped response."""
 
     entry: ControlDManagerConfigEntry
 
@@ -754,10 +774,26 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def async_handle_get_account_overview(call: ServiceCall) -> ServiceResponse:
         """Return the account overview for one config entry scope."""
-        resolved_target = _resolve_overview_service_target(hass, call)
+        resolved_target = _resolve_entry_service_target(hass, call)
         integration_manager = resolved_target.entry.runtime_data.managers.integration
         return integration_manager.async_build_account_overview_response(
             config_entry_id=resolved_target.entry.entry_id,
+        )
+
+    async def async_handle_get_inventory(call: ServiceCall) -> ServiceResponse:
+        """Return the account topology for one config entry scope."""
+        resolved_target = _resolve_entry_service_target(hass, call)
+        integration_manager = resolved_target.entry.runtime_data.managers.integration
+        return integration_manager.async_build_inventory_response(
+            config_entry_id=resolved_target.entry.entry_id,
+            detail=call.data[SERVICE_FIELD_DETAIL],
+            profile_ids=frozenset(
+                _ensure_list(call.data.get(SERVICE_FIELD_PROFILE_ID))
+            ),
+            endpoint_ids=frozenset(
+                _ensure_list(call.data.get(SERVICE_FIELD_ENDPOINT_ID))
+            ),
+            client_limit=call.data[SERVICE_FIELD_CLIENT_LIMIT],
         )
 
     for legacy_service in ("pause_profile", "resume_profile", "set_filter_enabled"):
@@ -869,6 +905,14 @@ async def async_register_services(hass: HomeAssistant) -> None:
             SERVICE_GET_ACCOUNT_OVERVIEW,
             async_handle_get_account_overview,
             schema=GET_ACCOUNT_OVERVIEW_SERVICE_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_GET_INVENTORY):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_INVENTORY,
+            async_handle_get_inventory,
+            schema=GET_INVENTORY_SERVICE_SCHEMA,
             supports_response=SupportsResponse.ONLY,
         )
 
@@ -993,10 +1037,10 @@ def _resolve_catalog_service_target(
     )
 
 
-def _resolve_overview_service_target(
+def _resolve_entry_service_target(
     hass: HomeAssistant, call: ServiceCall
-) -> ResolvedOverviewServiceTarget:
-    """Resolve a read-only account overview request into one entry."""
+) -> ResolvedEntryServiceTarget:
+    """Resolve a read-only, entry-scoped request into one config entry."""
     explicit_entry_ids = set(_ensure_list(call.data.get(SERVICE_FIELD_CONFIG_ENTRY_ID)))
     config_entry_name = call.data.get(SERVICE_FIELD_CONFIG_ENTRY_NAME)
     loaded_entries = {
@@ -1012,7 +1056,7 @@ def _resolve_overview_service_target(
         entity_ids=set(),
         device_ids=set(),
     )
-    return ResolvedOverviewServiceTarget(entry=entry)
+    return ResolvedEntryServiceTarget(entry=entry)
 
 
 def _resolve_endpoint_service_target(

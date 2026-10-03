@@ -195,8 +195,30 @@ async def test_api_instance_is_served_with_the_prompt(hass: HomeAssistant) -> No
 
     assert api_instance.api_prompt
     assert "Control D" in api_instance.api_prompt
+    # Summary is the default tier, and it registers the overview only.
     assert {tool.name for tool in api_instance.tools} == {
         f"{DOMAIN}__get_account_overview"
+    }
+
+
+async def test_read_tier_adds_the_inventory_tool(hass: HomeAssistant) -> None:
+    """Read tiers add inventory; Summary does not."""
+    entry = _entry(options={CONF_LLM_TOOL_MODE: LLM_TOOL_MODE_READ_ONLY})
+    entry.add_to_hass(hass)
+
+    with (
+        patch(_FIRST_REFRESH, new=AsyncMock()),
+        patch(_PREDICATE, return_value=True),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        api_instance = await llm.async_get_api(
+            hass, f"{DOMAIN}-{entry.entry_id}", _llm_context()
+        )
+
+    assert {tool.name for tool in api_instance.tools} == {
+        f"{DOMAIN}__get_account_overview",
+        f"{DOMAIN}__get_inventory",
     }
 
 
@@ -218,7 +240,7 @@ async def test_off_tier_registers_no_api(hass: HomeAssistant) -> None:
 
 async def test_overview_tool_contract(hass: HomeAssistant) -> None:
     """The overview tool declares its contract and injects its own entry."""
-    entry = _entry()
+    entry = _entry(options={CONF_LLM_TOOL_MODE: LLM_TOOL_MODE_READ_ONLY})
     entry.add_to_hass(hass)
 
     with (
@@ -231,7 +253,8 @@ async def test_overview_tool_contract(hass: HomeAssistant) -> None:
             hass, f"{DOMAIN}-{entry.entry_id}", _llm_context()
         )
 
-    (tool,) = api_instance.tools
+    tools = {tool.name: tool for tool in api_instance.tools}
+    tool = tools[f"{DOMAIN}__get_account_overview"]
     assert tool.integration == DOMAIN
     assert tool.annotations.read_only is True
     assert tool.annotations.destructive is False

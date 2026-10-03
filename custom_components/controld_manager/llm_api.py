@@ -19,9 +19,10 @@ from homeassistant.helpers import llm
 from .const import (
     DOMAIN,
     LLM_TOOL_MODE_OFF,
+    LLM_TOOL_MODE_SUMMARY_ONLY,
 )
 from .llm_tools_common import PROMPT
-from .llm_tools_read import build_account_overview_tools
+from .llm_tools_read import build_account_overview_tools, build_read_tools
 from .models import ControlDManagerRuntime
 
 
@@ -61,13 +62,17 @@ class ControlDManagerAPI(llm.API):
     def _build_tools(self) -> list[llm.Tool]:
         """Return the tools registered for the configured tier.
 
-        The overview is the entry point in every enabled tier; at Summary it is
-        the only tool, and it is registered without profile details so it carries
-        no identifiers. Higher tiers add tools in later phases.
+        The overview is the entry point in every enabled tier, and at Summary it
+        is the only tool. Read tiers add the inventory topology; later phases add
+        activity, domain-test, catalog, and control tools.
         """
         if self._mode == LLM_TOOL_MODE_OFF:
             return []
-        return build_account_overview_tools(entry_id=self._entry_id)
+        tools = build_account_overview_tools(entry_id=self._entry_id)
+        if self._mode == LLM_TOOL_MODE_SUMMARY_ONLY:
+            return tools
+        tools.extend(build_read_tools(entry_id=self._entry_id))
+        return tools
 
 
 def _resolve_api_name(hass: HomeAssistant, entry: ConfigEntry) -> str:

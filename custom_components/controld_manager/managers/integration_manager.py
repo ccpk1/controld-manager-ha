@@ -9,6 +9,7 @@ from typing import Any
 
 from homeassistant.util.json import JsonValueType
 
+from ..const import DETAIL_FULL
 from ..models import (
     ControlDAccountAnalytics,
     ControlDDefaultRule,
@@ -387,6 +388,167 @@ class IntegrationManager(BaseManager):
                 }
             )
         return rows
+
+    def async_build_inventory_response(
+        self,
+        *,
+        config_entry_id: str,
+        detail: str,
+        profile_ids: frozenset[str],
+        endpoint_ids: frozenset[str],
+        client_limit: int,
+    ) -> dict[str, JsonValueType]:
+        """Build the account topology payload.
+
+        Profiles own endpoints. An endpoint is a top-level Control D protected
+        row; a client is something seen under an endpoint. A client that has been
+        turned into its own standalone Device appears in both lists: as an
+        endpoint with its own profile, and as a client of the parent, which is
+        what ``is_standalone_endpoint`` marks.
+
+        Counts come from the same registry accessors the account and profile
+        entities use, so this can never disagree with a sensor.
+        """
+        registry = self.runtime.registry
+        selected_profiles = self._selected_profile_pks(profile_ids)
+
+        profile_rows: list[JsonValueType] = [
+            {
+                "profile_id": profile_pk,
+                "profile_name": registry.profiles[profile_pk].name,
+                "paused": registry.profiles[profile_pk].paused_until is not None,
+                "endpoint_count": registry.protected_endpoint_count_for_profile(
+                    profile_pk
+                ),
+            }
+            for profile_pk in selected_profiles
+        ]
+
+        endpoint_rows = self._build_inventory_endpoint_rows(
+            profile_ids, endpoint_ids, selected_profiles
+        )
+        response: dict[str, JsonValueType] = {
+            "config_entry_id": config_entry_id,
+            "detail": detail,
+            "profiles": profile_rows,
+            "endpoints": endpoint_rows,
+        }
+
+        if detail == DETAIL_FULL:
+            clients, truncated = self._build_inventory_client_rows(
+                profile_ids, endpoint_ids, selected_profiles, client_limit
+            )
+            response["clients"] = clients
+            response["client_limit"] = client_limit
+            response["clients_truncated"] = truncated
+        return response
+
+    def _selected_profile_pks(self, profile_ids: frozenset[str]) -> list[str]:
+        """Return sorted profile ids, narrowed to an explicit selection if given."""
+        all_profile_pks = self._sorted_profile_pks(
+            frozenset(self.runtime.registry.profiles)
+        )
+        if not profile_ids:
+            return all_profile_pks
+        return [
+            profile_pk for profile_pk in all_profile_pks if profile_pk in profile_ids
+        ]
+
+    def _build_inventory_endpoint_rows(
+        self,
+        profile_ids: frozenset[str],
+        endpoint_ids: frozenset[str],
+        selected_profiles: list[str],
+    ) -> list[JsonValueType]:
+        """Build one row per endpoint, filtered by profile and endpoint selection."""
+        registry = self.runtime.registry
+        selected_profile_set = set(selected_profiles)
+        rows: list[JsonValueType] = []
+        for device_id in sorted(registry.endpoints):
+            endpoint = registry.endpoints[device_id]
+            if endpoint_ids and device_id not in endpoint_ids:
+                continue
+            attached_ids = {item.profile_pk for item in endpoint.attached_profiles}
+            if profile_ids and not (attached_ids & selected_profile_set):
+                continue
+            rows.append(
+                {
+                    "role": "endpoint",
+                    "is_endpoint": True,
+                    "device_id": device_id,
+                    "name": endpoint.name,
+                    "owning_profile_id": endpoint.owning_profile_pk,
+                    "owning_profile_name": self._profile_name(
+                        endpoint.owning_profile_pk
+                    ),
+                    "attached_profiles": [
+                        {
+                            "profile_id": item.profile_pk,
+                            "profile_name": self._profile_name(item.profile_pk),
+                        }
+                        for item in endpoint.attached_profiles
+                    ],
+                    "associated_client_count": endpoint.associated_client_count,
+                    "parent_device_id": endpoint.parent_device_id,
+                    "last_active": self._serialize_datetime(endpoint.last_active),
+                }
+            )
+        return rows
+
+    def _build_inventory_client_rows(
+        self,
+        profile_ids: frozenset[str],
+        endpoint_ids: frozenset[str],
+        selected_profiles: list[str],
+        client_limit: int,
+    ) -> tuple[list[JsonValueType], bool]:
+        """Build one row per client, capped, reporting whether the cap was hit."""
+        registry = self.runtime.registry
+        selected_profile_set = set(selected_profiles)
+        rows: list[JsonValueType] = []
+        truncated = False
+        for target in sorted(
+            registry.client_alias_targets.values(), key=lambda item: item.target_key
+        ):
+            if endpoint_ids and target.parent_endpoint_device_id not in endpoint_ids:
+                continue
+            if profile_ids and target.owning_profile_pk not in selected_profile_set:
+                continue
+            if len(rows) >= client_limit:
+                truncated = True
+                break
+            rows.append(
+                {
+                    "role": "client",
+                    "is_endpoint": False,
+                    "client_id": target.client_id,
+                    "parent_endpoint_id": target.parent_endpoint_device_id,
+                    "parent_endpoint_name": target.parent_endpoint_name,
+                    "alias": target.client_alias,
+                    "hostname": target.client_hostname,
+                    "mac_address": target.client_mac_address,
+                    "ip_address": target.client_ip_address,
+                    # A client that became its own standalone Device is an
+                    # endpoint too; one that did not follows its parent's profile.
+                    "is_standalone_endpoint": target.endpoint_device_id is not None,
+                    "own_endpoint_id": target.endpoint_device_id,
+                    "own_endpoint_name": target.endpoint_name,
+                    "owning_profile_id": target.owning_profile_pk,
+                }
+            )
+        return rows, truncated
+
+    def _profile_name(self, profile_pk: str | None) -> str | None:
+        """Return a profile display name when the profile is known."""
+        if profile_pk is None:
+            return None
+        profile = self.runtime.registry.profiles.get(profile_pk)
+        return profile.name if profile else None
+
+    @staticmethod
+    def _serialize_datetime(value: Any) -> str | None:
+        """Serialize an optional datetime without leaking a datetime object."""
+        return value.isoformat() if hasattr(value, "isoformat") else None
 
     def build_live_service_rows(
         self,
