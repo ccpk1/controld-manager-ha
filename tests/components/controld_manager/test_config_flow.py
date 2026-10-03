@@ -479,7 +479,7 @@ async def test_reconfigure_flow_updates_api_token(hass) -> None:
 async def test_options_flow_integration_settings_only_exposes_active_poller(
     hass,
 ) -> None:
-    """The integration settings form should only expose active polling controls."""
+    """The integration settings form exposes the poller and the AI tool tier."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
@@ -493,6 +493,33 @@ async def test_options_flow_integration_settings_only_exposes_active_poller(
     result = await flow.async_step_integration_settings()
 
     assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert isinstance(schema, vol.Schema)
+    field_names = [marker.schema for marker in schema.schema]
+    assert field_names == [
+        "configuration_sync_interval_minutes",
+        "llm_tool_mode",
+    ]
+
+
+async def test_options_flow_hides_llm_tier_on_older_core(hass) -> None:
+    """The AI tool tier is not offered when the running Core cannot serve it."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+
+    flow = ControlDManagerOptionsFlow(entry)
+    flow.hass = hass
+
+    with patch(
+        "custom_components.controld_manager.config_flow.llm_tools_supported",
+        return_value=False,
+    ):
+        result = await flow.async_step_integration_settings()
+
     schema = result["data_schema"]
     assert isinstance(schema, vol.Schema)
     field_names = [marker.schema for marker in schema.schema]
