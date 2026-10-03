@@ -1,0 +1,253 @@
+# Control D Manager — MCP Tool Reference
+
+The authoritative reference for the tools this integration exposes to LLMs and MCP
+clients (via Home Assistant's `mcp_server`). It is also the **spec** the tool
+surface is built and tested against.
+
+- **Audience:** LLM/MCP tool authors, agent developers, and anyone wiring a client
+  to this integration. Users of the Home Assistant UI or service calls should read
+  [`USER_GUIDE.md`](USER_GUIDE.md) instead.
+- **Scope:** every available and planned tool. Tools marked *(planned)* do not
+  exist yet; this document is the target they are built to.
+- **Status:** the spec exists, the API foundation is complete, and `get_account_overview`
+  is implemented. The remaining tools are added in Phase 2 of
+  `plans/in-process/CONTROLD_MANAGER_LLM_TOOLS_IN-PROCESS.md`.
+- **How to read it:** [Conventions](#conventions) apply to every tool; each tool
+  below follows one fixed template. Read Conventions first.
+
+**Who can use these tools.** The surface is not Assist-only. Home Assistant's
+`mcp_server` integration serves it to **any MCP client** — desktop and editor
+assistants, chat clients, and custom agents — as well as to Assist. Enabling it is
+therefore a disclosure decision, and the tier is the control that governs it.
+
+---
+
+## Conventions
+
+### Terminology
+
+These words are exact and are not interchangeable. They come from the repository
+lexicon in `ARCHITECTURE.md` and `DEVELOPMENT_STANDARDS.md`.
+
+| Term | Meaning |
+| --- | --- |
+| **Profile** | A Control D configuration container holding rules, services, and blocklists |
+| **Endpoint** | A top-level Control D protected row from `/devices` (router segment, ctrld instance, or individually protected client) |
+| **Client** | A client visible under an endpoint; client aliases are client-scoped |
+| **Device** | A Home Assistant device-registry container only |
+| **Entity** | A Home Assistant platform object only |
+
+Scope rules:
+
+- A **client under an endpoint follows that endpoint's profile** (a ctrld VLAN
+  endpoint, whose clients inherit its profile).
+- A client that is **explicitly assigned** a profile **is its own endpoint**.
+  There is no "individually protected" flag on a sub-client; assignment is what
+  makes it an endpoint.
+- Never call an endpoint a device or a client, and never call a client an
+  endpoint.
+
+### Naming
+
+Every tool is named `controld_manager__<verb>_<noun>`, named for **what it
+returns, not where the data came from**. Control tool names mirror the underlying
+service name (`set_filter_state`, `rename_endpoint`, …). The `controld_manager__`
+prefix disambiguates our tools when several LLM APIs are merged.
+
+### Availability model
+
+A single option, **AI assistant (MCP) tool access**, controls what is registered.
+There is no admin gate on Control D writes, so this tier is the only limit on what
+a connected client can reach. Profile names are not treated as private: they are
+user-assigned labels already shown as Home Assistant device names.
+
+| Tier | Registered | Identifiers |
+| --- | --- | --- |
+| **Off** | nothing | — |
+| **Summary only** *(default)* | the account overview | counts plus per-profile names and counts |
+| **Read only** | all read tools | full detail |
+| **Read and control** | read tools + reversible controls | full |
+| **Full** | read + control + destructive | full, irreversible |
+
+Requires **Home Assistant Core 2026.10+**. On older Core the integration registers
+no tools and offers no option; every other feature is unaffected.
+
+### Response shape — reads
+
+```json
+{
+  "result": { "...payload..." },
+  "meta": { "response_type": "block_breakdown", "truncated": true }
+}
+```
+
+- `result` — the payload.
+- `meta.response_type` — a stable name for the shape.
+- `meta.truncated` / `meta.applied_limit` — present only when a cap was applied.
+- `meta.has_more` / `meta.page` / `meta.page_size` — present on paged surfaces.
+
+### Response shape — control actions
+
+```json
+{
+  "status": "applied",
+  "changed": true,
+  "target": { "id": "461wtt4eyr", "name": "Firewalla-VLAN60" },
+  "before": { "enabled": true },
+  "after": { "enabled": false },
+  "undo": "controld_manager__set_filter_state(...)",
+  "warnings": []
+}
+```
+
+- `status` — `applied` | `already_in_state` | `failed`.
+- `changed` — whether anything actually changed.
+- `target` — the **resolved** object acted on (id + name).
+- `before` / `after` — `before` is the state observed before the action; `after`
+  is the state the action **requested**, not a fresh reading.
+- `undo` — the exact call that reverses the action, or `null`. It may name a tool
+  from a higher tier than the caller has enabled; the tool then states that the
+  configured tier does not permit it.
+- `warnings` — degradations or side effects.
+
+`already_in_state` applies to **idempotent** tools only. `create_rule` is not
+idempotent and can never report it.
+
+Both shapes are strictly JSON-serializable (no datetimes or sets).
+
+### Annotations
+
+Every tool declares all four MCP annotations: `read_only`, `destructive`,
+`idempotent`, `open_world`. Read tools declare `read_only=True, destructive=False`
+explicitly, because the annotation defaults are the least safe case. `create_rule`
+declares `idempotent=False`.
+
+### Analytics surfaces
+
+Two surfaces with different retention and dimensions:
+
+| Surface | Shape | Retention | Dimensions |
+| --- | --- | --- | --- |
+| **Activity log** | per-record DNS queries | ~33 days | all (incl. destination) |
+| **Statistics** | pre-aggregated counts | up to ~1 year | source-side only |
+
+Retention is a user setting and these are **maximums**; a deployment may have less
+or logging may be off. An empty activity result can mean no traffic, an expired
+window, or logging disabled — the response cannot distinguish them.
+
+### Truncation
+
+A capped result is never presented as complete. Ranked tools report
+`meta.truncated`; paged tools report `meta.has_more`. Neither surface provides a
+total, so a total is never claimed.
+
+### Comparison and cost
+
+There is no caching layer. Affordability comes from scope, limits, and filters. A
+typical activity-log page is roughly 47 KB per 100 records, so read tools default
+to a narrow window and a small limit, and callers narrow further.
+
+---
+
+## Tool catalog
+
+Tools are grouped to match how a person actually asks. Within each group, reads
+come before controls.
+
+### Group 1 — Orientation
+
+| Tool | Answers |
+| --- | --- |
+| `get_account_overview` | "How many profiles/endpoints/clients? Is anything being blocked?" |
+
+#### `controld_manager__get_account_overview`
+
+- **Answers** — "What is the overall state of my account, and is anything being blocked?"
+- **When to use** — first, to size the account and see which profile is doing what.
+- **When not to use** — for per-query detail (use `get_activity_log`) or for what
+  is blocked (use `get_top_blocked_domains` / `get_block_breakdown`).
+- **Inputs** — none. The tool binds to its own config entry.
+- **Returns** — `result.account` with `region`, `status`, `profile_count`,
+  `endpoint_count`, `discovered_endpoint_count`, `router_client_count`, and an
+  `analytics` block (`total_queries`, `blocked_queries`, `bypassed_queries`,
+  `redirected_queries`, `blocked_queries_ratio`, `window_start`, `window_end`),
+  plus `result.profiles[]` with `profile_id`, `profile_name`, `endpoint_count`,
+  `paused`, and blocked/bypassed/redirected counts.
+- **Counts never diverge from the entities.** Every count comes from the same
+  `ControlDRegistry` accessors the account and profile entities read, so the tool
+  and the sensors always agree. `endpoint_count` is the protected count
+  (`discovered + router clients`), not the raw `/devices` row count.
+- **Availability** — every enabled tier, including Summary.
+- **Reversibility** — read-only; `undo` is `null`.
+- **Annotations** — `read_only=True`, `destructive=False`, `idempotent=True`,
+  `open_world=False`.
+
+### Group 2 — Inventory and topology *(planned: Phase 2)*
+
+| Tool | Answers |
+| --- | --- |
+| `get_inventory` *(planned)* | "What are my profiles, endpoints, and clients, and what is assigned to what?" |
+
+### Group 3 — Troubleshooting and activity *(planned: Phase 2)*
+
+| Tool | Answers |
+| --- | --- |
+| `get_activity_log` *(planned)* | "What happened, and why was this blocked?" |
+| `test_domain` *(planned)* | "Would this endpoint block this domain, and by what?" |
+
+### Group 4 — Block analytics *(planned: Phase 2)*
+
+| Tool | Answers |
+| --- | --- |
+| `get_block_summary` *(planned)* | "How much is blocked/bypassed/redirected?" |
+| `get_top_blocked_domains` *(planned)* | "What domains are blocked most?" |
+| `get_block_breakdown` *(planned)* | "Which filters or services are doing the blocking?" |
+
+### Group 5 — Configuration reads *(planned: Phase 2)*
+
+| Tool | Answers |
+| --- | --- |
+| `get_policy` *(planned)* | "What filters, services, options, and rules does this profile have?" |
+| `get_catalog` *(planned)* | "What values can I target?" |
+
+### Group 6 — Control *(planned: Phase 3)*
+
+`set_filter_state`, `set_service_state`, `set_option_state`, `set_rule_state`,
+`set_default_rule_state`, `enable_profile`, `disable_profile`, `rename_endpoint`,
+`set_endpoint_analytics_logging`, `set_client_alias`, `clear_client_alias`,
+`create_rule` *(all planned)*.
+
+### Destructive *(planned: Phase 3, Full tier only)*
+
+`delete_rule` *(planned)* — `confirm: true` required, `destructive` annotation.
+
+---
+
+## Per-tool template
+
+Every tool documented below uses this exact shape, in this order:
+
+- **Name** — `controld_manager__<name>`
+- **Answers** — the user question it responds to (one line)
+- **When to use / not to use** — disambiguation from its nearest sibling
+- **Inputs** — flat, each with type, `description`, and valid values
+- **Returns** — the envelope or action-result shape
+- **Availability & tier**
+- **Reversibility & undo** — for controls
+- **Annotations** — the four flags
+
+## Gotchas the tool schemas must encode
+
+- `statusCode`, **not** `rcode` (`rcode` is silently ignored).
+- `clientId` requires a co-present `endpointId`.
+- Activity Log `pageSize` max is 500; deep pages return older records.
+- Activity Log retains ~33 days; statistics up to ~1 year; both are user-settable.
+- `endpointName` comes back empty on activity records — resolve names from the
+  inventory.
+- Destination filters (`dstCountry`, `dstIsp`, `dstAsn`) exist on the Activity Log
+  only.
+- Never sum ranked rows for a total; never round-trip a display label back as a
+  query input.
+- DNS verdict: HTTP 200 with `RCODE 5` means **blocked**; empty `verdict` means
+  **no policy matched**. Neither is an error.
+- Analytics maintenance returns `503` code `50303`.

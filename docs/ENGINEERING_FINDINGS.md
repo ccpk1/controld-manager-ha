@@ -669,6 +669,7 @@ Observed families include:
 - `v2/statistic/count/question`
 - `v2/statistic/count/srcCountry`
 - `v2/client`
+- `v2/activity-log` (per-record; see the Activity Log findings)
 
 Common traits:
 
@@ -702,6 +703,18 @@ Observed definitions:
 - `2` = redirected by IP
 - `3` = redirected by Location
 - `spoofTarget` is the redirect destination and may be an IP, domain, or IATA code
+
+The published reference also defines the trigger and protocol enums, and all
+values are accepted live:
+
+- `trigger`: `default`, `grule` (global Control D rule), `filter`, `service`,
+  `custom`, `rebind`
+- `protocol`: `legacy`, `doh`, `dot`, `doh3`, `doq`
+
+`custom` attributes a block to one of the user's own rules; `grule` and `rebind`
+have no equivalent in the `triggerValue` breakdown endpoint, which accepts only
+`filter` and `service`. `legacy` is unencrypted DNS and is the useful signal for
+"is this client still using plain DNS".
 
 Settled interpretation:
 
@@ -798,6 +811,44 @@ Settled interpretation:
 
 - direct `triggerValue[]` query inputs do not yet appear safe to derive from guessed UI labels or partial slug knowledge
 - ranked output values and direct query input values should be treated as separate contracts until proven otherwise
+- **now refined:** the aggregate `triggerValue` endpoint is where this holds; the
+  per-record Activity Log carries `trigger` + `triggerValue` on each record and
+  does not require a round-trip guess at all (see below). The aggregate caveat
+  stands for ranked breakdown inputs.
+
+### Activity Log is the per-record surface (33-day)
+
+The Activity Log (`v2/activity-log`) returns individual DNS query records and is
+the only surface that carries the block cause on the record itself. Each record
+includes `question`, `action`, `trigger`, `triggerValue`, `endpointId`, `clientId`,
+`profileId`, `rrType`, `protocol`, `statusCode`, `sourceGeoip`, and `answers`.
+It accepts the full filter set (search, action, trigger, endpoint, profile,
+protocol, country, ISP, ASN, statusCode, rrType, spoofTarget) with
+`page`/`pageSize`, and is the surface behind the dashboard's own activity view
+and domain search. It retains **33 days only**. Full contract in the Activity Log
+API findings.
+
+### Analytics retention is bounded and configurable
+
+- Activity Log retains 33 days; the Statistics family retains up to 365 days
+- these are **maximums**; users may choose shorter retention, or disable logging
+  entirely, so a deployment may have far less history or none
+- an empty result is ambiguous: "no matching traffic", "expired past retention",
+  or "logging disabled" cannot be told apart from the response alone
+
+### Domain verdict endpoint answers single-domain questions
+
+`https://dns.controld.com/<device_id>?name=<domain>&type=A&controld=1&no_log=1`
+returns a `controld.verdict` (`verdictSource`, `verdictAction`, `verdictMatch`)
+for one endpoint and one domain. `verdictSource` uses its own vocabulary (`bl`,
+`rules`, `svc`, `default`) that must be mapped to the `trigger` enum. This is the
+cheapest troubleshooting read and should be sent with `no_log=1`.
+
+### Client correlation and write responses
+
+- `v2/client` `body.items` is keyed by `device_id`, so analytics client telemetry
+  joins to endpoints; keys for removed endpoints must be tolerated
+- write calls return the affected object, which the runtime currently discards
 
 ## Top-card and security-overview derivations
 
@@ -953,7 +1004,7 @@ These are the remaining gaps that are worth resolving before or during implement
 - how should the runtime normalize attached-profile sibling fields beyond the current `profile` and `profile2` cases
 - how should the first implementation refresh groups be named and bounded
 - how exactly should parent-child endpoint metadata surface in v1
-- how do `v2/client` identifiers correlate, if at all, to `/devices` identifiers
+- ~~how do `v2/client` identifiers correlate, if at all, to `/devices` identifiers~~ — **resolved:** `v2/client` `items` is keyed by `device_id`; see the Client identifier correlation findings
 - which exact analytics queries and filters back the dashboard totals for each action bucket
 - what exact query backs the full blocked-card total
 - what exact denominator does `Benign Blocks` use when phishing or other security categories are present outside the visible ranked rows
@@ -969,9 +1020,12 @@ These are the most useful remaining captures, in descending order of value:
 
 1. One blocked or bypassed sample that proves the exact blocked-card or bypassed-card total query.
 2. One sample where phishing is non-zero so `Benign Blocks` can be validated against both excluded security categories.
-3. One sample that correlates a `/devices` endpoint to a `v2/client` analytics item.
+3. ~~One sample that correlates a `/devices` endpoint to a `v2/client` analytics item.~~ — **done:** `v2/client` `items` is keyed by `device_id` (see the Client identifier correlation findings).
 4. One sample that shows whether organization scenarios expose `profile3` or another attached-profile variant.
 5. One sample that confirms how bypassed and redirected views map through the analytics endpoints.
+6. One Activity Log sample for a `trigger=custom` block and a `trigger=grule` or `trigger=rebind` action so the full per-record trigger vocabulary is captured.
+7. One DNS verdict sample per `verdictSource` value so the `verdictSource` -> `trigger` mapping is complete.
+8. One write-response capture for a profile/filter/service/rule mutation (not just `/devices`) so the action-result envelope can be shaped from real write payloads.
 
 ## Purpose
 
@@ -1741,6 +1795,227 @@ Engineering consequence:
 - `malware` is not equivalent to the ranked `ai_malware` value in the observed contract
 - the repository should not assume it can round-trip human-friendly labels or guessed slugs back into filter analytics queries without verification
 
+## Activity Log API findings
+
+The Activity Log is the per-record DNS query surface. It is the only endpoint that
+carries the block reason on the record itself, so it is the primary troubleshooting
+read and the source of detail the ranked breakdowns cannot give.
+
+### Observed request shape
+
+- host: the same regional analytics host as the statistics family
+- path: `/v2/activity-log`
+- envelope: `{"success": true, "body": {"meta": {...}, "queries": [...]}}`
+- `body.meta` carries `page` and `pageSize` and **no total count**
+- confirmed query parameters:
+  - `startTime`, `endTime`
+  - `searchQuestion` (substring match on `question`)
+  - `action`
+  - `trigger`, `triggerValue`
+  - `endpointId` or repeated `endpointId[]`
+  - `profileId`
+  - `protocol[]`
+  - `srcCountry[]`, `dstCountry`
+  - `srcIsp`, `dstIsp`, `srcAsn`, `dstAsn`
+  - `spoofTarget`
+  - `statusCode`
+  - `rrType`
+  - `page`, `pageSize`, `sortOrder`
+
+### Observed response shape
+
+Each `body.queries[]` record carries:
+
+- `timestamp`
+- `userId`
+- `endpointId` (`endpointName` is present but empty in every observed record)
+- `clientId`
+- `profileId`
+- `question`
+- `rrType`, `statusCode`, `protocol`
+- `action`, `trigger`, `triggerValue`
+- `sourceIp`, `sourceGeoip` (`countryCode`, `city`, `isp`, `asn`)
+- `answers[]` (destination side; `[{ips, geoip{countryCode, city, isp, asn}}]`,
+  often null)
+
+Unlike the ranked breakdown output, one record answers domain, cause, endpoint,
+profile, client, protocol, and source and destination geography together.
+
+### Confirmed semantics and gotchas
+
+- `searchQuestion` is a substring match, not a full-domain match
+- a domain search spans all profiles by default (confirmed across five profiles)
+- filters combine (search + trigger + triggerValue + endpointId narrow together)
+- `protocol[]` and `srcCountry[]` are honoured; a bogus value returns zero records
+- `dstCountry` is honoured here; it returns zero on the Statistics family
+- `statusCode` is the rcode filter; `rcode` is silently ignored
+- `clientId` requires a co-present `endpointId` and returns 400 alone
+- `endpointName` is unreliable; resolve names from `/devices`
+- `pageSize` max is 500, and deep pages return older records
+- a page can return fewer rows than `pageSize` without signalling the end, so a
+  short page should be treated as end-of-data rather than proof that more exists
+- `sortOrder` defaults to newest-first; `asc` works
+
+### Enums
+
+Full documented enum, all accepted live:
+
+- `action`: `-1` failed, `0` blocked, `1` bypassed, `2` redirected by IP, `3`
+  redirected by Location
+- `trigger`: `default`, `grule` (global Control D rule), `filter`, `service`,
+  `custom`, `rebind`
+- `protocol`: `legacy`, `doh`, `dot`, `doh3`, `doq`
+
+`custom` is the only surface that attributes a block to one of the user's own
+rules. `grule` and `rebind` have no equivalent in the Statistics `triggerValue`
+endpoint, which accepts only `filter` and `service`.
+
+### Engineering consequence
+
+- the Activity Log closes the block-reason gap: `trigger` + `triggerValue` on the
+  record is the cause, so "why was this blocked" no longer needs a ranked-then-
+  guessed workaround
+- it is a recent-window surface, so it backs troubleshooting and on-demand tooling
+  rather than long-range analytics
+- a page is roughly 47 KB per 100 records, so callers should request a bounded
+  window and page size rather than pulling the firehose
+
+## Analytics retention findings
+
+Retention differs by surface, and the values below are the longest a user may have
+enabled.
+
+- **Activity Log: 33 days.** Confirmed by a hard boundary: a window entirely older
+  than 33 days returns zero records, while recent windows return data. The
+  published reference states the same limit.
+- **Statistics (`count`, `question`, `triggerValue`, `srcCountry`): up to 365
+  days.** Aggregate counts plateau at the retention horizon rather than erroring.
+- **Dimension caveat.** The published reference states that columns marked "no"
+  (`protocol`, `statusCode`, `rrType`, `srcAsn`, `dstAsn`) are not filterable or
+  groupable for data older than 33 days, while the "year" columns (`question`,
+  `triggerValue`, `srcCountry`, `dstCountry`, `srcIsp`, `dstIsp`, `action`,
+  `trigger`, `endpointId`, `clientId`, `profileId`) remain usable.
+- **These are maximums.** Users can select shorter retention, or disable logging
+  entirely, so a given deployment may have far less history, or none.
+
+Engineering consequence:
+
+- a tool must not assume history exists; it should state the window it queried and
+  be explicit when a surface returned no records
+- long-range reporting belongs on the Statistics family; the Activity Log cannot
+  answer it
+- an empty Activity Log result is ambiguous - "no matching traffic", "older than
+  retention", or "logging disabled" - and the response alone cannot distinguish
+  them
+
+### Analytics has no controllable time series
+
+The published reference describes the Statistics API as "pre-aggregated data with
+varying granularity", which reads as a controllable series parameter. Live
+probing shows it is not one: `granularity`, `interval`, `groupBy`, `period`, and
+`resolution` are all ignored and return the same single aggregate, and no
+`/v2/statistic/count/series` route exists. A count-family call returns one number
+for the requested window; there is no per-bucket series to request. Detecting a
+spike therefore requires diffing successive windows, not a series query.
+
+### Analytics maintenance mode
+
+When analytics is in maintenance mode the API returns `503` with error code
+`50303`. The client currently maps every status `>= 400` to a generic response
+error, so maintenance is indistinguishable from a real failure unless that code
+is handled explicitly.
+
+## Client identifier correlation findings
+
+The long-open question of how `v2/client` item identifiers relate to `/devices` is
+now answered for the observed account:
+
+- `/v2/client` `body.items` is keyed by the same `device_id` namespace as
+  `GET /devices` (17 of 29 keys matched a current `device_id` exactly)
+- the non-matching keys are not a different namespace: they are endpoints retained
+  in analytics after they disappeared from `/devices` (for example the earlier
+  `22dda9b8r7q` sample endpoint)
+- within an endpoint, the `clients` map is keyed by `clientId`, which matches the
+  `clientId` on Activity Log records
+
+Engineering consequence:
+
+- analytics client telemetry can be joined to endpoint entities by `device_id`
+- the join must tolerate stale keys that no current endpoint owns, so it is
+  enrichment over (not a source of) endpoint inventory
+- this closes the earlier "not yet proven" and "New uncertainty narrowed by this
+  sample" caveats
+
+## DNS verdict (domain test) endpoint findings
+
+Control D exposes a per-endpoint DNS resolver that returns the policy verdict for a
+single domain, which is what the dashboard uses for its own domain test.
+
+### Observed request shape
+
+- host: `https://dns.controld.com`
+- path: `/<endpointId>`, where the id is the `GET /devices` `device_id`
+- query:
+  - `name` (domain under test)
+  - `type` (default `A`)
+  - `controld=1`
+  - `no_log=1`
+- the per-endpoint resolver URL is also published on the device payload as
+  `resolvers.doh`, so it can be read rather than constructed
+
+### Observed response shape
+
+- a standard DNS-over-JSON response (`RCODE`, `QNAME`, `answerRRs`, ...)
+- `controld.verdict` carries `profileID`, `verdictSource`, `verdictAction`,
+  `verdictMatch`
+- `verdictAction` uses the analytics action enum (`0` blocked, `1` bypassed)
+- `verdictMatch` is the matched service, filter, or rule value, or `0` for the
+  default rule
+- `RCODE` `0` is a normal answer; `RCODE` `5` (REFUSED) corresponds to a block
+- `controld.verdict` is absent or empty when no policy decision matched (a plain
+  passthrough or NXDOMAIN), so absence is not itself "allowed"
+
+### `verdictSource` does not use the `trigger` vocabulary
+
+`verdictSource` uses its own labels and needs a mapping layer:
+
+- `bl` -> blocklist filter (`trigger` `filter`)
+- `rules` -> custom rule (`trigger` `custom`)
+- `svc` -> service (`trigger` `service`)
+- `default` -> default rule (`trigger` `default`)
+
+### Engineering consequence
+
+- this is the cheapest troubleshooting call: one request answers "would this
+  device block this domain, and why" without reading the Activity Log
+- it is scoped to one endpoint and one domain per call, so it complements rather
+  than replaces the Activity Log queries
+- `no_log=1` should be used for diagnostics so the test does not create activity
+  records
+- in the observed environment the endpoint resolved without an `Authorization`
+  header, so a tool must not assume the request is authenticated
+
+## Write responses are returned but currently discarded
+
+The runtime treats write calls as fire-and-forget. The upstream API does not: a
+write returns the affected object.
+
+Observed sample: an idempotent `PUT /devices/{device_id}` (re-sending the current
+`stats` value) returned the full updated device object, including `PK`,
+`device_id`, `name`, `status`, `stats`, `client_count`, `learn_ip`, `icon`,
+`resolvers` (`doh`, `dot`, `v6`), `profile`, `profile2`, and `parent_device`
+(`device_id`, `client_id`).
+
+Engineering consequence:
+
+- every client write method currently discards the parsed response; the response is
+  already produced inside the shared request helper, so capturing it is a return
+  contract change rather than new transport work
+- capturing the response enables an optimistic action result without a follow-up
+  read, and is the natural basis for an action-result envelope
+- write responses expose fields that do not appear on the write call itself, such
+  as the per-endpoint resolver URLs and the `parent_device` link
+
 ## Dashboard-backed API discovery findings
 
 Updated interpretation:
@@ -2353,12 +2628,18 @@ These findings are strong enough to convert several planning topics from theory 
 - `triggerValue` supports multiple ranked breakdown surfaces, including filters and services, and those surfaces can appear both with and without `profileId`
 - endpoint-scoped analytics are now proven strongly enough to support derivation of at least `Encrypted DNS` and `Home Country Traffic` directly from count ratios
 - `Benign Blocks` is now likely derivable from blocked filter-category composition rather than requiring a separate dedicated summary endpoint
+- the Activity Log is the correct per-record troubleshooting surface, and its `trigger` + `triggerValue` is the authoritative block cause
+- the Activity Log (33 days) and the Statistics family (up to 365 days) must be treated as two surfaces with different retention, and a tool must state which it used
+- analytics retention is a user setting and may be shorter than, or disabled from, these maximums
+- `v2/client` `items` is keyed by `device_id`, so analytics client telemetry joins to endpoints by that key
+- the DNS verdict endpoint is the correct single-domain test surface, and its `verdictSource` vocabulary needs a mapping to `trigger`
+- write responses are available and should be captured rather than discarded
 
 ### Not yet ready to treat as closed decisions
 
 - how to generalize the normalizer beyond the currently observed `profile` and `profile2` shape for possible organization cases
 - how parent-child endpoint visibility should influence discovery and presentation when Firewalla child clients are not independently listed until explicitly assigned
-- how the analytics `/v2/client` item identifiers correlate to `/devices` identifiers
+- ~~how the analytics `/v2/client` item identifiers correlate to `/devices` identifiers~~ - **resolved:** keyed by `device_id` (see the Client identifier correlation findings)
 - how `action` values map to dashboard views such as blocked, bypassed, and redirected for `v2/statistic/count/triggerValue`
 - whether the internal analytics `value` slugs have a stable published mapping to the dashboard labels or need repository-owned translation logic
 - how `srcCountry[]` affects totals and whether the dashboard always scopes statistics by one or more country filters
@@ -2393,7 +2674,7 @@ These findings are strong enough to convert several planning topics from theory 
 3. Decide whether parent-child endpoint relationships should surface only as attributes in v1 or also influence later display organization.
 4. Formalize the typed persisted identity contract for selected rules and grouped rules.
 5. Verify how grouped-rule display labels should combine folder semantics, folder names, and rule targets while keeping entity names concise.
-6. Correlate one `v2/client` analytics item to a known `GET /devices` endpoint so the repository can decide whether analytics client telemetry is attachable to endpoint entities or should remain diagnostics-only.
+6. ~~Correlate one `v2/client` analytics item to a known `GET /devices` endpoint so the repository can decide whether analytics client telemetry is attachable to endpoint entities or should remain diagnostics-only.~~ - **done:** keyed by `device_id` (see the Client identifier correlation findings).
 7. Capture matching `v2/statistic/count/triggerValue` samples for blocked, bypassed, and redirected views so the repository can lock the `action` mapping and decide whether these counts become sensors, attributes, or diagnostics only.
 8. Capture the dashboard requests for the `Total`, `Bypassed`, and `Redirected` cards so the repository can determine whether `v2/statistic/count` and related endpoints need additional parameters such as `srcCountry[]` or action filters to match the visible summary cards exactly.
 9. Capture the dashboard requests for the domains panel in blocked, bypassed, and redirected views so the repository can decide whether `v2/statistic/count/question` belongs in diagnostics, capped sensor attributes, or a later on-demand surface.
@@ -2404,3 +2685,6 @@ These findings are strong enough to convert several planning topics from theory 
 14. Capture one more `GET /profiles/{profile_id}/options` sample where a known toggle is off and one dropdown is unset so the repository can determine the semantics of missing entries in the sparse state list.
 15. Capture one sparse-state sample where `ecs_subnet` is absent so the repository can close the `Off` versus `No ECS` interpretation on the read path.
 16. Capture the same enable and read behavior for `ttl_spff` and `ttl_pass` so the repository can confirm whether all TTL options share the numeric-field contract now proven for `ttl_blck`.
+17. Capture the per-record `trigger` vocabulary (`custom`, `grule`, `rebind`) from the Activity Log so the block-cause model is complete.
+18. Capture the DNS verdict `verdictSource` values against a known filter, rule, service, and default action so the `verdictSource` -> `trigger` mapping is closed.
+19. Capture a write response from a profile, filter, service, or rule mutation so the action-result envelope is shaped from real write payloads rather than the assumption that writes return nothing.
