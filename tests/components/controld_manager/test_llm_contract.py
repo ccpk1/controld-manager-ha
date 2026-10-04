@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 from typing import Final
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import Context, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import llm
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -19,6 +20,7 @@ from custom_components.controld_manager.const import (
     CONF_API_TOKEN,
     CONF_LLM_TOOL_MODE,
     DOMAIN,
+    LLM_TOOL_MODE_FULL,
     LLM_TOOL_MODE_OFF,
     LLM_TOOL_MODE_READ_AND_CONTROL,
     LLM_TOOL_MODE_READ_ONLY,
@@ -44,6 +46,23 @@ _READ_TOOLS: Final = frozenset(
         "get_catalog",
     }
 )
+
+# Reversible controls, plus the non-idempotent rule create.
+_CONTROL_TOOLS: Final = frozenset(
+    {
+        "set_filter_state",
+        "set_service_state",
+        "set_option_state",
+        "set_rule_state",
+        "set_default_rule_state",
+        "enable_profile",
+        "disable_profile",
+        "create_rule",
+    }
+)
+
+# Irreversible and bulk actions, registered only in the Full tier.
+_DESTRUCTIVE_TOOLS: Final = frozenset({"delete_rule"})
 
 
 def _llm_context() -> llm.LLMContext:
@@ -116,7 +135,7 @@ async def test_every_tool_has_a_title_and_description(
         assert len(tool.description) > 80, tool.name
 
 
-async def test_every_read_tool_declares_all_four_annotations(
+async def test_read_tools_declare_all_four_annotations(
     read_tools: list[llm.Tool],
 ) -> None:
     """Annotation defaults are the least safe case, so reads must be explicit."""
@@ -127,6 +146,63 @@ async def test_every_read_tool_declares_all_four_annotations(
         assert annotations.destructive is False, tool.name
         assert annotations.idempotent is True, tool.name
         assert annotations.open_world is False, tool.name
+
+
+async def test_control_tool_annotations_are_accurate(hass: HomeAssistant) -> None:
+    """Only the delete is destructive, and only create_rule is not idempotent."""
+    tools = await _tools(hass, LLM_TOOL_MODE_FULL)
+    by_name = {tool.name: tool for tool in tools}
+
+    for name in _CONTROL_TOOLS | _DESTRUCTIVE_TOOLS:
+        annotations = by_name[f"{DOMAIN}__{name}"].annotations
+        assert annotations is not None, name
+        assert annotations.read_only is False, name
+        assert annotations.open_world is False, name
+
+    # A repeat of create_rule has an effect, so it must not claim idempotency.
+    assert by_name[f"{DOMAIN}__create_rule"].annotations.idempotent is False
+    # Only the irreversible delete declares itself destructive.
+    assert by_name[f"{DOMAIN}__delete_rule"].annotations.destructive is True
+    for name in _CONTROL_TOOLS:
+        assert by_name[f"{DOMAIN}__{name}"].annotations.destructive is False, name
+
+
+async def test_control_tools_never_claim_an_irreversible_undo(
+    hass: HomeAssistant,
+) -> None:
+    """Deleting a rule cannot be undone, so the tool must not name an undo call."""
+    tools = await _tools(hass, LLM_TOOL_MODE_FULL)
+    (delete,) = [tool for tool in tools if tool.name == f"{DOMAIN}__delete_rule"]
+    assert delete._undo({}) is None
+
+
+async def test_create_rule_names_delete_as_its_undo(hass: HomeAssistant) -> None:
+    """create_rule is reversible only by deleting, and says so."""
+    tools = await _tools(hass, LLM_TOOL_MODE_FULL)
+    (create,) = [tool for tool in tools if tool.name == f"{DOMAIN}__create_rule"]
+    undo = create._undo({"hostname": "example.com", "profile_id": "p-1"})
+    assert undo is not None
+    assert f"{DOMAIN}__delete_rule" in undo
+
+
+async def test_a_service_failure_becomes_a_failed_action_result(
+    hass: HomeAssistant,
+) -> None:
+    """A rejected write returns status=failed with error set, not an exception."""
+    tools = await _tools(hass, LLM_TOOL_MODE_READ_AND_CONTROL)
+    (disable,) = [tool for tool in tools if tool.name == f"{DOMAIN}__disable_profile"]
+
+    fake_hass = MagicMock()
+    fake_hass.services.async_call = AsyncMock(side_effect=HomeAssistantError("nope"))
+    result = await disable.async_call(
+        fake_hass,
+        llm.ToolInput(tool_name=disable.name, tool_args={"profile_id": "p-1"}),
+        _llm_context(),
+    )
+    assert result.error is True
+    assert result.data["status"] == "failed"
+    assert result.data["changed"] is False
+    assert result.data["target"] == {"profile_id": "p-1"}
 
 
 async def test_every_parameter_is_described(read_tools: list[llm.Tool]) -> None:
@@ -148,24 +224,32 @@ async def test_tools_never_expose_the_config_entry_selector(
 
 
 @pytest.mark.parametrize(
-    "mode",
+    ("mode", "expected"),
     [
-        LLM_TOOL_MODE_SUMMARY_ONLY,
-        LLM_TOOL_MODE_READ_ONLY,
-        LLM_TOOL_MODE_READ_AND_CONTROL,
+        pytest.param(
+            LLM_TOOL_MODE_SUMMARY_ONLY,
+            {"get_account_overview"},
+            id="summary",
+        ),
+        pytest.param(LLM_TOOL_MODE_READ_ONLY, _READ_TOOLS, id="read"),
+        pytest.param(
+            LLM_TOOL_MODE_READ_AND_CONTROL,
+            _READ_TOOLS | _CONTROL_TOOLS,
+            id="read_and_control",
+        ),
+        pytest.param(
+            LLM_TOOL_MODE_FULL,
+            _READ_TOOLS | _CONTROL_TOOLS | _DESTRUCTIVE_TOOLS,
+            id="full",
+        ),
     ],
 )
-async def test_summary_exposes_only_the_overview(
-    hass: HomeAssistant, mode: str
+async def test_each_tier_registers_exactly_its_surface(
+    hass: HomeAssistant, mode: str, expected: frozenset[str]
 ) -> None:
-    """Summary stays the narrow tier; every read tier gets the full read set."""
+    """A tier registers exactly its own tools — no more, and no fewer."""
     tools = await _tools(hass, mode)
-    if mode == LLM_TOOL_MODE_SUMMARY_ONLY:
-        assert {tool.name for tool in tools} == {f"{DOMAIN}__get_account_overview"}
-    else:
-        assert {tool.name for tool in tools} == {
-            f"{DOMAIN}__{name}" for name in _READ_TOOLS
-        }
+    assert {tool.name for tool in tools} == {f"{DOMAIN}__{name}" for name in expected}
 
 
 async def test_off_tier_exposes_no_api(hass: HomeAssistant) -> None:

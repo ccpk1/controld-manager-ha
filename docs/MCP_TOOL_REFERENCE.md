@@ -100,6 +100,16 @@ no tools and offers no option; every other feature is unaffected.
 }
 ```
 
+The envelope is **synthesized, never wrapped**. Control D write responses are not
+uniform — a filter write returns a map of every filter, a service or rule write a
+list, an option write a list, and a rule delete an empty body — so wrapping would
+hand back a different shape per tool. The write response is used only as
+confirmation that the call succeeded; `target` is built from what the tool
+resolved, because a rule write does not echo which rule it changed.
+
+`status` values: `applied`, `already_in_state`, `failed`. A rejected write
+returns `status: "failed"` with `error` set rather than raising.
+
 - `status` — `applied` | `already_in_state` | `failed`.
 - `changed` — whether anything actually changed.
 - `target` — the **resolved** object acted on (id + name).
@@ -218,16 +228,34 @@ strictly better than exposing a surface that cannot be drilled into.
 `current_value`. There is deliberately **no separate policy tool**, because it
 would be a re-skin of this one.
 
-### Group 6 — Control *(planned: Phase 3)*
+### Group 6 — Control
 
-`set_filter_state`, `set_service_state`, `set_option_state`, `set_rule_state`,
-`set_default_rule_state`, `enable_profile`, `disable_profile`, `rename_endpoint`,
-`set_endpoint_analytics_logging`, `set_client_alias`, `clear_client_alias`,
-`create_rule` *(all planned)*.
+Reversible or additive actions, registered in the **Read and control** and **Full**
+tiers:
 
-### Destructive *(planned: Phase 3, Full tier only)*
+| Tool | Effect |
+| --- | --- |
+| `set_filter_state` | Enable or disable a blocklist filter on a profile |
+| `set_service_state` | Set a service to blocked, bypassed, or redirected |
+| `set_option_state` | Enable, disable, or set a profile option |
+| `set_rule_state` | Enable, disable, or modify one custom rule |
+| `set_default_rule_state` | Set a profile's catch-all action |
+| `enable_profile` / `disable_profile` | Control D's own pause, reversible (disable can be timed) |
+| `create_rule` | Create a custom rule — **not idempotent**; undo is `delete_rule` |
 
-`delete_rule` *(planned)* — `confirm: true` required, `destructive` annotation.
+### Destructive *(Full tier only)*
+
+| Tool | Effect |
+| --- | --- |
+| `delete_rule` | Permanently delete a custom rule. No undo; prefer `set_rule_state` with `enabled: false` |
+
+## Not yet exposed
+
+The endpoint- and client-scoped controls — `rename_endpoint`,
+`set_endpoint_analytics_logging`, `set_client_alias`, and `clear_client_alias` —
+are a separate family and land in a later phase. Endpoint-to-profile assignment is
+deferred: changing which policy governs a whole segment has the widest blast
+radius of anything in this integration.
 
 ---
 

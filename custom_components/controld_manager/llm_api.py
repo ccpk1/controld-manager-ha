@@ -18,10 +18,13 @@ from homeassistant.helpers import llm
 
 from .const import (
     DOMAIN,
+    LLM_TOOL_MODE_FULL,
     LLM_TOOL_MODE_OFF,
+    LLM_TOOL_MODE_READ_AND_CONTROL,
     LLM_TOOL_MODE_SUMMARY_ONLY,
 )
 from .llm_tools_common import PROMPT
+from .llm_tools_control import build_control_tools
 from .llm_tools_read import build_account_overview_tools, build_read_tools
 from .models import ControlDManagerRuntime
 
@@ -62,9 +65,10 @@ class ControlDManagerAPI(llm.API):
     def _build_tools(self) -> list[llm.Tool]:
         """Return the tools registered for the configured tier.
 
-        The overview is the entry point in every enabled tier, and at Summary it
-        is the only tool. Read tiers add the inventory topology; later phases add
-        activity, domain-test, catalog, and control tools.
+        Summary registers only the overview. Read tiers add the read tools.
+        Read-and-control adds the reversible controls, and Full additionally adds
+        the destructive delete. Control D writes have no admin gate, so the tier
+        is the only thing deciding what is reachable.
         """
         if self._mode == LLM_TOOL_MODE_OFF:
             return []
@@ -72,6 +76,13 @@ class ControlDManagerAPI(llm.API):
         if self._mode == LLM_TOOL_MODE_SUMMARY_ONLY:
             return tools
         tools.extend(build_read_tools(entry_id=self._entry_id))
+        if self._mode in (LLM_TOOL_MODE_READ_AND_CONTROL, LLM_TOOL_MODE_FULL):
+            tools.extend(
+                build_control_tools(
+                    entry_id=self._entry_id,
+                    include_destructive=self._mode == LLM_TOOL_MODE_FULL,
+                )
+            )
         return tools
 
 

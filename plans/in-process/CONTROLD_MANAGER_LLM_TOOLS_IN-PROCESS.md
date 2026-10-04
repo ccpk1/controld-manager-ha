@@ -2,7 +2,7 @@
 
 ## 1. Initiative snapshot
 
-- **Status: Phases 0, 1 and 2 complete (2026-10-04).** Branch `feature/llm-mcp-tools`. The API foundation, the tool spec, the version-gated tier shell, and **all five Phase 2 read tools** are implemented and validated: `get_account_overview`, `get_inventory`, `get_activity_log`, `test_domain`, and `get_catalog`. Next: Phase 3 (control tools).
+- **Status: Phases 0–2 complete; Phase 3 in progress (2026-10-04).** Branch `feature/llm-mcp-tools`. All five read tools are implemented, plus the Phase 3a control surface: the action-result envelope and eight control tools, with the destructive `delete_rule` gated behind the Full tier. Remaining: endpoint/client control tools (rename, analytics logging, client alias) in Phase 3b, then Phase 4 (prompt, docs, release).
 - **What it builds:** an integration-owned `llm.API`, registered by this integration, that exposes Control D profiles, endpoints, clients, and analytics to Home Assistant Assist and any MCP client through Home Assistant's `mcp_server`. The surface is tiered, opt-in, read-first, and vendor-aligned in naming and terminology.
 - **Why now:** the integration already has the inventory, policy mutations, and analytics plumbing. The missing capability is a **troubleshooting and query surface**. Control D's per-record Activity Log and ranked breakdowns are high-cardinality telemetry that was deliberately kept out of the entity model; on-demand tooling is the correct home for it, not entities.
 - **Decisive platform facts (verified):**
@@ -191,11 +191,12 @@ Ordering is deliberate: **retention, catalog currency, and the response/error co
 
 **Goal:** add opt-in writes with a uniform, honest action result.
 
-- [ ] **3.1 Reversible control tools.** `set_filter_state`, `set_service_state`, `set_option_state`, `set_rule_state`, `set_default_rule_state`, `enable_profile` / `disable_profile`, `rename_endpoint`, `set_endpoint_analytics_logging`, `set_client_alias` / `clear_client_alias` — delegating to existing services.
-- [ ] **3.2 `create_rule` as a control tool (included).** Additive and therefore control-tier, not destructive — but **not idempotent**. Creating the same rule twice creates two rules, so it must never report `already_in_state` and must declare the non-idempotent annotation. Its `undo` names `delete_rule`; when the configured tier excludes the destructive set, the tool states that the configured tier does not permit the undo rather than pretending the action is reversible.
-- [ ] **3.3 Action-result envelope.** One shape for every write: `status` (`applied` / `already_in_state` / `failed`), `changed`, `target`, `before` / `after` (requested state), `undo`, `warnings`. Built from the Phase 0 write-response capture plus an idempotency pre-check against cached state. Reuse the Firewalla annotation classes rather than inventing new ones: control (reversible), destructive, and **non-idempotent** (`idempotent=False`, for `create_rule`). `already_in_state` applies only to idempotent tools.
-- [ ] **3.4 Destructive tier.** Register destructive tools only in the Full tier, with the destructive annotation and `confirm: true`.
-- [ ] **3.5 Endpoint-to-profile assignment write.** Evaluate `PUT /devices/{device_id}` with `profile_id` / `profile_id2`.
+- [x] **3.1 Reversible control tools (Phase 3a).** `set_filter_state`, `set_service_state`, `set_option_state`, `set_rule_state`, `set_default_rule_state`, `enable_profile`, `disable_profile`, and `create_rule` — delegating to the existing services. Endpoint/client tools (`rename_endpoint`, `set_endpoint_analytics_logging`, `set_client_alias`, `clear_client_alias`) move to Phase 3b as a separate family.
+- [x] **3.2 `create_rule` as a control tool (included).** Included, additive, and declared **non-idempotent**: creating the same rule twice creates two rules, so it never reports `already_in_state`. Its `undo` names `delete_rule`, and the description states that the undo is unavailable when the tier excludes destructive actions.
+- [x] **3.3 Action-result envelope.** **Built from real per-family write responses, not assumption.** Live idempotent probes showed every write family returns a body, but in incompatible shapes: a filter write returns a map of every filter, a service/rule write a list, an option write a list, a default-rule write an object, and a rule delete an empty body. Wrapping that would expose a different shape per tool, so the envelope is **synthesized** (`utils/action_result.py`) and the response is used only as success confirmation. `target` comes from the caller's resolved input, because a rule write does not echo which rule it changed.
+- [x] **3.4 Destructive tier.** `delete_rule` registers only in the Full tier with the destructive annotation, declares no undo, and its description tells the model to prefer disabling the rule.
+
+**Decisions (Phase 3):**
 
 **Decisions (Phase 3):**
 
