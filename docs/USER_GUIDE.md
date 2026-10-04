@@ -174,6 +174,9 @@ This form controls the active refresh cadence.
 The integration uses one polling path for inventory, profile detail, endpoint
 activity, and analytics refresh. Separate polling controls are not exposed.
 
+This form also carries the AI assistant (MCP) tool access setting described in
+AI assistants and MCP tools.
+
 ## Diagnostics and availability
 
 Home Assistant diagnostics for a Control D config entry include redacted entry
@@ -531,6 +534,10 @@ The integration registers these Home Assistant services:
 - `controld_manager.delete_rule`
 - `controld_manager.disable_profile`
 - `controld_manager.enable_profile`
+- `controld_manager.get_account_overview`
+- `controld_manager.get_activity_log`
+- `controld_manager.get_catalog`
+- `controld_manager.get_inventory`
 - `controld_manager.set_client_alias`
 - `controld_manager.clear_client_alias`
 - `controld_manager.rename_endpoint`
@@ -540,7 +547,12 @@ The integration registers these Home Assistant services:
 - `controld_manager.set_option_state`
 - `controld_manager.set_rule_state`
 - `controld_manager.set_service_state`
-- `controld_manager.get_catalog`
+- `controld_manager.test_domain`
+
+The `get_*` and `test_domain` services are read-only response services. They do
+not change anything and return their data as a service response, which is
+intended for use from automations, scripts, and AI assistant tools rather than
+from the Home Assistant user interface.
 
 ### Client alias services
 
@@ -1038,6 +1050,85 @@ Manual example:
 	`catalog_type: services`
 	`profile_name: ["Primary"]`
 
+### Account overview service
+
+`controld_manager.get_account_overview` is a read-only response service that
+returns high-level account counts and block statistics for the selected Control D
+scope, in one call.
+
+Targeting rules:
+
+- `config_entry_id` and `config_entry_name` are optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+
+### Inventory service
+
+`controld_manager.get_inventory` is a read-only response service that returns the
+Control D account topology: profiles and endpoints, plus clients at full detail.
+
+Fields:
+
+- `detail: summary` (default) returns identifying fields only
+- `detail: full` adds per-row detail and includes clients
+- `client_limit` caps how many clients are returned per endpoint. Default `100`,
+	range 1 to 500
+- `profile_id` and `endpoint_id` optionally narrow the result to one profile or
+	one endpoint
+- `config_entry_id` and `config_entry_name` are optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+
+Clients require DNS-over-HTTPS relay from the endpoint to be visible.
+
+### Activity log service
+
+`controld_manager.get_activity_log` is a read-only response service that returns
+individual DNS queries for a recent window, including what caused each action.
+This is record-level data, not aggregates.
+
+Fields:
+
+- `window` selects the lookback window: `15m`, `1h` (default), `6h`, `24h`,
+	`7d`, or `30d`
+- `search` is a free-text search over the records
+- `query_action` filters by outcome: `blocked`, `bypassed`, `redirected`, or
+	`failed`
+- `trigger` filters by what caused the action: `default`, `grule`, `filter`,
+	`service`, `custom`, or `rebind`
+- `trigger_value` narrows to a specific trigger target
+- `profile_id`, `endpoint_id`, and `client_id` narrow the scope
+- `protocol`, `source_country`, `destination_country`, `source_isp`, `source_asn`,
+	`status_code`, and `record_type` filter on record attributes
+- `page` (default `0`) and `page_size` (default `50`, range 1 to 500) page through
+	a larger result
+- `sort_order` is `desc` (default) or `asc`
+
+Results are capped and paged. A capped result is never presented as complete, and
+no total is claimed because the surface does not provide one.
+
+Retention is a user setting in your Control D account and is not readable by the
+integration. An empty result can mean no matching traffic, a window older than
+your retention, or logging being disabled. Those cases cannot be told apart.
+
+This is the service to use for why a domain was blocked, because each record
+carries the trigger that caused the action.
+
+### Domain test service
+
+`controld_manager.test_domain` is a read-only response service that reports the
+policy verdict for one domain on one endpoint, without waiting for that traffic
+to occur.
+
+Fields:
+
+- `endpoint_id` is required, from the inventory
+- `domain` is required
+- `record_type` is optional and defaults to `A`
+- `config_entry_id` and `config_entry_name` are optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+
+The response names the verdict and the source that produced it, so it answers why
+a domain would be blocked. The lookup does not add a record to your activity log.
+
 ## Runtime behavior
 
 The integration keeps normalized runtime data in memory inside the config
@@ -1046,6 +1137,111 @@ entry's runtime state.
 That runtime data is refreshed on poll and reused by entities, managers, and
 service handlers while Home Assistant is running. It is not intended to be
 persistent state across Home Assistant restarts.
+
+## AI assistants and MCP tools
+
+Home Assistant can hand this integration's data to a connected AI assistant or
+MCP client, such as the Home Assistant voice assistant pipeline or a desktop MCP
+client. The integration exposes a set of tools the assistant can call to read
+your Control D configuration and, if you allow it, to change it.
+
+### Requirements
+
+This feature needs **Home Assistant Core 2026.10 or newer**. On older versions
+the integration still works normally; it simply registers no tools and the
+setting described below is not shown in the options flow.
+
+### The access tiers
+
+One option, AI assistant (MCP) tool access, decides what the assistant can
+reach. It is independent of the profile exposure settings above: exposing nothing
+to Home Assistant entities does not restrict an assistant, and vice versa.
+
+| Tier | What an assistant can do |
+| --- | --- |
+| Off | Nothing. No tools are registered. |
+| Summary only (default) | Read account-wide counts and per-profile names with counts. |
+| Read only | Read everything: profiles, endpoints, clients, filters, services, options, rules, the activity log, and DNS lookups for a specific domain. |
+| Read and control | Everything above, plus reversible changes such as enabling or disabling a profile, filter, service, option, or rule, and renaming endpoints and clients. |
+| Full | Everything above, plus destructive actions. Today this means deleting custom rules. |
+
+The default is Summary only. An assistant cannot reach a tier you did not select,
+including through a tool that names a lower tier: a control tool reports that the
+configured tier does not permit the action rather than performing it.
+
+### What each tier sends
+
+Tiers above Summary only send identifying detail to whichever model the
+assistant uses. That includes:
+
+- profile names and endpoint names
+- endpoint hardware identifiers
+- client names and IP addresses
+- domains and destination addresses from the activity log
+
+Summary only is the only tier that keeps names and identifiers out, sending only
+counts. Profile names are treated as a low-risk label because they are
+user-assigned text that already appears as Home Assistant device names.
+
+**Control D has no separate admin gate.** Changing anything in Home Assistant
+services normally requires an administrator, but a connected assistant is
+authorized by the tier alone. That makes this setting the only limit on what an
+assistant can change in your Control D account. Treat Read and control and Full
+as equivalent to handing over your Control D credentials, and leave the tier at
+Summary only or Off unless you specifically want the assistant to make changes.
+
+### Enabling it
+
+1. Open the integration options and choose Integration settings.
+2. Set AI assistant (MCP) tool access to the tier you want.
+3. Save, then reload the integration so the tools re-register.
+
+Reducing the tier takes effect on the same reload. Removed tools are no longer
+advertised to the assistant.
+
+### What it can answer
+
+The tools are grouped by how a person asks, and orientation tools are available
+at every tier above Off:
+
+- an account overview with per-profile counts
+- an inventory of profiles, endpoints, clients, filters, services, options, and
+  rules
+- recent activity, including which rule or filter blocked a request and why
+- a DNS lookup for a single domain on a single endpoint, which does not add a
+  record to your activity log
+- the available filters, services, options, and rule folders on a profile
+
+A common question is why a domain was blocked. The assistant answers it by
+looking the domain up, then reading the activity log for that domain, then
+reading the policy that matched.
+
+### Retention
+
+Activity log and analytics retention is a **user setting in your Control D
+account**, and the integration cannot read its current value. The integration
+reports the documented maximums: about 33 days for the activity log and up to
+about a year for aggregated statistics. Your account may keep less, and activity
+logging may be turned off entirely.
+
+An empty activity result therefore does not prove there was no traffic. It can
+mean no matching traffic, a window older than your retention, or logging being
+disabled, and the integration cannot tell these apart. Extend the window before
+concluding that nothing happened.
+
+### Cost and size
+
+There is no caching layer. A typical page of 100 activity records is roughly
+47 KB, so read tools default to a short window and a small page size, and the
+assistant is expected to narrow the query rather than pull everything. A capped
+result is always labeled as capped; the integration never reports a truncated
+list as complete and never claims a total it does not have.
+
+### Related documentation
+
+`docs/MCP_TOOL_REFERENCE.md` documents the full tool surface, response shapes,
+and annotations. `docs/ARCHITECTURE.md` describes the layer rules the tool layer
+follows.
 
 ## Limitations
 
@@ -1056,6 +1252,14 @@ persistent state across Home Assistant restarts.
 - profile analytics and endpoint analytics refresh intervals are configured, but
 	the integration centers runtime behavior on the configuration inventory
 	refresh path
+- assistant tools report an action as applied even when it was already in that
+	state for endpoint analytics logging only, because the runtime inventory
+	does not carry each endpoint's current logging level. Every other control
+	tool checks first and reports already_in_state
+- assistant tools do not offer an undo for endpoint renames or service mode
+	changes, because renaming a set of endpoints or setting a service mode has
+	no single inverse call. The other control tools name the call that reverses
+	them
 
 ## Troubleshooting
 
@@ -1081,3 +1285,10 @@ persistent state across Home Assistant restarts.
 	state for newly created entities and basic cleanup when exposure is removed,
 	but manual registry changes may still require you to re-enable or disable
 	entities yourself.
+- If no assistant tools appear, check that Home Assistant is 2026.10 or newer
+	and that AI assistant (MCP) tool access is not set to Off. After changing the
+	tier, reload the integration.
+- If an assistant reports that a change is not permitted, the configured tier is
+	lower than the tool the assistant tried to use. Raise the tier and reload.
+- If an assistant reports no activity for an endpoint, verify that endpoint's
+	analytics logging is not set to None before treating the result as no traffic.
