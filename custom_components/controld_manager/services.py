@@ -2177,8 +2177,11 @@ def _resolve_profiles_from_device_ids(
                 translation_domain=DOMAIN,
                 translation_key=TRANS_KEY_PROFILE_TARGET_NOT_FOUND,
             )
-        if entry.entry_id not in device_entry.config_entries:
-            if set(device_entry.config_entries) & set(loaded_entries):
+        # A device belongs to exactly one config entry, so `config_entry_id` is
+        # the supported accessor; the deprecated `config_entries` set is not
+        # usable after Home Assistant 2027.10.
+        if device_entry.config_entry_id != entry.entry_id:
+            if device_entry.config_entry_id in loaded_entries:
                 raise ServiceValidationError(
                     "Profile targets must belong to the selected Control D "
                     "config entry",
