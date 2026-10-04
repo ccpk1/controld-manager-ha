@@ -471,11 +471,15 @@
     },
     "rename_endpoint": {
       "name": "Rename endpoint",
-      "description": "Rename one or more Control D endpoints resolved by current endpoint name within one selected config entry.",
+      "description": "Rename one or more Control D endpoints resolved by endpoint ID or current endpoint name within one selected config entry. Endpoint IDs take precedence over names.",
       "fields": {
+        "endpoint_id": {
+          "name": "Endpoint IDs",
+          "description": "Optional. Enter one or more Control D endpoint device IDs, separated by commas, such as 461wtt4eyr,w1eg4mfif8. IDs are unique, so this is the safer selector. If both Endpoint IDs and Current endpoint names are provided, Endpoint IDs take precedence."
+        },
         "endpoint_name": {
           "name": "Current endpoint names",
-          "description": "Required. Enter one or more current Control D endpoint names, separated by commas, such as Chads-Phone,Kitchen Tablet. When a name is ambiguous inside one config entry, use a more specific current name."
+          "description": "Optional. Enter one or more current Control D endpoint names, separated by commas, such as Chads-Phone,Kitchen Tablet. Endpoint names are not guaranteed to be unique; when a name is ambiguous inside one config entry, use the endpoint ID instead."
         },
         "new_name": {
           "name": "New endpoint name",
@@ -493,11 +497,15 @@
     },
     "set_endpoint_analytics_logging": {
       "name": "Set endpoint analytics logging",
-      "description": "Update the Control D endpoint analytics logging level for one or more endpoints resolved by current endpoint name within one selected config entry.",
+      "description": "Update the Control D endpoint analytics logging level for one or more endpoints resolved by endpoint ID or current endpoint name within one selected config entry. Endpoint IDs take precedence over names.",
       "fields": {
+        "endpoint_id": {
+          "name": "Endpoint IDs",
+          "description": "Optional. Enter one or more Control D endpoint device IDs, separated by commas, such as 461wtt4eyr,w1eg4mfif8. IDs are unique, so this is the safer selector. If both Endpoint IDs and Current endpoint names are provided, Endpoint IDs take precedence."
+        },
         "endpoint_name": {
           "name": "Current endpoint names",
-          "description": "Required. Enter one or more current Control D endpoint names, separated by commas, such as Chads-Phone,Kitchen Tablet. When a name is ambiguous inside one config entry, use a more specific current name."
+          "description": "Optional. Enter one or more current Control D endpoint names, separated by commas, such as Chads-Phone,Kitchen Tablet. Endpoint names are not guaranteed to be unique; when a name is ambiguous inside one config entry, use the endpoint ID instead."
         },
         "mode": {
           "name": "Analytics logging",
@@ -853,7 +861,8 @@
     },
     "get_inventory": {
       "name": "Get inventory",
-      "description": "Return the Control D account topology: profiles, endpoints, and (with full detail) clients.",      "fields": {
+      "description": "Return the Control D account topology: profiles, endpoints, and (with full detail) clients.",
+      "fields": {
         "detail": {
           "name": "Detail",
           "description": "Optional. Defaults to summary. Summary returns profiles and endpoints. Full also returns the client rows under the selected endpoints."

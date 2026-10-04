@@ -56,10 +56,13 @@ from .const import (
 from .llm_tools_common import format_tool_name
 from .models import (
     default_rule_mode_labels,
+    normalize_default_rule_mode,
+    normalize_service_mode,
     rule_action_options,
     service_mode_labels,
 )
 from .utils.action_result import (
+    ACTION_STATUS_ALREADY_IN_STATE,
     ACTION_STATUS_APPLIED,
     ACTION_STATUS_FAILED,
     build_action_result,
@@ -120,6 +123,61 @@ _EXPIRATION_DESCRIPTION: Final = (
 _COMMENT_DESCRIPTION: Final = "Optional. A comment to record on the rule."
 
 
+def _as_list(value: object) -> list[str]:
+    """Return a selector value as a list of strings."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str)]
+    return []
+
+
+def _resolve_profile_pks(registry: Any, args: dict[str, Any]) -> tuple[str, ...]:
+    """Return the profile ids a tool call addresses.
+
+    Ids win over names. With neither, the call covers every profile, which is
+    also how the services behave.
+    """
+    profile_ids = _as_list(args.get(SERVICE_FIELD_PROFILE_ID))
+    if profile_ids:
+        return tuple(pk for pk in profile_ids if pk in registry.profiles)
+    profile_names = _as_list(args.get(SERVICE_FIELD_PROFILE_NAME))
+    if profile_names:
+        wanted = {name.casefold() for name in profile_names}
+        return tuple(
+            pk
+            for pk, profile in registry.profiles.items()
+            if profile.name.casefold() in wanted
+        )
+    return tuple(registry.profiles)
+
+
+def _resolve_row_pks(
+    rows_by_profile: dict[str, dict[str, Any]],
+    profile_pks: tuple[str, ...],
+    *,
+    id_field: str,
+    name_field: str,
+    args: dict[str, Any],
+    name_attr: str,
+) -> tuple[tuple[str, str], ...]:
+    """Return the (profile_pk, row_pk) pairs a call addresses.
+
+    Rows are matched by id when given, otherwise by their display name.
+    """
+    row_ids = _as_list(args.get(id_field))
+    row_names = _as_list(args.get(name_field))
+    wanted_names = {name.casefold() for name in row_names}
+    pairs: list[tuple[str, str]] = []
+    for profile_pk in profile_pks:
+        for row_pk, row in rows_by_profile.get(profile_pk, {}).items():
+            if (row_ids and row_pk in row_ids) or (
+                wanted_names and getattr(row, name_attr, "").casefold() in wanted_names
+            ):
+                pairs.append((profile_pk, row_pk))
+    return tuple(pairs)
+
+
 class _ControlDControlTool(llm.Tool):
     """Base class for a Control D control tool backed by a service."""
 
@@ -136,13 +194,33 @@ class _ControlDControlTool(llm.Tool):
         """Return tool args validated against the declared schema."""
         return cast(dict[str, Any], self.parameters(tool_input.tool_args))
 
+    def _registry(self, hass: HomeAssistant) -> Any | None:
+        """Return the read-only runtime registry for this tool's entry.
+
+        Writes still go through services; this read-only view exists so a tool
+        can compare the requested state against the current one and report
+        ``already_in_state`` honestly instead of claiming a change that did not
+        happen.
+        """
+        entry = hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None:
+            return None
+        runtime = getattr(entry, "runtime_data", None)
+        return getattr(runtime, "registry", None)
+
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the resolved target to report, from the caller's own input."""
         return {key: value for key, value in args.items() if value is not None}
 
-    def _before(self, args: dict[str, Any]) -> dict[str, Any] | None:
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Return the state observed before the action, when it can be read."""
         return None
+
+    def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
+        """Return whether the target is already in the requested state."""
+        return False
 
     def _after(self, args: dict[str, Any]) -> dict[str, Any] | None:
         """Return the state the action requests."""
@@ -162,6 +240,20 @@ class _ControlDControlTool(llm.Tool):
         """Call the backing service and return the action result."""
         args = self._args(tool_input)
         target = self._target(args)
+        before = self._before(hass, args)
+
+        if self._is_already_in_state(hass, args):
+            return llm.ToolResult(
+                data=build_action_result(
+                    status=ACTION_STATUS_ALREADY_IN_STATE,
+                    target=target,
+                    changed=False,
+                    before=before,
+                    after=before,
+                    undo=self._undo(args),
+                )
+            )
+
         service_data = {**args, SERVICE_FIELD_CONFIG_ENTRY_ID: self._entry_id}
         try:
             await hass.services.async_call(
@@ -177,7 +269,7 @@ class _ControlDControlTool(llm.Tool):
                     status=ACTION_STATUS_FAILED,
                     target=target,
                     changed=False,
-                    before=self._before(args),
+                    before=before,
                 ),
                 error=True,
             )
@@ -187,7 +279,7 @@ class _ControlDControlTool(llm.Tool):
                 status=ACTION_STATUS_APPLIED,
                 target=target,
                 changed=True,
-                before=self._before(args),
+                before=before,
                 after=self._after(args),
                 undo=self._undo(args),
             )
@@ -246,6 +338,47 @@ class SetFilterStateTool(_ControlDControlTool):
         }
     )
     _service = SERVICE_SET_FILTER_STATE
+
+    def _pairs(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> tuple[tuple[str, str], ...]:
+        """Return the (profile, filter) rows this call addresses."""
+        registry = self._registry(hass)
+        if registry is None:
+            return ()
+        return _resolve_row_pks(
+            registry.filters_by_profile,
+            _resolve_profile_pks(registry, args),
+            id_field=SERVICE_FIELD_FILTER_ID,
+            name_field=SERVICE_FIELD_FILTER_NAME,
+            args=args,
+            name_attr="name",
+        )
+
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return the current enabled state of the addressed filters."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        states = [
+            registry.filters_by_profile[profile_pk][filter_pk].enabled
+            for profile_pk, filter_pk in self._pairs(hass, args)
+        ]
+        return {"enabled": states} if states else None
+
+    def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
+        """Return whether every addressed filter is already as requested."""
+        registry = self._registry(hass)
+        pairs = self._pairs(hass, args)
+        if registry is None or not pairs:
+            return False
+        wanted = bool(args[SERVICE_FIELD_ENABLED])
+        return all(
+            registry.filters_by_profile[profile_pk][filter_pk].enabled == wanted
+            for profile_pk, filter_pk in pairs
+        )
 
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the requested enabled state."""
@@ -328,6 +461,51 @@ class SetServiceStateTool(_ControlDControlTool):
     )
     _service = SERVICE_SET_SERVICE_STATE
 
+    def _pairs(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> tuple[tuple[str, str], ...]:
+        """Return the (profile, service) rows this call addresses."""
+        registry = self._registry(hass)
+        if registry is None:
+            return ()
+        return _resolve_row_pks(
+            registry.services_by_profile,
+            _resolve_profile_pks(registry, args),
+            id_field=SERVICE_FIELD_SERVICE_ID,
+            name_field=SERVICE_FIELD_SERVICE_NAME,
+            args=args,
+            name_attr="name",
+        )
+
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return the current service modes."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        modes = [
+            registry.services_by_profile[profile_pk][service_pk].current_mode
+            for profile_pk, service_pk in self._pairs(hass, args)
+        ]
+        return {"mode": modes} if modes else None
+
+    def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
+        """Return whether every addressed service is already in the requested mode.
+
+        The schema accepts display labels, while ``current_mode`` is an internal
+        key, so the requested value is normalized before comparing.
+        """
+        registry = self._registry(hass)
+        pairs = self._pairs(hass, args)
+        if registry is None or not pairs:
+            return False
+        wanted = normalize_service_mode(args[SERVICE_FIELD_MODE])
+        return all(
+            registry.services_by_profile[profile_pk][service_pk].current_mode == wanted
+            for profile_pk, service_pk in pairs
+        )
+
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the requested mode."""
         return {"mode": args[SERVICE_FIELD_MODE]}
@@ -393,6 +571,53 @@ class SetOptionStateTool(_ControlDControlTool):
         }
     )
     _service = SERVICE_SET_OPTION_STATE
+
+    def _pairs(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> tuple[tuple[str, str], ...]:
+        """Return the (profile, option) rows this call addresses."""
+        registry = self._registry(hass)
+        if registry is None:
+            return ()
+        return _resolve_row_pks(
+            registry.options_by_profile,
+            _resolve_profile_pks(registry, args),
+            id_field=SERVICE_FIELD_OPTION_ID,
+            name_field=SERVICE_FIELD_OPTION_NAME,
+            args=args,
+            name_attr="title",
+        )
+
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return the current option values."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        states = [
+            registry.options_by_profile[profile_pk][option_pk].current_select_option
+            for profile_pk, option_pk in self._pairs(hass, args)
+        ]
+        return {"current_value": states} if states else None
+
+    def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
+        """Return whether every addressed option is already as requested."""
+        registry = self._registry(hass)
+        pairs = self._pairs(hass, args)
+        if registry is None or not pairs:
+            return False
+        wants_enabled = args.get(SERVICE_FIELD_ENABLED)
+        wants_value = args.get(SERVICE_FIELD_VALUE)
+        for profile_pk, option_pk in pairs:
+            option = registry.options_by_profile[profile_pk][option_pk]
+            if wants_enabled is not None and bool(wants_enabled) != option.is_enabled:
+                return False
+            if wants_value is not None and str(wants_value) != str(
+                option.current_value_key
+            ):
+                return False
+        return True
 
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return whichever of the enabled/value pair was requested."""
@@ -484,6 +709,47 @@ class SetRuleStateTool(_ControlDControlTool):
     )
     _service = SERVICE_SET_RULE_STATE
 
+    def _matching_rules(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> tuple[Any, ...]:
+        """Return the rule rows this call addresses, by identity."""
+        registry = self._registry(hass)
+        if registry is None:
+            return ()
+        identities = set(_as_list(args[SERVICE_FIELD_RULE_IDENTITY]))
+        return tuple(
+            rule
+            for profile_pk in _resolve_profile_pks(registry, args)
+            for rule in registry.rules_by_profile.get(profile_pk, {}).values()
+            if rule.identity in identities
+        )
+
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return the current rule states."""
+        rules = self._matching_rules(hass, args)
+        if not rules:
+            return None
+        return {
+            "enabled": [rule.enabled for rule in rules],
+            "action": [rule.action_key for rule in rules],
+        }
+
+    def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
+        """Return whether the addressed rules already match the request."""
+        rules = self._matching_rules(hass, args)
+        if not rules:
+            return False
+        wants_enabled = args.get(SERVICE_FIELD_ENABLED)
+        wants_mode = args.get(SERVICE_FIELD_MODE)
+        for rule in rules:
+            if wants_enabled is not None and bool(wants_enabled) != rule.enabled:
+                return False
+            if wants_mode is not None and rule.action_key != wants_mode:
+                return False
+        return True
+
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the requested rule state."""
         after: dict[str, Any] = {}
@@ -544,6 +810,37 @@ class SetDefaultRuleStateTool(_ControlDControlTool):
     )
     _service = SERVICE_SET_DEFAULT_RULE_STATE
 
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return the current default modes."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        modes = [
+            registry.default_rules_by_profile[pk].current_mode
+            for pk in _resolve_profile_pks(registry, args)
+            if pk in registry.default_rules_by_profile
+        ]
+        return {"mode": modes} if modes else None
+
+    def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
+        """Return whether every addressed profile already uses the requested mode.
+
+        The schema accepts display labels, while ``current_mode`` is an internal
+        key, so the requested value is normalized before comparing.
+        """
+        registry = self._registry(hass)
+        if registry is None:
+            return False
+        wanted = normalize_default_rule_mode(args[SERVICE_FIELD_MODE])
+        modes = [
+            registry.default_rules_by_profile[pk].current_mode
+            for pk in _resolve_profile_pks(registry, args)
+            if pk in registry.default_rules_by_profile
+        ]
+        return bool(modes) and all(mode == wanted for mode in modes)
+
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the requested default mode."""
         return {"mode": args[SERVICE_FIELD_MODE]}
@@ -577,6 +874,39 @@ class EnableProfileTool(_ControlDControlTool):
         }
     )
     _service = SERVICE_ENABLE_PROFILE
+
+    def _profile_pks(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> tuple[str, ...]:
+        registry = self._registry(hass)
+        return () if registry is None else _resolve_profile_pks(registry, args)
+
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return the current paused state of the addressed profiles."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        return {
+            "paused": [
+                registry.profiles[pk].paused_until is not None
+                for pk in self._profile_pks(hass, args)
+                if pk in registry.profiles
+            ]
+        }
+
+    def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
+        """Enabling is a no-op when nothing is paused."""
+        registry = self._registry(hass)
+        pks = self._profile_pks(hass, args)
+        if registry is None or not pks:
+            return False
+        return all(
+            registry.profiles[pk].paused_until is None
+            for pk in pks
+            if pk in registry.profiles
+        )
 
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the requested paused state."""
@@ -628,6 +958,39 @@ class DisableProfileTool(_ControlDControlTool):
         }
     )
     _service = SERVICE_DISABLE_PROFILE
+
+    def _profile_pks(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> tuple[str, ...]:
+        registry = self._registry(hass)
+        return () if registry is None else _resolve_profile_pks(registry, args)
+
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return the current paused state of the addressed profiles."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        return {
+            "paused": [
+                registry.profiles[pk].paused_until is not None
+                for pk in self._profile_pks(hass, args)
+                if pk in registry.profiles
+            ]
+        }
+
+    def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
+        """Disabling is a no-op when every addressed profile is already paused."""
+        registry = self._registry(hass)
+        pks = self._profile_pks(hass, args)
+        if registry is None or not pks:
+            return False
+        return all(
+            registry.profiles[pk].paused_until is not None
+            for pk in pks
+            if pk in registry.profiles
+        )
 
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the requested paused state and duration."""

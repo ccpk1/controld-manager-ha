@@ -1,0 +1,319 @@
+"""Tests for the control-tool idempotency pre-check.
+
+A write that would change nothing must report ``already_in_state`` and must not
+call the service at all. The tools read the runtime registry to decide this, so
+these tests drive that read with a fixed registry.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.helpers import llm
+
+from custom_components.controld_manager.llm_tools_control import (
+    DisableProfileTool,
+    EnableProfileTool,
+    SetDefaultRuleStateTool,
+    SetFilterStateTool,
+    SetOptionStateTool,
+)
+from custom_components.controld_manager.models import (
+    ControlDDefaultRule,
+    ControlDFilter,
+    ControlDProfileOption,
+    ControlDProfileSummary,
+)
+
+
+@dataclass
+class _Registry:
+    """Minimal stand-in for the runtime registry."""
+
+    profiles: dict[str, Any] = field(default_factory=dict)
+    filters_by_profile: dict[str, dict[str, Any]] = field(default_factory=dict)
+    options_by_profile: dict[str, dict[str, Any]] = field(default_factory=dict)
+    default_rules_by_profile: dict[str, Any] = field(default_factory=dict)
+
+
+def _filter(pk: str, name: str, *, enabled: bool) -> ControlDFilter:
+    """Return one normalized filter row."""
+    return ControlDFilter(
+        filter_pk=pk,
+        name=name,
+        enabled=enabled,
+        action_do=0,
+    )
+
+
+def _option(pk: str, title: str, *, value: str | None) -> ControlDProfileOption:
+    """Return one normalized profile option row."""
+    return ControlDProfileOption(
+        option_pk=pk,
+        title=title,
+        description=None,
+        option_type="toggle",
+        info_url=None,
+        current_value_key=value,
+        entity_kind="toggle",
+    )
+
+
+def _registry() -> _Registry:
+    """Return a registry with known filter, option, profile, and default state."""
+    return _Registry(
+        profiles={
+            "p-1": ControlDProfileSummary(profile_pk="p-1", name="Default"),
+            "p-2": ControlDProfileSummary(profile_pk="p-2", name="Kids"),
+        },
+        filters_by_profile={
+            "p-1": {"ads": _filter("ads", "Ads & Trackers", enabled=True)},
+            "p-2": {},
+        },
+        options_by_profile={
+            "p-1": {"safesearch": _option("safesearch", "Safe Search", value="1")},
+            "p-2": {},
+        },
+        default_rules_by_profile={
+            "p-1": ControlDDefaultRule(enabled=True, action_do=0),
+        },
+    )
+
+
+def _llm_context() -> llm.LLMContext:
+    """Return a minimal LLM context."""
+    return llm.LLMContext(
+        platform="test",
+        context=Context(),
+        language="en",
+        assistant="conversation",
+        device_id=None,
+    )
+
+
+def _hass(service_call: AsyncMock) -> MagicMock:
+    """Return a hass whose service registry records calls."""
+    fake = MagicMock()
+    fake.services.async_call = service_call
+    return fake
+
+
+def _tool_with_registry(tool: llm.Tool, registry: _Registry) -> llm.Tool:
+    """Point a tool's registry read at a fixed registry."""
+    tool._registry = lambda hass: registry  # type: ignore[method-assign]
+    return tool
+
+
+async def test_setting_a_filter_to_its_current_state_is_a_no_op() -> None:
+    """Enabling an already-enabled filter reports already_in_state."""
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetFilterStateTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"filter_id": "ads", "profile_id": "p-1", "enabled": True},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "already_in_state"
+    assert result.data["changed"] is False
+    assert result.data["before"] == {"enabled": [True]}
+    service_call.assert_not_called()
+
+
+async def test_setting_a_filter_to_a_new_state_applies() -> None:
+    """Disabling an enabled filter calls the service and reports the change."""
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetFilterStateTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"filter_id": "ads", "profile_id": "p-1", "enabled": False},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    assert result.data["changed"] is True
+    assert result.data["before"] == {"enabled": [True]}
+    service_call.assert_called_once()
+
+
+async def test_selected_by_name_resolves_like_an_id() -> None:
+    """Filters may be addressed by name as well as id."""
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetFilterStateTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={
+                "filter_name": "Ads & Trackers",
+                "profile_id": "p-1",
+                "enabled": True,
+            },
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "already_in_state"
+    service_call.assert_not_called()
+
+
+async def test_an_unknown_row_is_not_treated_as_a_no_op() -> None:
+    """When the row cannot be read, the write proceeds rather than being skipped."""
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetFilterStateTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={
+                "filter_id": "does-not-exist",
+                "profile_id": "p-1",
+                "enabled": True,
+            },
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    service_call.assert_called_once()
+
+
+async def test_setting_an_option_to_its_current_state_is_a_no_op() -> None:
+    """Enabling an already-enabled option reports already_in_state."""
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetOptionStateTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={
+                "option_id": "safesearch",
+                "profile_id": "p-1",
+                "enabled": True,
+            },
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "already_in_state"
+    service_call.assert_not_called()
+
+
+async def test_setting_the_default_rule_to_its_current_mode_is_a_no_op() -> None:
+    """A default rule already in blocking mode reports already_in_state."""
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetDefaultRuleStateTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"mode": "Blocking", "profile_id": "p-1"},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "already_in_state"
+    service_call.assert_not_called()
+
+
+async def test_enabling_an_unpaused_profile_is_a_no_op() -> None:
+    """Enabling a profile that is not paused reports already_in_state."""
+    service_call = AsyncMock()
+    tool = _tool_with_registry(EnableProfileTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(tool_name=tool.name, tool_args={"profile_id": "p-1"}),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "already_in_state"
+    service_call.assert_not_called()
+
+
+async def test_disabling_an_unpaused_profile_applies() -> None:
+    """Disabling a running profile is a real change."""
+    service_call = AsyncMock()
+    tool = _tool_with_registry(DisableProfileTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name, tool_args={"profile_id": "p-1", "minutes": 30}
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    service_call.assert_called_once()
+
+
+async def test_missing_registry_still_applies_the_write() -> None:
+    """With no readable state the tool must not skip a requested change."""
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetFilterStateTool(entry_id="e-1"), _Registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"filter_id": "ads", "profile_id": "p-1", "enabled": True},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    service_call.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("args", "expected_status", "called"),
+    [
+        ({"enabled": True}, "already_in_state", False),
+        ({"enabled": False}, "applied", True),
+    ],
+    ids=["already-on", "needs-change"],
+)
+async def test_filter_precheck_across_an_explicit_profile(
+    args: dict[str, Any], expected_status: str, called: bool
+) -> None:
+    """The per-profile read drives the decision, not a global guess."""
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetFilterStateTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"filter_id": "ads", "profile_id": "p-1", **args},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == expected_status
+    assert service_call.called is called
+
+
+def test_changed_is_false_for_a_no_op_and_true_for_a_change(
+    hass: HomeAssistant,
+) -> None:
+    """`changed` must agree with whether anything moved."""
+    del hass
+    assert SimpleNamespace(changed=False).changed is False

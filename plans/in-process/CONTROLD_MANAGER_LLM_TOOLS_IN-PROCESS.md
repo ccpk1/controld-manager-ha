@@ -229,7 +229,7 @@ Ordering is deliberate: **retention, catalog currency, and the response/error co
 | ID | Phase | Decision | Recommendation | Owner input |
 | --- | --- | --- | --- | --- |
 | D1 | 0 | Catalog classification of new options | **Resolved:** `block_attacks` = advanced; no other new items | Done |
-| D2 | 0 | Write-response propagation depth | Managers own raw body; one standardized action result | No |
+| D2 | 0 | Write-response propagation depth | **Resolved:** envelope synthesized from real per-family responses; the response is success confirmation only | Done |
 | D3 | 0 | Failure taxonomy surface | One envelope + `error.kind`; empty and `RCODE 5` are not errors | No |
 | D4 | 0 | Retention readability | **Resolved:** not readable; warn and document only | Done |
 | D5 | 1 | Tier set and default | Five tiers; default Summary only; **implemented, content pending sign-off** | Yes |

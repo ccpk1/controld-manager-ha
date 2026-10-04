@@ -161,8 +161,14 @@ clear_client_alias:
 
 rename_endpoint:
   name: Rename endpoint
-  description: Rename one or more Control D endpoints resolved by current endpoint name within one selected config entry.
+  description: Rename one or more Control D endpoints resolved by endpoint ID or current endpoint name within one selected config entry. Endpoint IDs take precedence over names when both are provided.
   fields:
+    endpoint_id:
+      required: false
+      example: |
+        ["461wtt4eyr", "w1eg4mfif8"]
+      selector:
+        text:
     endpoint_name:
       required: false
       example: |
@@ -186,8 +192,14 @@ rename_endpoint:
 
 set_endpoint_analytics_logging:
   name: Set endpoint analytics logging
-  description: Update the Control D endpoint analytics logging level for one or more endpoints resolved by current endpoint name within one selected config entry.
+  description: Update the Control D endpoint analytics logging level for one or more endpoints resolved by endpoint ID or current endpoint name within one selected config entry. Endpoint IDs take precedence over names when both are provided.
   fields:
+    endpoint_id:
+      required: false
+      example: |
+        ["461wtt4eyr", "w1eg4mfif8"]
+      selector:
+        text:
     endpoint_name:
       required: false
       example: |

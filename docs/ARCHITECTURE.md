@@ -178,8 +178,12 @@ Rules:
 - the module must never be named `llm.py`, and there must never be a `llm/`
   package, because either is discovered as Home Assistant's own `llm` platform
   and imported outside the version guard
-- tools call **services only**; they must not call the API client or managers
-  directly
+- tools call **services** for every write; they must not write through the API
+  client or managers directly
+- tools **may read** the runtime registry directly, for one purpose only: to
+  compare the requested state against the current state so a write can report
+  `already_in_state` instead of claiming a change that did not happen. This is a
+  read-only view of data the coordinator already holds, never a second data path
 - tools use the repository lexicon exactly; a Control D endpoint is never called
   a client or a device
 - the tool layer is opt-in per config entry via the LLM tool mode, which is the

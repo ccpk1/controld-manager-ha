@@ -274,9 +274,24 @@ class EndpointManager(BaseManager):
     def resolve_endpoint_target(
         self,
         *,
-        endpoint_name: str,
+        endpoint_id: str | None = None,
+        endpoint_name: str | None = None,
     ) -> ControlDEndpointSummary:
-        """Resolve exactly one endpoint row from endpoint-scoped runtime data."""
+        """Resolve exactly one endpoint row from endpoint-scoped runtime data.
+
+        An id is an exact, unambiguous key, so it wins over a name. A name is
+        kept because it is what a person reads from the dashboard, but names are
+        not guaranteed unique.
+        """
+        if endpoint_id is not None:
+            endpoint = self.runtime.registry.endpoints.get(endpoint_id)
+            if endpoint is None:
+                raise ValueError("Unknown endpoint target for selector 'id'")
+            return endpoint
+
+        if endpoint_name is None:
+            raise ValueError("Provide one endpoint target selector")
+
         normalized_name = self._normalize_name(endpoint_name)
         matches = tuple(
             endpoint

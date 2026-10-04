@@ -280,6 +280,7 @@ CLEAR_CLIENT_ALIAS_SERVICE_SCHEMA = vol.Schema(
 
 RENAME_ENDPOINT_SERVICE_SCHEMA = vol.Schema(
     {
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
         vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
         vol.Required(SERVICE_FIELD_NEW_NAME): cv.string,
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
@@ -288,6 +289,7 @@ RENAME_ENDPOINT_SERVICE_SCHEMA = vol.Schema(
 
 SET_ENDPOINT_ANALYTICS_LOGGING_SERVICE_SCHEMA = vol.Schema(
     {
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
         vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
         vol.Required(SERVICE_FIELD_MODE): vol.In(
             endpoint_analytics_logging_mode_labels()
@@ -1185,9 +1187,15 @@ def _resolve_endpoint_service_target(
     hass: HomeAssistant,
     call: ServiceCall,
 ) -> ResolvedEndpointServiceTarget:
-    """Resolve one endpoint-rename target scope within one config entry."""
+    """Resolve one endpoint target scope within one config entry.
+
+    An endpoint may be addressed by ``device_id`` or by display name. Ids are
+    exact and unambiguous, so they take precedence; names are accepted because
+    they are what the dashboard shows.
+    """
     explicit_entry_ids = set(_ensure_list(call.data.get(SERVICE_FIELD_CONFIG_ENTRY_ID)))
     config_entry_name = call.data.get(SERVICE_FIELD_CONFIG_ENTRY_NAME)
+    requested_endpoint_ids = _ensure_name_list(call.data.get(SERVICE_FIELD_ENDPOINT_ID))
     requested_endpoint_names = _ensure_name_list(
         call.data.get(SERVICE_FIELD_ENDPOINT_NAME)
     )
@@ -1205,7 +1213,7 @@ def _resolve_endpoint_service_target(
         device_ids=set(),
     )
 
-    if not requested_endpoint_names:
+    if not requested_endpoint_ids and not requested_endpoint_names:
         raise ServiceValidationError(
             "Select at least one Control D endpoint target",
             translation_domain=DOMAIN,
@@ -1214,11 +1222,13 @@ def _resolve_endpoint_service_target(
 
     endpoint_manager = entry.runtime_data.managers.endpoint
     resolved_endpoints: dict[str, ControlDEndpointSummary] = {}
-    for requested_name in requested_endpoint_names:
+    # Ids first: an id can never be ambiguous, so it is the safer selector.
+    for selector_kwargs in (
+        *({"endpoint_id": value} for value in requested_endpoint_ids),
+        *({"endpoint_name": value} for value in requested_endpoint_names),
+    ):
         try:
-            endpoint = endpoint_manager.resolve_endpoint_target(
-                endpoint_name=requested_name,
-            )
+            endpoint = endpoint_manager.resolve_endpoint_target(**selector_kwargs)
         except ValueError as err:
             translation_key = (
                 TRANS_KEY_ENDPOINT_TARGET_AMBIGUOUS
