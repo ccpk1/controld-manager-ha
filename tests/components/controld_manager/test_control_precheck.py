@@ -315,10 +315,61 @@ async def test_setting_the_default_rule_to_its_current_mode_is_a_no_op() -> None
     )
 
     assert result.data["status"] == "already_in_state"
+    assert result.data["before"] == {"mode": ["Blocking"]}
     service_call.assert_not_called()
 
 
-async def test_enabling_an_unpaused_profile_is_a_no_op() -> None:
+async def test_the_default_rule_offers_an_undo_of_its_previous_mode() -> None:
+    """The previous mode is readable, so an undo can name it.
+
+    It previously reported `undo: null` while also reporting the previous mode in
+    `before`, which is the same gap the option tool had.
+    """
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetDefaultRuleStateTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"mode": "Bypassing", "profile_id": "p-1"},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    # The registry row for p-1 is enabling/blocking, so the undo restores that.
+    assert result.data["undo"] == [
+        "controld_manager__set_default_rule_state(mode='Blocking', profile_id='p-1')"
+    ]
+
+
+async def test_a_service_before_state_uses_the_same_vocabulary_as_after() -> None:
+    """`before` and `after` must not disagree on vocabulary.
+
+    `before` reported the internal key ("blocked") while `after` echoed the
+    requested display label ("Bypassed"), so comparing them was misleading.
+    """
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetServiceStateTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={
+                "service_id": "instagram",
+                "profile_id": "p-1",
+                "mode": "Bypassed",
+            },
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    # The registry row is action_do=0, i.e. blocked, reported as its label.
+    assert result.data["before"] == {"mode": ["Blocked"]}
+    assert result.data["after"] == {"mode": "Bypassed"}
     """Enabling a profile that is not paused reports already_in_state."""
     service_call = AsyncMock()
     tool = _tool_with_registry(EnableProfileTool(entry_id="e-1"), _registry())

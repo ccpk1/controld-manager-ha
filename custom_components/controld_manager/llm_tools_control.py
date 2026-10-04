@@ -65,6 +65,7 @@ from .const import (
 )
 from .llm_tools_common import as_list, format_tool_name
 from .models import (
+    DEFAULT_RULE_MODE_LABELS,
     SERVICE_MODE_LABELS,
     default_rule_mode_labels,
     endpoint_analytics_logging_mode_labels,
@@ -555,14 +556,22 @@ class SetServiceStateTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the current service modes."""
+        """Return the current service modes as display labels.
+
+        Labels rather than the internal mode keys, so ``before`` and ``after``
+        speak the same vocabulary and a caller comparing them is not misled by
+        "blocked" versus "Blocked".
+        """
         registry = self._registry(hass)
         if registry is None:
             return None
         modes = [
-            registry.services_by_profile[profile_pk][service_pk].current_mode
+            SERVICE_MODE_LABELS.get(
+                registry.services_by_profile[profile_pk][service_pk].current_mode
+            )
             for profile_pk, service_pk in self._pairs(hass, args)
         ]
+        modes = [mode for mode in modes if mode is not None]
         return {"mode": modes} if modes else None
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
@@ -939,15 +948,22 @@ class SetDefaultRuleStateTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the current default modes."""
+        """Return the current default modes as display labels.
+
+        Labels rather than internal keys, so ``before`` and ``after`` match; see
+        the equivalent note on the service tool.
+        """
         registry = self._registry(hass)
         if registry is None:
             return None
         modes = [
-            registry.default_rules_by_profile[pk].current_mode
+            DEFAULT_RULE_MODE_LABELS.get(
+                registry.default_rules_by_profile[pk].current_mode
+            )
             for pk in _resolve_profile_pks(registry, args)
             if pk in registry.default_rules_by_profile
         ]
+        modes = [mode for mode in modes if mode is not None]
         return {"mode": modes} if modes else None
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
@@ -970,6 +986,25 @@ class SetDefaultRuleStateTool(_ControlDControlTool):
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the requested default mode."""
         return {"mode": args[SERVICE_FIELD_MODE]}
+
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
+        """Return one call per profile, restoring its previous mode."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        calls: list[str] = []
+        for profile_pk in _resolve_profile_pks(registry, args):
+            rule_row = registry.default_rules_by_profile.get(profile_pk)
+            if rule_row is None:
+                continue
+            label = DEFAULT_RULE_MODE_LABELS.get(rule_row.current_mode)
+            if label is None:
+                continue
+            calls.append(
+                f"{format_tool_name('set_default_rule_state')}("
+                f"mode={label!r}, profile_id={profile_pk!r})"
+            )
+        return calls or None
 
 
 class EnableProfileTool(_ControlDControlTool):
