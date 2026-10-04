@@ -18,16 +18,43 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
 
 from .const import (
+    ACTIVITY_ACTIONS,
+    ACTIVITY_TRIGGERS,
+    CATALOG_TYPES,
+    DNS_RECORD_TYPES,
     DOMAIN,
+    SERVICE_FIELD_CATALOG_TYPE,
+    SERVICE_FIELD_CLIENT_ID,
     SERVICE_FIELD_CLIENT_LIMIT,
     SERVICE_FIELD_CONFIG_ENTRY_ID,
+    SERVICE_FIELD_DESTINATION_COUNTRY,
     SERVICE_FIELD_DETAIL,
+    SERVICE_FIELD_DOMAIN,
     SERVICE_FIELD_ENDPOINT_ID,
+    SERVICE_FIELD_LIMIT,
+    SERVICE_FIELD_PAGE,
+    SERVICE_FIELD_PAGE_SIZE,
     SERVICE_FIELD_PROFILE_ID,
+    SERVICE_FIELD_PROTOCOL,
+    SERVICE_FIELD_QUERY_ACTION,
+    SERVICE_FIELD_RECORD_TYPE,
+    SERVICE_FIELD_SEARCH,
+    SERVICE_FIELD_SORT_ORDER,
+    SERVICE_FIELD_SOURCE_ASN,
+    SERVICE_FIELD_SOURCE_COUNTRY,
+    SERVICE_FIELD_SOURCE_ISP,
+    SERVICE_FIELD_STATUS_CODE,
+    SERVICE_FIELD_TRIGGER,
+    SERVICE_FIELD_TRIGGER_VALUE,
+    SERVICE_FIELD_WINDOW,
     SERVICE_GET_ACCOUNT_OVERVIEW,
+    SERVICE_GET_ACTIVITY_LOG,
+    SERVICE_GET_CATALOG,
     SERVICE_GET_INVENTORY,
+    SERVICE_TEST_DOMAIN,
 )
 from .llm_tools_common import format_tool_name
+from .utils.time_window import ACTIVITY_LOG_WINDOWS, DEFAULT_ACTIVITY_LOG_WINDOW
 
 # Every read tool is a bounded, read-only query against the user's own account.
 _READ_ANNOTATIONS: Final = llm.ToolAnnotations(
@@ -190,9 +217,303 @@ class GetInventoryTool(_ControlDReadTool):
     _response_type = "inventory"
 
 
+class GetActivityLogTool(_ControlDReadTool):
+    """Report per-record DNS queries for a recent window."""
+
+    name = format_tool_name("get_activity_log")
+    title = "Get activity log"
+    description = (
+        "Report individual DNS queries and what Control D did with each one. "
+        "Every record carries the domain, the action taken (blocked, bypassed, "
+        "redirected, or failed), the endpoint and client, the protocol and "
+        "record type, the source and destination geography, and — most "
+        "importantly — the `trigger` and `triggerValue` that caused the action "
+        "(a filter, a service, one of your own custom rules, the default rule, "
+        "a global rule, or rebind protection).\n"
+        "\n"
+        'This is the tool for "why was this blocked?" and "what has this '
+        'device been doing?" Use it when you need the specific cause on a '
+        "specific query. For aggregate counts (how much was blocked in total) "
+        "use `get_account_overview`, and to ask about one domain on one endpoint "
+        "in a single call use `test_domain`.\n"
+        "\n"
+        "Defaults to the last hour across the whole account. Narrow the window "
+        "and the scope rather than paging through everything: the activity log "
+        "is a recent-detail surface and a page can be large. Filter by "
+        "`profile_id`, `endpoint_id`, or `client_id` (which requires an "
+        "endpoint), by `query_action` to see only blocks or only passes, or by "
+        "`search` to match a domain substring.\n"
+        "\n"
+        "Retention is limited (roughly 33 days, and a user can shorten it or "
+        "turn logging off), so an empty result may mean no matching traffic, a "
+        "window that has expired, or logging being disabled — say which you "
+        "cannot distinguish rather than reporting that nothing happened. A full "
+        "page sets `has_more`; there is no total, so never imply one. `status_code` "
+        "is the DNS response code, and `rcode` is not an accepted parameter."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Optional(
+                SERVICE_FIELD_WINDOW,
+                default=DEFAULT_ACTIVITY_LOG_WINDOW,
+                description=(
+                    "Optional. How far back to look. One of "
+                    f"{', '.join(ACTIVITY_LOG_WINDOWS)}; defaults to "
+                    f"{DEFAULT_ACTIVITY_LOG_WINDOW}. Keep it short unless you "
+                    "really need a wider view."
+                ),
+            ): vol.In(ACTIVITY_LOG_WINDOWS),
+            vol.Optional(
+                SERVICE_FIELD_SEARCH,
+                description=(
+                    "Optional. A substring to match against the queried domain, "
+                    "for example 'netflix'. This is a substring match, not an "
+                    "exact domain."
+                ),
+            ): str,
+            vol.Optional(
+                SERVICE_FIELD_QUERY_ACTION,
+                description=(
+                    "Optional. Filter by what was done: 'blocked', 'bypassed', "
+                    "'redirected', or 'failed'. Omit to return all actions."
+                ),
+            ): vol.In(ACTIVITY_ACTIONS),
+            vol.Optional(
+                SERVICE_FIELD_TRIGGER,
+                description=(
+                    "Optional. Filter by what caused the action. Use 'filter' "
+                    "for a blocklist, 'service' for a service, 'custom' for one "
+                    "of your own rules, 'default' for the default rule. Pair "
+                    "with trigger_value to name the specific cause."
+                ),
+            ): vol.In(ACTIVITY_TRIGGERS),
+            vol.Optional(
+                SERVICE_FIELD_TRIGGER_VALUE,
+                description=(
+                    "Optional. The specific cause, used with `trigger` — for "
+                    "example 'x-hagezi-light' for a filter or 'instagram' for a "
+                    "service. Pass the raw value exactly as reported; do not "
+                    "invent a label."
+                ),
+            ): str,
+            vol.Optional(
+                SERVICE_FIELD_PROFILE_ID,
+                description=(
+                    "Optional. One Control D profile id (from "
+                    "get_account_overview) to scope the result to that profile."
+                ),
+            ): str,
+            vol.Optional(
+                SERVICE_FIELD_ENDPOINT_ID,
+                description=(
+                    "Optional. One or more endpoint device_ids (from "
+                    "get_inventory) to scope the result. Provide a list to cover "
+                    "several endpoints at once."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_CLIENT_ID,
+                description=(
+                    "Optional. One client id (from get_inventory with "
+                    "detail 'full') to scope the result to a single client. "
+                    "Requires endpoint_id as well."
+                ),
+            ): str,
+            vol.Optional(
+                SERVICE_FIELD_PROTOCOL,
+                description=(
+                    "Optional. DNS transport to filter by, such as 'doh', "
+                    "'dot', 'doq', 'doh3', or 'legacy' for plain DNS."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_SOURCE_COUNTRY,
+                description=(
+                    "Optional. One or more source country codes to filter by, "
+                    "such as 'US'."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_DESTINATION_COUNTRY,
+                description=(
+                    "Optional. A destination country code to filter by. This is "
+                    "only available on the activity log, not on aggregate counts."
+                ),
+            ): str,
+            vol.Optional(
+                SERVICE_FIELD_SOURCE_ISP,
+                description="Optional. A source ISP name to filter by.",
+            ): str,
+            vol.Optional(
+                SERVICE_FIELD_SOURCE_ASN,
+                description="Optional. A source ASN to filter by.",
+            ): str,
+            vol.Optional(
+                SERVICE_FIELD_STATUS_CODE,
+                description=(
+                    "Optional. The DNS response code to filter by, as a number "
+                    "(for example 0 for a normal answer or 3 for NXDOMAIN)."
+                ),
+            ): vol.Coerce(int),
+            vol.Optional(
+                SERVICE_FIELD_RECORD_TYPE,
+                description=(
+                    "Optional. The DNS record type to filter by, such as 'A', "
+                    "'AAAA', or 'HTTPS'."
+                ),
+            ): vol.In(DNS_RECORD_TYPES),
+            vol.Optional(
+                SERVICE_FIELD_PAGE,
+                default=0,
+                description=(
+                    "Optional. Zero-based page number. Defaults to 0, the newest "
+                    "records first."
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=0)),
+            vol.Optional(
+                SERVICE_FIELD_PAGE_SIZE,
+                default=50,
+                description=(
+                    "Optional. Records per page, 1 to 500. Defaults to 50. A "
+                    "larger page costs more context; narrow the filters instead "
+                    "if you need less."
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
+            vol.Optional(
+                SERVICE_FIELD_SORT_ORDER,
+                default="desc",
+                description=(
+                    "Optional. 'desc' (default) returns newest first; 'asc' "
+                    "returns oldest first."
+                ),
+            ): vol.In(("desc", "asc")),
+        }
+    )
+    _service = SERVICE_GET_ACTIVITY_LOG
+    _response_type = "activity_log"
+
+
+class TestDomainTool(_ControlDReadTool):
+    """Report the policy verdict for one domain on one endpoint."""
+
+    name = format_tool_name("test_domain")
+    title = "Test domain"
+    description = (
+        "Ask Control D what would happen if one endpoint resolved one domain, "
+        "without waiting for real traffic. This is the cheapest way to answer "
+        '"is this blocked?" and "what would block it?" — one call, one '
+        "domain, one endpoint.\n"
+        "\n"
+        "The result reports whether the domain is blocked and, when it is, the "
+        "profile that decided it, the matched rule or list, and the cause "
+        "(`source` is 'filter', 'service', 'custom', or 'default' after "
+        "translation, with the raw value in `source_label`). A blocked answer "
+        "comes back as `is_blocked: true` with a REFUSED response code; that is "
+        "a normal result, not an error. If no policy matched, the domain is "
+        "simply not blocked and the cause fields are empty.\n"
+        "\n"
+        "Use `get_inventory` to find the endpoint device_id, and "
+        "`get_activity_log` when you want the real traffic history rather than a "
+        "hypothetical answer. The lookup is diagnostic and does not appear in "
+        "the activity log."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Required(
+                SERVICE_FIELD_ENDPOINT_ID,
+                description=(
+                    "Required. The endpoint device_id to test, from "
+                    "get_inventory. The verdict depends on which endpoint asks, "
+                    "because each endpoint enforces its own profile."
+                ),
+            ): str,
+            vol.Required(
+                SERVICE_FIELD_DOMAIN,
+                description=(
+                    "Required. The domain to test, for example 'google.com'. "
+                    "Use a bare domain, not a URL."
+                ),
+            ): str,
+            vol.Optional(
+                SERVICE_FIELD_RECORD_TYPE,
+                default="A",
+                description=(
+                    "Optional. The DNS record type to test. Defaults to 'A'; use "
+                    "'AAAA' for IPv6 or 'HTTPS' for HTTPS records."
+                ),
+            ): vol.In(DNS_RECORD_TYPES),
+        }
+    )
+    _service = SERVICE_TEST_DOMAIN
+    _response_type = "domain_test"
+
+
+class GetCatalogTool(_ControlDReadTool):
+    """Report the Control D configuration catalog for one profile scope."""
+
+    name = format_tool_name("get_catalog")
+    title = "Get catalog"
+    description = (
+        "Report Control D configuration and its current state for one profile "
+        "scope. Use it to resolve the exact identifiers the control tools need "
+        "before changing anything, and to answer what a profile is configured "
+        "to do.\n"
+        "\n"
+        "Choose one `catalog_type` per call:\n"
+        "- `filters` — blocklists, each with whether it is enabled, whether it "
+        "supports modes, and its current mode.\n"
+        "- `services` — services, each with its category and current mode.\n"
+        "- `rules` — rule folders and the custom rules inside them, with action, "
+        "enabled state, and comment.\n"
+        "- `profile_options` — options such as AI Malware, Safe Search, and "
+        "Restricted YouTube, with their current value.\n"
+        "- `default_rule` — each profile's catch-all action.\n"
+        "\n"
+        "Scope it with `profile_id`; without one it returns every managed "
+        "profile, which is usually more than you need. The service catalog alone "
+        "has over a thousand entries, so set `limit` and treat `truncated` as a "
+        "signal to narrow the scope rather than assuming you have everything."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Required(
+                SERVICE_FIELD_CATALOG_TYPE,
+                description=(
+                    "Required. One of 'filters', 'services', 'rules', "
+                    "'profile_options', or 'default_rule'."
+                ),
+            ): vol.In(CATALOG_TYPES),
+            vol.Optional(
+                SERVICE_FIELD_PROFILE_ID,
+                description=(
+                    "Optional. One or more profile ids (from "
+                    "get_account_overview) to scope the catalog. Strongly "
+                    "recommended; without it the result covers every profile."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_LIMIT,
+                default=50,
+                description=(
+                    "Optional. Maximum items to return, 1 to 500. Defaults to "
+                    "50. `truncated` reports whether the cap was reached, so a "
+                    "capped catalog is never mistaken for a complete one."
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
+        }
+    )
+    _service = SERVICE_GET_CATALOG
+    _response_type = "catalog"
+
+
 def build_read_tools(*, entry_id: str) -> list[llm.Tool]:
     """Return the read tools bound to one config entry."""
-    return [GetInventoryTool(entry_id=entry_id)]
+    return [
+        GetInventoryTool(entry_id=entry_id),
+        GetActivityLogTool(entry_id=entry_id),
+        TestDomainTool(entry_id=entry_id),
+        GetCatalogTool(entry_id=entry_id),
+    ]
 
 
 def build_account_overview_tools(*, entry_id: str) -> list[llm.Tool]:

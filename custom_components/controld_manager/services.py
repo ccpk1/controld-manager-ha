@@ -29,9 +29,13 @@ from .api import (
     ControlDApiResponseError,
 )
 from .const import (
+    ACTIVITY_ACTIONS,
+    ACTIVITY_TRIGGERS,
+    CATALOG_TYPES,
     DEFAULT_DISABLE_MINUTES,
     DETAIL_LEVELS,
     DETAIL_SUMMARY,
+    DNS_RECORD_TYPES,
     DOMAIN,
     SERVICE_CLEAR_CLIENT_ALIAS,
     SERVICE_CREATE_RULE,
@@ -41,11 +45,15 @@ from .const import (
     SERVICE_FIELD_ALIAS,
     SERVICE_FIELD_CANCEL_EXPIRATION,
     SERVICE_FIELD_CATALOG_TYPE,
+    SERVICE_FIELD_CLIENT_ID,
     SERVICE_FIELD_CLIENT_LIMIT,
     SERVICE_FIELD_COMMENT,
     SERVICE_FIELD_CONFIG_ENTRY_ID,
     SERVICE_FIELD_CONFIG_ENTRY_NAME,
+    SERVICE_FIELD_DESTINATION_COUNTRY,
+    SERVICE_FIELD_DESTINATION_ISP,
     SERVICE_FIELD_DETAIL,
+    SERVICE_FIELD_DOMAIN,
     SERVICE_FIELD_ENABLED,
     SERVICE_FIELD_ENDPOINT_HOSTNAME,
     SERVICE_FIELD_ENDPOINT_ID,
@@ -57,23 +65,39 @@ from .const import (
     SERVICE_FIELD_FILTER_ID,
     SERVICE_FIELD_FILTER_NAME,
     SERVICE_FIELD_HOSTNAME,
+    SERVICE_FIELD_LIMIT,
     SERVICE_FIELD_MINUTES,
     SERVICE_FIELD_MODE,
     SERVICE_FIELD_NEW_NAME,
     SERVICE_FIELD_OPTION_ID,
     SERVICE_FIELD_OPTION_NAME,
+    SERVICE_FIELD_PAGE,
+    SERVICE_FIELD_PAGE_SIZE,
     SERVICE_FIELD_PARENT_ENDPOINT_NAME,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
+    SERVICE_FIELD_PROTOCOL,
+    SERVICE_FIELD_QUERY_ACTION,
+    SERVICE_FIELD_RECORD_TYPE,
     SERVICE_FIELD_REDIRECT_TARGET,
     SERVICE_FIELD_REDIRECT_TARGET_TYPE,
     SERVICE_FIELD_RULE_GROUP_ID,
     SERVICE_FIELD_RULE_GROUP_NAME,
     SERVICE_FIELD_RULE_IDENTITY,
+    SERVICE_FIELD_SEARCH,
     SERVICE_FIELD_SERVICE_ID,
     SERVICE_FIELD_SERVICE_NAME,
+    SERVICE_FIELD_SORT_ORDER,
+    SERVICE_FIELD_SOURCE_ASN,
+    SERVICE_FIELD_SOURCE_COUNTRY,
+    SERVICE_FIELD_SOURCE_ISP,
+    SERVICE_FIELD_STATUS_CODE,
+    SERVICE_FIELD_TRIGGER,
+    SERVICE_FIELD_TRIGGER_VALUE,
     SERVICE_FIELD_VALUE,
+    SERVICE_FIELD_WINDOW,
     SERVICE_GET_ACCOUNT_OVERVIEW,
+    SERVICE_GET_ACTIVITY_LOG,
     SERVICE_GET_CATALOG,
     SERVICE_GET_INVENTORY,
     SERVICE_RENAME_ENDPOINT,
@@ -84,6 +108,7 @@ from .const import (
     SERVICE_SET_OPTION_STATE,
     SERVICE_SET_RULE_STATE,
     SERVICE_SET_SERVICE_STATE,
+    SERVICE_TEST_DOMAIN,
     TRANS_KEY_CLEAR_CLIENT_ALIASES_FAILED,
     TRANS_KEY_CLIENT_ALIAS_INVALID,
     TRANS_KEY_CLIENT_ALIAS_TARGET_AMBIGUOUS,
@@ -151,6 +176,10 @@ from .service_selectors import (
     _resolve_selected_rule_identities,
     _resolve_selected_service_pks,
 )
+from .utils.time_window import (
+    ACTIVITY_LOG_WINDOWS,
+    DEFAULT_ACTIVITY_LOG_WINDOW,
+)
 
 ControlDManagerConfigEntry = ConfigEntry[ControlDManagerRuntime]
 
@@ -162,13 +191,6 @@ def _ha_error(translation_key: str) -> HomeAssistantError:
         translation_key=translation_key,
     )
 
-
-CATALOG_TYPES: tuple[str, ...] = (
-    "filters",
-    "services",
-    "rules",
-    "profile_options",
-)
 
 _PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
     vol.Optional(SERVICE_FIELD_PROFILE_ID): vol.Any(cv.string, [cv.string]),
@@ -359,6 +381,9 @@ DELETE_RULE_SERVICE_SCHEMA = vol.Schema(
 GET_CATALOG_SERVICE_SCHEMA = vol.Schema(
     {
         vol.Required(SERVICE_FIELD_CATALOG_TYPE): vol.In(CATALOG_TYPES),
+        vol.Optional(SERVICE_FIELD_LIMIT, default=50): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=500)
+        ),
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
@@ -380,6 +405,46 @@ GET_INVENTORY_SERVICE_SCHEMA = vol.Schema(
         vol.Optional(SERVICE_FIELD_CLIENT_LIMIT, default=100): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=500)
         ),
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+GET_ACTIVITY_LOG_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(SERVICE_FIELD_WINDOW, default=DEFAULT_ACTIVITY_LOG_WINDOW): vol.In(
+            ACTIVITY_LOG_WINDOWS
+        ),
+        vol.Optional(SERVICE_FIELD_SEARCH): cv.string,
+        vol.Optional(SERVICE_FIELD_QUERY_ACTION): vol.In(ACTIVITY_ACTIONS),
+        vol.Optional(SERVICE_FIELD_TRIGGER): vol.In(ACTIVITY_TRIGGERS),
+        vol.Optional(SERVICE_FIELD_TRIGGER_VALUE): cv.string,
+        vol.Optional(SERVICE_FIELD_PROFILE_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_CLIENT_ID): cv.string,
+        vol.Optional(SERVICE_FIELD_PROTOCOL): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_SOURCE_COUNTRY): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_DESTINATION_COUNTRY): cv.string,
+        vol.Optional(SERVICE_FIELD_SOURCE_ISP): cv.string,
+        vol.Optional(SERVICE_FIELD_DESTINATION_ISP): cv.string,
+        vol.Optional(SERVICE_FIELD_SOURCE_ASN): cv.string,
+        vol.Optional(SERVICE_FIELD_STATUS_CODE): vol.Coerce(int),
+        vol.Optional(SERVICE_FIELD_RECORD_TYPE): vol.In(DNS_RECORD_TYPES),
+        vol.Optional(SERVICE_FIELD_PAGE, default=0): vol.All(
+            vol.Coerce(int), vol.Range(min=0)
+        ),
+        vol.Optional(SERVICE_FIELD_PAGE_SIZE, default=50): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=500)
+        ),
+        vol.Optional(SERVICE_FIELD_SORT_ORDER, default="desc"): vol.In(("desc", "asc")),
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+TEST_DOMAIN_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required(SERVICE_FIELD_ENDPOINT_ID): cv.string,
+        vol.Required(SERVICE_FIELD_DOMAIN): cv.string,
+        vol.Optional(SERVICE_FIELD_RECORD_TYPE, default="A"): vol.In(DNS_RECORD_TYPES),
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
@@ -770,6 +835,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             config_entry_id=resolved_target.entry.entry_id,
             catalog_type=resolved_target.catalog_type,
             profile_pks=resolved_target.profile_pks,
+            limit=call.data[SERVICE_FIELD_LIMIT],
         )
 
     async def async_handle_get_account_overview(call: ServiceCall) -> ServiceResponse:
@@ -794,6 +860,46 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 _ensure_list(call.data.get(SERVICE_FIELD_ENDPOINT_ID))
             ),
             client_limit=call.data[SERVICE_FIELD_CLIENT_LIMIT],
+        )
+
+    async def async_handle_get_activity_log(call: ServiceCall) -> ServiceResponse:
+        """Return one page of per-record DNS activity for one config entry."""
+        resolved_target = _resolve_entry_service_target(hass, call)
+        integration_manager = resolved_target.entry.runtime_data.managers.integration
+        return await integration_manager.async_build_activity_log_response(
+            config_entry_id=resolved_target.entry.entry_id,
+            window=call.data[SERVICE_FIELD_WINDOW],
+            page=call.data[SERVICE_FIELD_PAGE],
+            page_size=call.data[SERVICE_FIELD_PAGE_SIZE],
+            sort_order=call.data[SERVICE_FIELD_SORT_ORDER],
+            search=call.data.get(SERVICE_FIELD_SEARCH),
+            query_action=call.data.get(SERVICE_FIELD_QUERY_ACTION),
+            trigger=call.data.get(SERVICE_FIELD_TRIGGER),
+            trigger_value=call.data.get(SERVICE_FIELD_TRIGGER_VALUE),
+            profile_id=call.data.get(SERVICE_FIELD_PROFILE_ID),
+            endpoint_ids=tuple(_ensure_list(call.data.get(SERVICE_FIELD_ENDPOINT_ID))),
+            client_id=call.data.get(SERVICE_FIELD_CLIENT_ID),
+            protocols=tuple(_ensure_list(call.data.get(SERVICE_FIELD_PROTOCOL))),
+            source_countries=tuple(
+                _ensure_list(call.data.get(SERVICE_FIELD_SOURCE_COUNTRY))
+            ),
+            destination_country=call.data.get(SERVICE_FIELD_DESTINATION_COUNTRY),
+            source_isp=call.data.get(SERVICE_FIELD_SOURCE_ISP),
+            destination_isp=call.data.get(SERVICE_FIELD_DESTINATION_ISP),
+            source_asn=call.data.get(SERVICE_FIELD_SOURCE_ASN),
+            status_code=call.data.get(SERVICE_FIELD_STATUS_CODE),
+            record_type=call.data.get(SERVICE_FIELD_RECORD_TYPE),
+        )
+
+    async def async_handle_test_domain(call: ServiceCall) -> ServiceResponse:
+        """Return the policy verdict for one domain on one endpoint."""
+        resolved_target = _resolve_entry_service_target(hass, call)
+        integration_manager = resolved_target.entry.runtime_data.managers.integration
+        return await integration_manager.async_build_domain_test_response(
+            config_entry_id=resolved_target.entry.entry_id,
+            endpoint_id=call.data[SERVICE_FIELD_ENDPOINT_ID],
+            domain=call.data[SERVICE_FIELD_DOMAIN],
+            record_type=call.data[SERVICE_FIELD_RECORD_TYPE],
         )
 
     for legacy_service in ("pause_profile", "resume_profile", "set_filter_enabled"):
@@ -913,6 +1019,22 @@ async def async_register_services(hass: HomeAssistant) -> None:
             SERVICE_GET_INVENTORY,
             async_handle_get_inventory,
             schema=GET_INVENTORY_SERVICE_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_GET_ACTIVITY_LOG):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_ACTIVITY_LOG,
+            async_handle_get_activity_log,
+            schema=GET_ACTIVITY_LOG_SERVICE_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_TEST_DOMAIN):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_TEST_DOMAIN,
+            async_handle_test_domain,
+            schema=TEST_DOMAIN_SERVICE_SCHEMA,
             supports_response=SupportsResponse.ONLY,
         )
 

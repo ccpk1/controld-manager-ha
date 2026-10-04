@@ -815,6 +815,10 @@
           "name": "Catalog type",
           "description": "Select which Control D catalog to return."
         },
+        "limit": {
+          "name": "Limit",
+          "description": "Optional. Maximum items to return, 1 to 500. Defaults to 50. The response reports whether the cap was reached."
+        },
         "profile_id": {
           "name": "Select a profile",
           "description": "Optional. Select one or more managed Control D profiles by ID. If Profile IDs and Profile names are both provided, Profile IDs take precedence. Leave both profile selectors empty to return all managed profiles in the selected config entry scope."
@@ -849,8 +853,7 @@
     },
     "get_inventory": {
       "name": "Get inventory",
-      "description": "Return the Control D account topology: profiles, endpoints, and (with full detail) clients.",
-      "fields": {
+      "description": "Return the Control D account topology: profiles, endpoints, and (with full detail) clients.",      "fields": {
         "detail": {
           "name": "Detail",
           "description": "Optional. Defaults to summary. Summary returns profiles and endpoints. Full also returns the client rows under the selected endpoints."
@@ -874,6 +877,110 @@
         "config_entry_name": {
           "name": "Configuration Entry name",
           "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "get_activity_log": {
+      "name": "Get activity log",
+      "description": "Return individual DNS queries for a recent window, including what caused each action.",
+      "fields": {
+        "window": {
+          "name": "Window",
+          "description": "Optional. How far back to look: 15m, 1h, 6h, 24h, 7d, or 30d. Defaults to 1h."
+        },
+        "search": {
+          "name": "Search",
+          "description": "Optional. A substring to match against the queried domain."
+        },
+        "query_action": {
+          "name": "Action",
+          "description": "Optional. Filter by blocked, bypassed, redirected, or failed."
+        },
+        "trigger": {
+          "name": "Trigger",
+          "description": "Optional. Filter by what caused the action: filter, service, custom, default, grule, or rebind."
+        },
+        "trigger_value": {
+          "name": "Trigger value",
+          "description": "Optional. The specific cause, used with Trigger, for example x-hagezi-light or instagram."
+        },
+        "client_id": {
+          "name": "Client ID",
+          "description": "Optional. One client ID to scope to a single client. Requires endpoint_id as well."
+        },
+        "protocol": {
+          "name": "Protocol",
+          "description": "Optional. DNS transport such as doh, dot, doq, doh3, or legacy."
+        },
+        "source_country": {
+          "name": "Source country",
+          "description": "Optional. One or more source country codes."
+        },
+        "destination_country": {
+          "name": "Destination country",
+          "description": "Optional. A destination country code. Only available on the activity log."
+        },
+        "source_isp": {
+          "name": "Source ISP",
+          "description": "Optional. A source ISP name."
+        },
+        "source_asn": {
+          "name": "Source ASN",
+          "description": "Optional. A source ASN."
+        },
+        "status_code": {
+          "name": "DNS status code",
+          "description": "Optional. The DNS response code to filter by."
+        },
+        "record_type": {
+          "name": "Record type",
+          "description": "Optional. The DNS record type to filter by, such as A or AAAA."
+        },
+        "page": {
+          "name": "Page",
+          "description": "Optional. Zero-based page number. Defaults to 0, newest first."
+        },
+        "page_size": {
+          "name": "Page size",
+          "description": "Optional. Records per page, 1 to 500. Defaults to 50."
+        },
+        "sort_order": {
+          "name": "Sort order",
+          "description": "Optional. desc (default) for newest first, asc for oldest first."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded."
+        }
+      }
+    },
+    "test_domain": {
+      "name": "Test domain",
+      "description": "Return the policy verdict for one domain on one endpoint.",
+      "fields": {
+        "endpoint_id": {
+          "name": "Endpoint ID",
+          "description": "Required. The endpoint device ID to test, from get_inventory."
+        },
+        "domain": {
+          "name": "Domain",
+          "description": "Required. The bare domain to test, for example google.com."
+        },
+        "record_type": {
+          "name": "Record type",
+          "description": "Optional. The DNS record type to test. Defaults to A."
+        },
+        "config_entry_id": {
+          "name": "Configuration Entry ID",
+          "description": "Optional. Only needed when more than one Control D integration is loaded."
+        },
+        "config_entry_name": {
+          "name": "Configuration Entry name",
+          "description": "Optional. Only needed when more than one Control D integration is loaded."
         }
       }
     }

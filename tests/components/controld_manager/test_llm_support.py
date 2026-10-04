@@ -202,7 +202,7 @@ async def test_api_instance_is_served_with_the_prompt(hass: HomeAssistant) -> No
 
 
 async def test_read_tier_adds_the_inventory_tool(hass: HomeAssistant) -> None:
-    """Read tiers add inventory; Summary does not."""
+    """Read tiers add the read set; Summary does not."""
     entry = _entry(options={CONF_LLM_TOOL_MODE: LLM_TOOL_MODE_READ_ONLY})
     entry.add_to_hass(hass)
 
@@ -219,6 +219,9 @@ async def test_read_tier_adds_the_inventory_tool(hass: HomeAssistant) -> None:
     assert {tool.name for tool in api_instance.tools} == {
         f"{DOMAIN}__get_account_overview",
         f"{DOMAIN}__get_inventory",
+        f"{DOMAIN}__get_activity_log",
+        f"{DOMAIN}__test_domain",
+        f"{DOMAIN}__get_catalog",
     }
 
 

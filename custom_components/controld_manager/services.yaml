@@ -735,3 +735,150 @@ get_inventory:
       required: false
       selector:
         text:
+
+get_activity_log:
+  name: Get activity log
+  description: "Return individual DNS queries for a recent window, including what caused each action."
+  fields:
+    window:
+      required: false
+      default: 1h
+      selector:
+        select:
+          options:
+            - 15m
+            - 1h
+            - 6h
+            - 24h
+            - 7d
+            - 30d
+    search:
+      required: false
+      selector:
+        text:
+    query_action:
+      required: false
+      selector:
+        select:
+          options:
+            - blocked
+            - bypassed
+            - redirected
+            - failed
+    trigger:
+      required: false
+      selector:
+        select:
+          options:
+            - default
+            - grule
+            - filter
+            - service
+            - custom
+            - rebind
+    trigger_value:
+      required: false
+      selector:
+        text:
+    profile_id:
+      required: false
+      selector:
+        text:
+    endpoint_id:
+      required: false
+      selector:
+        text:
+    client_id:
+      required: false
+      selector:
+        text:
+    protocol:
+      required: false
+      selector:
+        text:
+    source_country:
+      required: false
+      selector:
+        text:
+    destination_country:
+      required: false
+      selector:
+        text:
+    source_isp:
+      required: false
+      selector:
+        text:
+    source_asn:
+      required: false
+      selector:
+        text:
+    status_code:
+      required: false
+      selector:
+        number:
+          mode: box
+    record_type:
+      required: false
+      selector:
+        text:
+    page:
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          mode: box
+    page_size:
+      required: false
+      default: 50
+      selector:
+        number:
+          min: 1
+          max: 500
+          mode: box
+    sort_order:
+      required: false
+      default: desc
+      selector:
+        select:
+          options:
+            - desc
+            - asc
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:
+
+test_domain:
+  name: Test domain
+  description: "Return the policy verdict for one domain on one endpoint."
+  fields:
+    endpoint_id:
+      required: true
+      example: "461wtt4eyr"
+      selector:
+        text:
+    domain:
+      required: true
+      example: "google.com"
+      selector:
+        text:
+    record_type:
+      required: false
+      default: A
+      selector:
+        text:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: controld_manager
+    config_entry_name:
+      required: false
+      selector:
+        text:

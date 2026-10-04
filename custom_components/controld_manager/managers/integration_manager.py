@@ -7,9 +7,14 @@ import logging
 import re
 from typing import Any
 
+from homeassistant.util import dt as dt_util
 from homeassistant.util.json import JsonValueType
 
-from ..const import DETAIL_FULL
+from ..const import (
+    ACTIVITY_ACTION_CODES,
+    DETAIL_FULL,
+    VERDICT_SOURCE_LABELS,
+)
 from ..models import (
     ControlDAccountAnalytics,
     ControlDDefaultRule,
@@ -27,6 +32,8 @@ from ..models import (
     ControlDUser,
     build_rule_identity,
 )
+from ..utils.time_window import window_to_timedelta
+from ..utils.truncation import build_limit_meta, build_page_meta
 from .base_manager import BaseManager
 from .device_manager import DeviceManager
 from .endpoint_manager import EndpointManager
@@ -34,6 +41,10 @@ from .entity_manager import EntityManager
 from .profile_manager import ProfileManager
 
 LOGGER = logging.getLogger(__name__)
+
+
+class ControlDIntegrationError(Exception):
+    """Raised when a required runtime input for a read payload is unavailable."""
 
 
 class IntegrationManager(BaseManager):
@@ -281,6 +292,7 @@ class IntegrationManager(BaseManager):
         config_entry_id: str,
         catalog_type: str,
         profile_pks: frozenset[str],
+        limit: int,
     ) -> dict[str, JsonValueType]:
         """Build one service response payload for a catalog request."""
         profile_rows: list[JsonValueType] = [
@@ -298,6 +310,8 @@ class IntegrationManager(BaseManager):
             items, text = await self._async_build_service_catalog(profile_pks)
         elif catalog_type == "rules":
             items, text = await self._async_build_rule_catalog(profile_pks)
+        elif catalog_type == "default_rule":
+            items, text = self._build_default_rule_catalog(profile_pks)
         else:
             items, text = self._build_profile_option_catalog(profile_pks)
 
@@ -305,7 +319,9 @@ class IntegrationManager(BaseManager):
             "catalog_type": catalog_type,
             "config_entry_id": config_entry_id,
             "profiles": profile_rows,
-            "items": items,
+            "item_count": len(items),
+            **build_limit_meta(limit, len(items)),
+            "items": items[:limit],
             "text": text,
         }
 
@@ -550,6 +566,121 @@ class IntegrationManager(BaseManager):
         """Serialize an optional datetime without leaking a datetime object."""
         return value.isoformat() if hasattr(value, "isoformat") else None
 
+    async def async_build_activity_log_response(
+        self,
+        *,
+        config_entry_id: str,
+        window: str,
+        page: int,
+        page_size: int,
+        sort_order: str,
+        search: str | None = None,
+        query_action: str | None = None,
+        trigger: str | None = None,
+        trigger_value: str | None = None,
+        profile_id: str | None = None,
+        endpoint_ids: tuple[str, ...] = (),
+        client_id: str | None = None,
+        protocols: tuple[str, ...] = (),
+        source_countries: tuple[str, ...] = (),
+        destination_country: str | None = None,
+        source_isp: str | None = None,
+        destination_isp: str | None = None,
+        source_asn: str | None = None,
+        destination_asn: str | None = None,
+        status_code: int | None = None,
+        record_type: str | None = None,
+    ) -> dict[str, JsonValueType]:
+        """Build one page of per-record DNS activity.
+
+        The window is relative and short by default. The activity log is a
+        recent-window surface, so an empty page may mean no matching traffic, an
+        expired window, or logging being off, and the response cannot tell those
+        apart; callers must not present emptiness as certainty.
+        """
+        stats_endpoint = self._require_stats_endpoint()
+        end_time = dt_util.utcnow()
+        start_time = end_time - window_to_timedelta(window)
+
+        result = await self.runtime.client.async_get_activity_log(
+            stats_endpoint,
+            start_time=start_time,
+            end_time=end_time,
+            search_question=search,
+            action=(
+                ACTIVITY_ACTION_CODES[query_action]
+                if query_action is not None
+                else None
+            ),
+            trigger=trigger,
+            trigger_value=trigger_value,
+            endpoint_ids=list(endpoint_ids) or None,
+            profile_id=profile_id,
+            client_id=client_id,
+            protocols=list(protocols) or None,
+            source_countries=list(source_countries) or None,
+            destination_country=destination_country,
+            source_isp=source_isp,
+            destination_isp=destination_isp,
+            source_asn=source_asn,
+            destination_asn=destination_asn,
+            status_code=status_code,
+            rr_type=record_type,
+            page=page,
+            page_size=page_size,
+            sort_order=sort_order,
+        )
+
+        return {
+            "config_entry_id": config_entry_id,
+            "window": window,
+            "window_start": start_time.isoformat(),
+            "window_end": end_time.isoformat(),
+            **build_page_meta(page, page_size, len(result.records)),
+            "records": [dict(record) for record in result.records],
+        }
+
+    async def async_build_domain_test_response(
+        self,
+        *,
+        config_entry_id: str,
+        endpoint_id: str,
+        domain: str,
+        record_type: str,
+    ) -> dict[str, JsonValueType]:
+        """Build the policy verdict for one domain on one endpoint."""
+        verdict = await self.runtime.client.async_get_dns_verdict(
+            endpoint_id, domain, record_type=record_type
+        )
+        return {
+            "config_entry_id": config_entry_id,
+            "endpoint_id": endpoint_id,
+            "domain": verdict.domain,
+            "record_type": verdict.record_type,
+            "rcode": verdict.rcode,
+            "is_blocked": verdict.is_blocked,
+            "profile_id": verdict.profile_pk,
+            "profile_name": self._profile_name(verdict.profile_pk),
+            "source": verdict.source,
+            "source_label": (
+                VERDICT_SOURCE_LABELS.get(verdict.source, verdict.source)
+                if verdict.source is not None
+                else None
+            ),
+            "action": verdict.action,
+            "match": verdict.match,
+            "answers": list(verdict.answers),
+        }
+
+    def _require_stats_endpoint(self) -> str:
+        """Return the analytics region token, raising when it is unavailable."""
+        user = self.runtime.registry.user
+        if user is None or user.stats_endpoint is None:
+            raise ControlDIntegrationError(
+                "The Control D analytics region is not known yet"
+            )
+        return user.stats_endpoint
+
     def build_live_service_rows(
         self,
         services_payload: tuple[dict[str, Any], ...],
@@ -719,6 +850,32 @@ class IntegrationManager(BaseManager):
                     }
                 )
                 text_lines.append(f"{rule_row.identity}, {rule_row.rule_pk}")
+        return items, "\n".join(text_lines)
+
+    def _build_default_rule_catalog(
+        self, profile_pks: frozenset[str]
+    ) -> tuple[list[JsonValueType], str]:
+        """Build the per-profile default-rule catalog and copyable text."""
+        items: list[JsonValueType] = []
+        text_lines: list[str] = []
+        for profile_pk in self._sorted_profile_pks(profile_pks):
+            profile = self.runtime.registry.profiles[profile_pk]
+            default_rule = self.runtime.registry.default_rules_by_profile.get(
+                profile_pk
+            )
+            if default_rule is None:
+                continue
+            items.append(
+                {
+                    "profile_id": profile_pk,
+                    "profile_name": profile.name,
+                    "enabled": default_rule.enabled,
+                    "current_mode": default_rule.current_mode,
+                    "action_do": default_rule.action_do,
+                    "via": default_rule.via,
+                }
+            )
+            text_lines.append(f"{profile.name}: {default_rule.current_mode}")
         return items, "\n".join(text_lines)
 
     def _build_profile_option_catalog(

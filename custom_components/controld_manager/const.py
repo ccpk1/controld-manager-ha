@@ -103,8 +103,10 @@ SERVICE_DELETE_RULE = "delete_rule"
 SERVICE_DISABLE_PROFILE = "disable_profile"
 SERVICE_ENABLE_PROFILE = "enable_profile"
 SERVICE_GET_ACCOUNT_OVERVIEW = "get_account_overview"
+SERVICE_GET_ACTIVITY_LOG = "get_activity_log"
 SERVICE_GET_CATALOG = "get_catalog"
 SERVICE_GET_INVENTORY = "get_inventory"
+SERVICE_TEST_DOMAIN = "test_domain"
 SERVICE_RENAME_ENDPOINT = "rename_endpoint"
 SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING = "set_endpoint_analytics_logging"
 SERVICE_SET_CLIENT_ALIAS = "set_client_alias"
@@ -127,18 +129,39 @@ SERVICE_FIELD_ENDPOINT_IP = "endpoint_ip"
 SERVICE_FIELD_ENDPOINT_MAC = "endpoint_mac"
 SERVICE_FIELD_ENDPOINT_NAME = "endpoint_name"
 SERVICE_FIELD_HOSTNAME = "hostname"
+SERVICE_FIELD_LIMIT = "limit"
+SERVICE_FIELD_CLIENT_ID = "client_id"
 SERVICE_FIELD_CLIENT_LIMIT = "client_limit"
+SERVICE_FIELD_CATALOG_TYPE = "catalog_type"
 SERVICE_FIELD_DETAIL = "detail"
+SERVICE_FIELD_DOMAIN = "domain"
+SERVICE_FIELD_DESTINATION_COUNTRY = "destination_country"
+SERVICE_FIELD_DESTINATION_ISP = "destination_isp"
 SERVICE_FIELD_ENDPOINT_ID = "endpoint_id"
 SERVICE_FIELD_FILTER_ID = "filter_id"
 SERVICE_FIELD_FILTER_NAME = "filter_name"
 SERVICE_FIELD_MODE = "mode"
+SERVICE_FIELD_INCLUDE_PROFILE_DETAILS = "include_profile_details"
+SERVICE_FIELD_LIMIT = "limit"
 SERVICE_FIELD_MINUTES = "minutes"
 SERVICE_FIELD_NEW_NAME = "new_name"
 SERVICE_FIELD_OPTION_ID = "option_id"
 SERVICE_FIELD_OPTION_NAME = "option_name"
+SERVICE_FIELD_PAGE = "page"
+SERVICE_FIELD_PAGE_SIZE = "page_size"
 SERVICE_FIELD_PROFILE_ID = "profile_id"
 SERVICE_FIELD_PROFILE_NAME = "profile_name"
+SERVICE_FIELD_PROTOCOL = "protocol"
+SERVICE_FIELD_QUERY_ACTION = "query_action"
+SERVICE_FIELD_RECORD_TYPE = "record_type"
+SERVICE_FIELD_SEARCH = "search"
+SERVICE_FIELD_SOURCE_ASN = "source_asn"
+SERVICE_FIELD_SOURCE_COUNTRY = "source_country"
+SERVICE_FIELD_SOURCE_ISP = "source_isp"
+SERVICE_FIELD_STATUS_CODE = "status_code"
+SERVICE_FIELD_TRIGGER = "trigger"
+SERVICE_FIELD_TRIGGER_VALUE = "trigger_value"
+SERVICE_FIELD_WINDOW = "window"
 SERVICE_FIELD_PARENT_ENDPOINT_NAME = "parent_endpoint_name"
 SERVICE_FIELD_REDIRECT_TARGET = "redirect_target"
 SERVICE_FIELD_REDIRECT_TARGET_TYPE = "redirect_target_type"
@@ -147,6 +170,7 @@ SERVICE_FIELD_RULE_GROUP_NAME = "rule_group_name"
 SERVICE_FIELD_RULE_IDENTITY = "rule_identity"
 SERVICE_FIELD_SERVICE_ID = "service_id"
 SERVICE_FIELD_SERVICE_NAME = "service_name"
+SERVICE_FIELD_SORT_ORDER = "sort_order"
 SERVICE_FIELD_VALUE = "value"
 DEFAULT_DISABLE_MINUTES = 15
 
@@ -154,6 +178,55 @@ DEFAULT_DISABLE_MINUTES = 15
 DETAIL_SUMMARY = "summary"
 DETAIL_FULL = "full"
 DETAIL_LEVELS: tuple[str, ...] = (DETAIL_SUMMARY, DETAIL_FULL)
+
+# Activity-log action filter. Managed here so the client action enum stays in one place.
+ACTIVITY_ACTIONS: tuple[str, ...] = ("blocked", "bypassed", "redirected", "failed")
+ACTIVITY_ACTION_CODES: dict[str, int] = {
+    "failed": -1,
+    "blocked": 0,
+    "bypassed": 1,
+    "redirected": 3,
+}
+
+# Trigger classes accepted by the per-record activity log. The ranked breakdown
+# endpoint supports only filter and service, but the activity log additionally
+# supports custom rules, the default rule, global rules, and rebind protection.
+ACTIVITY_TRIGGERS: tuple[str, ...] = (
+    "default",
+    "grule",
+    "filter",
+    "service",
+    "custom",
+    "rebind",
+)
+
+DNS_RECORD_TYPES: tuple[str, ...] = (
+    "A",
+    "AAAA",
+    "CNAME",
+    "MX",
+    "TXT",
+    "NS",
+    "PTR",
+    "SRV",
+    "HTTPS",
+)
+
+# Catalog surfaces exposed by the read-only get_catalog service.
+CATALOG_TYPES: tuple[str, ...] = (
+    "filters",
+    "services",
+    "rules",
+    "profile_options",
+    "default_rule",
+)
+
+VERDICT_SOURCE_LABELS: dict[str, str] = {
+    "bl": "filter",
+    "rules": "custom",
+    "svc": "service",
+    "default": "default",
+}
 
 ATTR_PURPOSE = "purpose"
 ATTR_INTEGRATION = "integration"
