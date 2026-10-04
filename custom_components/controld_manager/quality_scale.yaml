@@ -35,7 +35,7 @@ rules:
   log-when-unavailable: done
   parallel-updates: done
   reauthentication-flow: done
-  reconfigure-flow: done
+  reconfiguration-flow: done
 
   # Gold
   devices: done
