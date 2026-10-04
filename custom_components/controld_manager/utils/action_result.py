@@ -25,6 +25,7 @@ def build_action_result(
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
     undo: list[str] | None = None,
+    error: str | None = None,
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build one action-result payload.
@@ -38,6 +39,10 @@ def build_action_result(
     targets. Reversing a change that spans three services with three different
     previous modes takes three calls, and collapsing those into one string would
     misreport what is needed.
+
+    ``error`` carries the reason a write was rejected. Without it a failed action
+    reports only that it failed, which leaves the caller unable to tell a missing
+    target from a rejected value.
     """
     return {
         "status": status,
@@ -46,5 +51,6 @@ def build_action_result(
         "before": before,
         "after": after,
         "undo": undo,
+        "error": error,
         "warnings": warnings or [],
     }

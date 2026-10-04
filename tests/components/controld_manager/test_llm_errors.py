@@ -22,6 +22,7 @@ from custom_components.controld_manager.const import (
     LLM_TOOL_MODE_READ_ONLY,
 )
 from custom_components.controld_manager.llm_tools_common import PROMPT
+from custom_components.controld_manager.llm_tools_control import DisableProfileTool
 
 _FIRST_REFRESH: Final = (
     "custom_components.controld_manager.coordinator."
@@ -190,6 +191,27 @@ async def test_a_service_failure_is_reported_as_failed(
     assert result.data["status"] == "failed"
     assert result.data["changed"] is False
     assert result.data["after"] is None
+    # The reason must survive: without it a caller cannot tell a missing target
+    # from a rejected value.
+    assert result.data["error"] == "rejected"
+
+
+async def test_a_successful_write_reports_no_error() -> None:
+    """Only a failure carries an `error` reason."""
+    service_call = AsyncMock()
+    tool = DisableProfileTool(entry_id="e-1")
+    tool._registry = lambda _hass: None  # type: ignore[method-assign]
+    fake_hass = MagicMock()
+    fake_hass.services.async_call = service_call
+
+    result = await tool.async_call(
+        fake_hass,
+        llm.ToolInput(tool_name=tool.name, tool_args={"profile_id": "p-1"}),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    assert result.data["error"] is None
 
 
 def test_prompt_covers_the_shipped_surface() -> None:

@@ -319,13 +319,16 @@ class _ControlDControlTool(llm.Tool):
                 blocking=True,
                 context=llm_context.context,
             )
-        except HomeAssistantError:
+        except HomeAssistantError as err:
             return llm.ToolResult(
                 data=build_action_result(
                     status=ACTION_STATUS_FAILED,
                     target=target,
                     changed=False,
                     before=before,
+                    # The reason is the only thing that distinguishes a missing
+                    # target from a rejected value, so it must not be dropped.
+                    error=str(err) or type(err).__name__,
                 ),
                 error=True,
             )
@@ -510,8 +513,9 @@ class SetServiceStateTool(_ControlDControlTool):
             vol.Required(
                 SERVICE_FIELD_MODE,
                 description=(
-                    "Required. How to handle the service: 'blocked', 'bypassed', "
-                    "or a redirect mode."
+                    "Required. How to handle the service: 'Off', 'Blocked', "
+                    "'Bypassed', or 'Redirected'. The values are "
+                    "case-sensitive."
                 ),
             ): vol.In(service_mode_labels()),
             vol.Optional(
@@ -789,8 +793,9 @@ class SetRuleStateTool(_ControlDControlTool):
             vol.Optional(
                 SERVICE_FIELD_MODE,
                 description=(
-                    "Optional. Change what the rule does: 'blocked', 'bypassed', "
-                    "or a redirect mode."
+                    "Optional. Change what the rule does: 'block', 'bypass', "
+                    "or 'redirect'. The values are case-sensitive and are not "
+                    "the same words the filter and service tools use."
                 ),
             ): vol.In(rule_action_options()),
             vol.Optional(
@@ -909,8 +914,8 @@ class SetDefaultRuleStateTool(_ControlDControlTool):
             vol.Required(
                 SERVICE_FIELD_MODE,
                 description=(
-                    "Required. The catch-all action: 'blocking', 'bypassing', or "
-                    "'redirecting'."
+                    "Required. The catch-all action: 'Blocking', 'Bypassing', "
+                    "or 'Redirecting'. The values are case-sensitive."
                 ),
             ): vol.In(default_rule_mode_labels()),
             vol.Optional(
@@ -1161,8 +1166,10 @@ class CreateRuleTool(_ControlDControlTool):
             vol.Optional(
                 SERVICE_FIELD_MODE,
                 description=(
-                    "Optional. What the rule does: 'blocked' (the default), "
-                    "'bypassed' to make an exception, or a redirect mode."
+                    "Optional. What the rule does: 'block' (the default), "
+                    "'bypass' to make an exception, or 'redirect'. The values "
+                    "are case-sensitive and are not the same words the filter "
+                    "and service tools use."
                 ),
             ): vol.In(rule_action_options()),
             vol.Optional(

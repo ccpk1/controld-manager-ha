@@ -320,8 +320,10 @@ class GetActivityLogTool(_ControlDReadTool):
                 description=(
                     "Optional. Filter by what caused the action. Use 'filter' "
                     "for a blocklist, 'service' for a service, 'custom' for one "
-                    "of your own rules, 'default' for the default rule. Pair "
-                    "with trigger_value to name the specific cause."
+                    "one of your own rules, 'default' for the default rule, "
+                    "'grule' for a global rule, or 'rebind' for rebind "
+                    "protection. Pair with trigger_value to name the specific "
+                    "cause."
                 ),
             ): vol.In(ACTIVITY_TRIGGERS),
             vol.Optional(
@@ -395,8 +397,9 @@ class GetActivityLogTool(_ControlDReadTool):
             vol.Optional(
                 SERVICE_FIELD_RECORD_TYPE,
                 description=(
-                    "Optional. The DNS record type to filter by, such as 'A', "
-                    "'AAAA', or 'HTTPS'."
+                    "Optional. The DNS record type to filter by. One of "
+                    "'A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'PTR', 'SRV', "
+                    "or 'HTTPS'; defaults to 'A'."
                 ),
             ): vol.In(DNS_RECORD_TYPES),
             vol.Optional(
@@ -475,8 +478,9 @@ class TestDomainTool(_ControlDReadTool):
                 SERVICE_FIELD_RECORD_TYPE,
                 default="A",
                 description=(
-                    "Optional. The DNS record type to test. Defaults to 'A'; use "
-                    "'AAAA' for IPv6 or 'HTTPS' for HTTPS records."
+                    "Optional. The DNS record type to test. One of 'A', "
+                    "'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'PTR', 'SRV', or "
+                    "'HTTPS'; defaults to 'A'."
                 ),
             ): vol.In(DNS_RECORD_TYPES),
         }

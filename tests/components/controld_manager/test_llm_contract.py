@@ -7,6 +7,7 @@ as they are actually registered, so the surface cannot drift from its contract.
 from __future__ import annotations
 
 import json
+import re
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -67,6 +68,74 @@ _CONTROL_TOOLS: Final = frozenset(
 
 # Irreversible and bulk actions, registered only in the Full tier.
 _DESTRUCTIVE_TOOLS: Final = frozenset({"delete_rule"})
+
+
+def _enum_field_descriptions(schema: object) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Return {field: (description, allowed_values)} for each enumerated field.
+
+    Enumerations live in the schema *values*, while the field name and its
+    description live on the *keys*, so both sides are read. `vol.All` wrappers are
+    unwrapped to reach a nested `vol.In`.
+    """
+    found: dict[str, tuple[str, tuple[str, ...]]] = {}
+
+    def collect(validators: object) -> tuple[str, ...]:
+        for validator in validators if isinstance(validators, tuple) else (validators,):
+            container = getattr(validator, "container", None)
+            if isinstance(container, tuple | frozenset) and all(
+                isinstance(value, str) for value in container
+            ):
+                return tuple(container)
+        return ()
+
+    for key, value in getattr(schema, "schema", {}).items():
+        allowed = getattr(value, "container", None)
+        if not (
+            isinstance(allowed, tuple | frozenset)
+            and all(isinstance(item, str) for item in allowed)
+        ):
+            allowed = collect(getattr(value, "validators", ()))
+        if not allowed:
+            continue
+        name = str(getattr(key, "schema", key))
+        found[name] = (getattr(key, "description", "") or "", tuple(allowed))
+    return found
+
+
+async def test_enum_values_are_stated_exactly_in_their_descriptions(
+    hass: HomeAssistant,
+) -> None:
+    """Every allowed value must appear verbatim in that field's description.
+
+    A description that paraphrases its enum sends the model to a value the schema
+    rejects. This bit both the default-rule and service tools live: the
+    descriptions said "blocking"/"blocked" while the schemas required
+    "Blocking"/"Blocked", so the first attempt always failed.
+    """
+    tools = await _tools(hass, LLM_TOOL_MODE_FULL)
+    problems: list[str] = []
+    checked = 0
+
+    for tool in tools:
+        for field, (description, allowed) in _enum_field_descriptions(
+            tool.parameters
+        ).items():
+            checked += 1
+            for value in allowed:
+                # Word-boundary matching, so a value is found whether or not it
+                # is quoted, while "block" is still not satisfied by "blocked"
+                # and a case change is still caught.
+                if not re.search(rf"\b{re.escape(value)}\b", description):
+                    problems.append(
+                        f"{tool.name}.{field}: {value!r} not stated in description"
+                    )
+
+    # Guard against a vacuous pass: if the extraction stops finding enums this
+    # test would silently check nothing.
+    assert checked >= 10, f"only {checked} enumerated fields found"
+    assert problems == [], "enum values missing from descriptions: " + "; ".join(
+        problems
+    )
 
 
 def _llm_context() -> llm.LLMContext:
