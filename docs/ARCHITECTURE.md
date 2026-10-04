@@ -186,8 +186,12 @@ Rules:
   read-only view of data the coordinator already holds, never a second data path
 - tools use the repository lexicon exactly; a Control D endpoint is never called
   a client or a device
-- the tool layer is opt-in per config entry via the LLM tool mode, which is the
-  only write control because Control D writes have no admin gate
+- the tool layer is opt-in per config entry via the LLM tool mode, which decides
+  which tools are registered. Every write service additionally requires an admin
+  user, so the tier is a reachability limit rather than the only authorization
+  boundary
+- `undo` in the action result is a **list** of calls, because the tools accept
+  lists of targets and restoring three previous values takes three calls
 
 ## Polling architecture
 

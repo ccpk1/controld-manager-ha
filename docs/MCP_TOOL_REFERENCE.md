@@ -57,7 +57,10 @@ prefix disambiguates our tools when several LLM APIs are merged.
 ### Availability model
 
 A single option, **AI assistant (MCP) tool access**, controls what is registered.
-There is no admin gate on Control D writes, so this tier is the only limit on what
+Every write service requires an **admin user**, so a non-admin caller is rejected
+by the service layer and the tool reports `status: failed`. This tier is the
+additional limit on what a connected client can reach at all: it decides which
+tools are registered, while the admin check decides who may use them.
 a connected client can reach. Profile names are not treated as private: they are
 user-assigned labels already shown as Home Assistant device names.
 
@@ -95,7 +98,7 @@ no tools and offers no option; every other feature is unaffected.
   "target": { "id": "461wtt4eyr", "name": "Firewalla-VLAN60" },
   "before": { "enabled": true },
   "after": { "enabled": false },
-  "undo": "controld_manager__set_filter_state(...)",
+  "undo": ["controld_manager__set_filter_state(...)"],
   "warnings": []
 }
 ```
@@ -122,9 +125,13 @@ being skipped.
 - `target` — the **resolved** object acted on (id + name).
 - `before` / `after` — `before` is the state observed before the action; `after`
   is the state the action **requested**, not a fresh reading.
-- `undo` — the exact call that reverses the action, or `null`. It may name a tool
+- `undo` — the calls that reverse the action, as a **list**, or `null`. It is a
+  list because the tools accept lists of targets: restoring three services with
+  three different previous modes takes three calls. Each entry may name a tool
   from a higher tier than the caller has enabled; the tool then states that the
-  configured tier does not permit it.
+  configured tier does not permit it. The undo restores the value read **before**
+  the write, so it is `null` for `already_in_state` (nothing changed) and for the
+  tools that cannot read their own previous value.
 - `warnings` — degradations or side effects.
 
 `already_in_state` applies to **idempotent** tools only. `create_rule` is not

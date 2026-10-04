@@ -554,6 +554,11 @@ not change anything and return their data as a service response, which is
 intended for use from automations, scripts, and AI assistant tools rather than
 from the Home Assistant user interface.
 
+Every other service in that list changes Control D policy, so it requires an
+**administrator**. A non-admin user calling one of them is rejected. Automations
+and scripts are unaffected, because the check only applies when a user is
+attached to the call.
+
 ### Client alias services
 
 `controld_manager.set_client_alias` and `controld_manager.clear_client_alias`
@@ -1183,12 +1188,15 @@ Summary only is the narrowest tier. It sends counts and the per-profile row
 described above, and stops there: no endpoint or client detail, and no
 query-level analytics.
 
-**Control D has no separate admin gate.** Changing anything in Home Assistant
-services normally requires an administrator, but a connected assistant is
-authorized by the tier alone. That makes this setting the only limit on what an
-assistant can change in your Control D account. Treat Read and control and Full
-as equivalent to handing over your Control D credentials, and leave the tier at
-Summary only or Off unless you specifically want the assistant to make changes.
+**Changing anything also requires an administrator.** Every write service is
+registered as an admin-only service, so a non-admin user is rejected by the
+service itself, independent of the tier. Automations and scripts are unaffected,
+because the admin check only applies when a user is attached to the call.
+
+Treat Read and control and Full as consequential tiers: the assistant can change
+real policy, and a mistake affects every device on the affected profile. Prefer
+timed changes and leave the tier at Summary only or Off unless you specifically
+want the assistant to make changes.
 
 ### Enabling it
 
@@ -1256,10 +1264,11 @@ follows.
 	state for endpoint analytics logging only, because the runtime inventory
 	does not carry each endpoint's current logging level. Every other control
 	tool checks first and reports already_in_state
-- assistant tools do not offer an undo for endpoint renames or service mode
-	changes, because renaming a set of endpoints or setting a service mode has
-	no single inverse call. The other control tools name the call that reverses
-	them
+- assistant tools offer no undo for endpoint analytics logging changes or for
+	deleting a custom rule. Deleting is permanent, and the endpoint logging level
+	is not readable, so there is no previous value to restore
+- an assistant undo is a list of calls, one per affected target, because a
+	change that spans several targets usually needs several calls to reverse
 
 ## Troubleshooting
 

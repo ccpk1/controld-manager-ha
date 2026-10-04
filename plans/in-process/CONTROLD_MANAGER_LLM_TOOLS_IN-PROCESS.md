@@ -2,7 +2,8 @@
 
 ## 1. Initiative snapshot
 
-- **Status: Phases 0–4 complete (2026-10-04).** Branch `feature/llm-mcp-tools`. The API foundation, the tool spec, the gated tier shell, all five read tools, the full control surface (12 reversible controls plus the destructive `delete_rule`), the prompt fragment, the contract and error-path tests, the user-guide disclosure, and the release-prep docs are implemented and validated. Live-verified on the developer test profile. Next: final review and merge.
+- **Status: Phases 0–5 complete (2026-10-04).** Branch `feature/llm-mcp-tools`. The API foundation, the tool spec, the gated tier shell, all five read tools, the full control surface (12 reversible controls plus the destructive `delete_rule`), the prompt fragment, the contract and error-path tests, the user-guide disclosure, the release-prep docs, and the post-review authorization and undo corrections are implemented and validated. Live-verified on the developer test profile. Next: final review and merge.
+- **Phase 5 (post-review corrections):** two defects found in owner review, both of which the plan had previously rationalized as facts rather than decisions. See §5 Phase 5.
 - **Phase 4 findings (fixed in-phase):**
   - `quality_scale.yaml` declared `reconfigure-flow`, which is **not a valid Core rule id** (Core defines `reconfiguration-flow`). This was pre-existing, not introduced by this initiative. Corrected to `reconfiguration-flow: done`, which is accurate: the reconfigure flow exists and is tested.
   - The five new read response services were declared in `services.yaml` but **absent from the user guide**, which would have regressed the Bronze `docs-actions` rule. All five are now documented.
@@ -13,7 +14,7 @@
 - **Decisive platform facts (verified):**
   - The dev/test environment runs Home Assistant **2026.11.0.dev0**; `llm.ToolResult`, `llm.ToolAnnotations`, `llm.APIInstance`, and `Tool.integration` are all present.
   - The LLM tool contract requires **Core 2026.10+**; older Core must still load the integration. Registration therefore must be **version-gated and lazily imported**.
-  - **There is no admin gate on Control D writes.** Every service registers with plain `hass.services.async_register`. The **tier option is the entire write-control surface**, so tier labels and user-facing disclosure are load-bearing, not cosmetic.
+  - **Every write service requires an admin user.** The services register with `async_register_admin_service`, so a non-admin caller is rejected by the service layer. The **tier option decides which tools are registered**; the admin check decides who may call the resulting write. Tier labels and user-facing disclosure remain load-bearing for the read surface and for reachability, but they are no longer the only authorization boundary.
   - **Every API call returns a response body.** The client currently discards it on writes (those methods are typed `-> None`), so this is a return-contract gap to close, not a missing capability. To callers, only `get_catalog` returns data today; the rest are `SupportsResponse.NONE` even though the upstream body exists.
   - **The integration's declared minimum is `hacs.json` (`2026.3`).** Do not add a version field to `manifest.json`; the LLM feature gate is internal to this plan only.
 - **Prerequisite work is real:** the read tools need response-returning services and analytics methods that do not exist yet. Phase 0 delivers those before any tool is written.
@@ -52,7 +53,7 @@
 
 ### Safety model
 
-- **The tier option is the only write control.** There is no admin gate on Control D. Tiers: Off / Summary only / Read only / Read and control / Full.
+- **Every write service requires an admin user.** `_async_admin_handler` only enforces this when `call.context.user_id` is set, so non-admin users (including a non-admin Assist request) are rejected while automations and scripts keep working. Tiers: Off / Summary only / Read only / Read and control / Full.
 - **Writes are reversible except rule deletion.** `create_rule` is additive; its only undo is `delete_rule`. When the configured tier does not include the destructive set, the tool still reports `undo: delete_rule(...)` and states that the configured tier does not permit it, so the user knows to raise the tier. `delete_rule` is the destructive operation because a re-created rule gets a new identity.
 - **`create_rule` is not idempotent.** Creating the same rule twice creates two rules; it must never report `already_in_state`.
 - **No confirmation channel exists in `llm.Tool`.** `confirm: true` is a guard against an accidental call, not user consent. Confirmation is the client's and the model's responsibility.
@@ -220,6 +221,13 @@ Ordering is deliberate: **retention, catalog currency, and the response/error co
 - [x] **4.5 Quality-scale check.** Confirm no rule regresses; document any new comment needed. Found and fixed the invalid `reconfigure-flow` key and the four undocumented read services; confirmed Core has no LLM rule.
 - [x] **4.6 Release checklist** and docs-link updates. `ENGINEERING_FINDINGS.md` and `MCP_TOOL_REFERENCE.md` are now linked from the README docs index and repository layout.
 
+### Phase 5 — Post-review authorization and undo corrections
+
+Both items were raised in owner review and both had been rationalized in this plan as platform facts rather than treated as decisions. The facts were accurate; the conclusions drawn from them were not.
+
+- [x] **5.1 Require an admin user for every write.** The plan recorded "there is no admin gate on Control D writes" as a constraint and then made the tier the entire write-control surface. That is backwards: the absence of a gate was a gap, not a design. All **13 write services** now register with `async_register_admin_service`; the **5 read services** stay ungated. `_async_admin_handler` only enforces the check when `call.context.user_id` is set, so a non-admin user (including a non-admin Assist request) is rejected while **automations and scripts keep working**. A rejected assistant write returns `status: failed` because the tool layer catches `HomeAssistantError`, and `Unauthorized` subclasses it. `get_activity_log` remains ungated by decision, though it does return DNS destinations — see the open risk below.
+- [x] **5.2 Fix `undo` coverage.** The root cause was the interface, not the data: `_undo(args)` never saw the pre-write state that `_before()` had already read, so only request-invertible tools could claim an undo. `_undo(hass, args)` now reads the registry itself, and `undo` became a **list** because a change spanning N targets needs N calls. Fixed: `set_service_state` and `set_option_state` (previous mode/value was already captured), `rename_endpoint` (the flat name list was unpaired, so each endpoint's own name is now resolved), `clear_client_alias` (the removed alias is now restored). Still `null` by fact, not by convenience: `delete_rule` (irreversible) and `set_endpoint_analytics_logging` (the endpoint summary carries no current logging level). `already_in_state` now reports `undo: null`, since nothing changed and the pre-write read would otherwise name the requested state as the undo.
+
 ## 6. Validation strategy
 
 - **Static:** `ruff check`, `ruff format`, `mypy custom_components/controld_manager`.
@@ -237,12 +245,15 @@ Ordering is deliberate: **retention, catalog currency, and the response/error co
 | D2 | 0 | Write-response propagation depth | **Resolved:** envelope synthesized from real per-family responses; the response is success confirmation only | Done |
 | D3 | 0 | Failure taxonomy surface | One envelope + `error.kind`; empty and `RCODE 5` are not errors | No |
 | D4 | 0 | Retention readability | **Resolved:** not readable; warn and document only | Done |
-| D5 | 1 | Tier set and default | Five tiers; default Summary only; **implemented, content pending sign-off** | Yes |
+| D5 | 1 | Tier set and default | Five tiers; default Summary only; **implemented** | Done |
 | D6 | 1 | API identity / multi-entry naming | Stable id; disambiguated display name | No |
 | D7 | 1 | Mounting mechanism | Owned API, not `llm.py` and not a `llm/` package | No |
 | D8 | 2 | Tool naming | Source-agnostic, lexicon-correct (`get_inventory`) | Yes |
 | D9 | 2 | Cause attribution pattern | **Resolved:** activity log for detail, overview for counts; ranked tools dropped | Done |
 | D10 | 2 | Client terms in the inventory | Endpoint profile; assigned client **is** its own endpoint; expose `is_endpoint` | Yes |
+| D20 | 5 | Authorization model for writes | **Resolved:** `async_register_admin_service` on all 13 writes; reads stay ungated; the tier becomes a reachability limit rather than the only boundary | Done |
+| D21 | 5 | `undo` shape and coverage | **Resolved:** `undo` is a list of calls; `_undo` reads the pre-write state; `already_in_state` reports `null` | Done |
+| D22 | 5 | Should `get_activity_log` require admin? | **Open:** it returns DNS destinations but changes nothing, so it is ungated for now and called out as a residual risk | Pending |
 | D11 | 3 | Destructive scope, first release | Tier yes; tools = `delete_rule` only | Yes |
 | D12 | 3 | Endpoint-to-profile assignment | **Deferred:** still out of scope; widest blast radius | No |
 | D13 | 3 | Bulk actions | Exclude from first release | No |

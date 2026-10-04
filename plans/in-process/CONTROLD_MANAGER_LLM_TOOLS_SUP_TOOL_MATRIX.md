@@ -34,13 +34,13 @@ prompts, or code. Source: `docs/ARCHITECTURE.md` (Official lexicon) and
 
 ## 2. Tier contents
 
-Five tiers, matching the Firewalla precedent. The tier is the only write control (there
-is no admin gate on Control D).
+Five tiers, matching the Firewalla precedent. The tier decides which tools are
+registered; every write service additionally requires an admin user.
 
 | Tier | Registers | Identifier sensitivity |
 | --- | --- | --- |
 | **Off** | nothing | — |
-| **Summary only** *(recommended default)* | `get_account_overview` only | **No** identifiers; sends region plus profile/endpoint/client **counts** and overall blocked / bypassed / redirected counts |
+| **Summary only** *(recommended default)* | `get_account_overview` only | Sends region, profile/endpoint/client **counts**, overall blocked / bypassed / redirected counts, and **each profile's name** with its counts and paused state |
 | **Read only** | all read tools | Full read detail |
 | **Read and control** | read + reversible controls | Full |
 | **Full** | read + control + destructive (`delete_rule`) | Full, irreversible write |
