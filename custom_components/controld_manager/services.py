@@ -142,6 +142,8 @@ from .const import (
     TRANS_KEY_RULE_HOSTNAME_DUPLICATE,
     TRANS_KEY_RULE_HOSTNAME_REQUIRED,
     TRANS_KEY_RULE_MUTATION_REQUIRED,
+    TRANS_KEY_RULE_NAME_AMBIGUOUS,
+    TRANS_KEY_RULE_NAME_NOT_FOUND,
     TRANS_KEY_RULE_REDIRECT_TARGET_INVALID,
     TRANS_KEY_RULE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE,
     TRANS_KEY_SERVICE_MODE_REJECTED,
@@ -160,6 +162,7 @@ from .models import (
     ControlDClientAliasTarget,
     ControlDEndpointSummary,
     ControlDManagerRuntime,
+    ControlDRule,
     ControlDService,
     default_rule_mode_labels,
     endpoint_analytics_logging_mode_labels,
@@ -688,7 +691,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
         """Enable or disable one or more targeted Control D rules."""
         mutation = _parse_rule_mutation(call)
         _require_rule_mutation(mutation)
-        resolved_target = _resolve_rule_service_target(hass, call)
+        resolved_target = await _resolve_rule_service_target(hass, call)
         try:
             profile_manager = resolved_target.entry.runtime_data.managers.profile
             await profile_manager.async_set_rules_state(
@@ -739,7 +742,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def async_handle_delete_rule(call: ServiceCall) -> None:
         """Delete one or more targeted Control D rules."""
-        resolved_target = _resolve_rule_service_target(hass, call)
+        resolved_target = await _resolve_rule_service_target(hass, call)
         try:
             profile_manager = resolved_target.entry.runtime_data.managers.profile
             await profile_manager.async_delete_rules(resolved_target.profile_rules)
@@ -1762,7 +1765,7 @@ def _normalize_field_option_value(value: str | int) -> str:
     return str(numeric_value)
 
 
-def _resolve_rule_service_target(
+async def _resolve_rule_service_target(
     hass: HomeAssistant, call: ServiceCall
 ) -> ResolvedRuleServiceTarget:
     """Resolve a rule mutation target across one or more profiles."""
@@ -1777,15 +1780,97 @@ def _resolve_rule_service_target(
     requested_rule_identities = _ensure_name_list(
         call.data.get(SERVICE_FIELD_RULE_IDENTITY)
     )
-    profile_rules = _resolve_selected_rule_identities(
-        resolved_profiles.entry,
-        resolved_profiles.profile_pks,
-        requested_rule_identities=requested_rule_identities,
-    )
+    try:
+        profile_rules = _resolve_selected_rule_identities(
+            resolved_profiles.entry,
+            resolved_profiles.profile_pks,
+            requested_rule_identities=requested_rule_identities,
+        )
+    except ServiceValidationError as err:
+        # A missing selector is a validation failure, not a resolution one, so it
+        # must not trigger a network fetch.
+        if not requested_rule_identities:
+            raise
+        # The registry only holds rules the profile exposes, while `get_catalog`
+        # reports every rule upstream. Resolving from a live fetch makes the two
+        # agree, so a rule the catalog reports is always actionable.
+        live_rules_by_profile = await _async_load_rules_for_resolution(
+            resolved_profiles.entry,
+            resolved_profiles.profile_pks,
+        )
+        try:
+            profile_rules = _resolve_selected_rule_identities_from_rows(
+                {
+                    profile_pk: rows[1]
+                    for profile_pk, rows in live_rules_by_profile.items()
+                },
+                resolved_profiles.profile_pks,
+                requested_rule_identities=requested_rule_identities,
+            )
+        except ServiceValidationError as live_err:
+            raise err from live_err
     return ResolvedRuleServiceTarget(
         entry=resolved_profiles.entry,
         profile_rules=profile_rules,
     )
+
+
+def _resolve_selected_rule_identities_from_rows(
+    rules_by_profile: dict[str, dict[str, ControlDRule]],
+    profile_pks: frozenset[str],
+    *,
+    requested_rule_identities: list[str],
+) -> dict[str, frozenset[str]]:
+    """Resolve rule selectors from explicitly supplied normalized rows.
+
+    Mirrors `_resolve_selected_rule_identities`, but reads the given rows instead
+    of the registry. A rule is matched by full identity first and by bare
+    hostname second, so either form is accepted when unambiguous.
+    """
+    profile_rules: dict[str, frozenset[str]] = {}
+    for profile_pk in profile_pks:
+        rows = tuple(rules_by_profile.get(profile_pk, {}).values())
+        resolved: set[str] = set()
+        for requested in requested_rule_identities:
+            wanted = _normalize_name(requested)
+            identity_matches = [
+                rule_row.identity
+                for rule_row in rows
+                if _normalize_name(rule_row.identity) == wanted
+            ]
+            if len(identity_matches) == 1:
+                resolved.add(identity_matches[0])
+                continue
+            if len(identity_matches) > 1:
+                raise ServiceValidationError(
+                    "The selected Control D rule target is ambiguous",
+                    translation_domain=DOMAIN,
+                    translation_key=TRANS_KEY_RULE_NAME_AMBIGUOUS,
+                )
+            hostname_matches = [
+                rule_row.identity
+                for rule_row in rows
+                if _normalize_name(rule_row.rule_pk) == wanted
+            ]
+            if len(hostname_matches) == 1:
+                resolved.add(hostname_matches[0])
+                continue
+            if len(hostname_matches) > 1:
+                raise ServiceValidationError(
+                    "The selected Control D rule target is ambiguous",
+                    translation_domain=DOMAIN,
+                    translation_key=TRANS_KEY_RULE_NAME_AMBIGUOUS,
+                )
+            raise ServiceValidationError(
+                (
+                    "The selected Control D rule target could not be resolved for "
+                    "one or more targeted profiles"
+                ),
+                translation_domain=DOMAIN,
+                translation_key=TRANS_KEY_RULE_NAME_NOT_FOUND,
+            )
+        profile_rules[profile_pk] = frozenset(resolved)
+    return profile_rules
 
 
 async def _resolve_service_service_target(
@@ -1839,12 +1924,60 @@ async def _resolve_service_service_target(
                 requested_service_names=requested_service_names,
             )
         except ServiceValidationError as live_err:
-            raise err from live_err
+            # Control D returns only enabled services for a profile, so a profile
+            # with none yields no rows and the first service could never be
+            # enabled. Fall back to the global catalog, which is what the tool
+            # description already promises ("a service not currently listed on
+            # the profile can still be set, which adds it").
+            catalog_rows_by_profile = (
+                await _async_load_service_catalog_rows_for_resolution(
+                    resolved_profiles.entry,
+                    resolved_profiles.profile_pks,
+                )
+            )
+            try:
+                profile_services = _resolve_selected_service_pks_from_rows(
+                    catalog_rows_by_profile,
+                    resolved_profiles.profile_pks,
+                    requested_service_ids=requested_service_ids,
+                    requested_service_names=requested_service_names,
+                )
+            except ServiceValidationError:
+                raise err from live_err
+            return ResolvedServiceServiceTarget(
+                entry=resolved_profiles.entry,
+                profile_services=profile_services,
+                service_rows_by_profile=catalog_rows_by_profile,
+            )
         return ResolvedServiceServiceTarget(
             entry=resolved_profiles.entry,
             profile_services=profile_services,
             service_rows_by_profile=live_services_by_profile,
         )
+
+
+async def _async_load_service_catalog_rows_for_resolution(
+    entry: ControlDManagerConfigEntry,
+    profile_pks: frozenset[str],
+) -> dict[str, dict[str, ControlDService]]:
+    """Build service rows from the global catalog for targeted profiles.
+
+    Every catalog row is treated as available on each profile, so a service that
+    is not yet enabled can still be addressed by id or name.
+    """
+    integration_manager = entry.runtime_data.managers.integration
+    service_categories_payload = tuple(
+        await entry.runtime_data.client.async_get_service_categories()
+    )
+    service_catalog_payload = tuple(
+        await entry.runtime_data.client.async_get_service_catalog()
+    )
+    rows = integration_manager.build_live_service_rows(
+        service_catalog_payload,
+        service_categories_payload,
+        service_catalog_payload,
+    )
+    return dict.fromkeys(profile_pks, rows)
 
 
 async def _async_load_services_for_resolution(
