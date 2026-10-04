@@ -680,15 +680,30 @@ class SetOptionStateTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the current option values."""
+        """Return the current option states, shaped by option kind.
+
+        Reported per kind rather than as a single select-style label:
+        ``current_select_option`` returns "Off" for any option whose value has no
+        matching choice, which is every enabled toggle, so an enabled toggle
+        would otherwise be reported as off.
+        """
         registry = self._registry(hass)
-        if registry is None:
+        pairs = self._pairs(hass, args)
+        if registry is None or not pairs:
             return None
-        states = [
-            registry.options_by_profile[profile_pk][option_pk].current_select_option
-            for profile_pk, option_pk in self._pairs(hass, args)
-        ]
-        return {"current_value": states} if states else None
+        enabled: list[bool] = []
+        values: list[str] = []
+        for profile_pk, option_pk in pairs:
+            option = registry.options_by_profile[profile_pk][option_pk]
+            if option.entity_kind == "toggle":
+                enabled.append(option.is_enabled)
+            elif option.entity_kind == "select":
+                values.append(option.current_select_option)
+        if enabled and values:
+            return {"enabled": enabled, "value": values}
+        if enabled:
+            return {"enabled": enabled}
+        return {"value": values} if values else None
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Return whether every addressed option is already as requested."""

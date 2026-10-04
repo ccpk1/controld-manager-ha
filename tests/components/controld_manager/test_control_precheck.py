@@ -28,6 +28,7 @@ from custom_components.controld_manager.models import (
     ControlDDefaultRule,
     ControlDFilter,
     ControlDProfileOption,
+    ControlDProfileOptionChoice,
     ControlDProfileSummary,
     ControlDService,
 )
@@ -69,16 +70,18 @@ def _filter(pk: str, name: str, *, enabled: bool) -> ControlDFilter:
     )
 
 
-def _option(pk: str, title: str, *, value: str | None) -> ControlDProfileOption:
+def _option(
+    pk: str, title: str, *, value: str | None, kind: str = "toggle"
+) -> ControlDProfileOption:
     """Return one normalized profile option row."""
     return ControlDProfileOption(
         option_pk=pk,
         title=title,
         description=None,
-        option_type="toggle",
+        option_type="toggle" if kind == "toggle" else "dropdown",
         info_url=None,
         current_value_key=value,
-        entity_kind="toggle",
+        entity_kind=kind,
     )
 
 
@@ -234,7 +237,67 @@ async def test_setting_an_option_to_its_current_state_is_a_no_op() -> None:
     )
 
     assert result.data["status"] == "already_in_state"
+    assert result.data["before"] == {"enabled": [True]}
     service_call.assert_not_called()
+
+
+async def test_an_enabled_toggle_reports_enabled_not_the_select_fallback() -> None:
+    """An enabled toggle's before-state must not read as "Off".
+
+    ``current_select_option`` returns "Off" for any value with no matching
+    choice, which is every enabled toggle, so reporting it made an enabled option
+    look disabled.
+    """
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetOptionStateTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={
+                "option_id": "safesearch",
+                "profile_id": "p-1",
+                "enabled": False,
+            },
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    assert result.data["before"] == {"enabled": [True]}
+
+
+async def test_a_select_option_reports_its_value_label() -> None:
+    """A dropdown option reports the selected label, not a boolean."""
+    service_call = AsyncMock()
+    registry = _registry()
+    registry.options_by_profile["p-1"]["ai_malware"] = ControlDProfileOption(
+        option_pk="ai_malware",
+        title="AI Malware Filter",
+        description=None,
+        option_type="dropdown",
+        info_url=None,
+        current_value_key="0.9",
+        choices=(ControlDProfileOptionChoice(value="0.9", label="Minimal"),),
+        entity_kind="select",
+    )
+    tool = _tool_with_registry(SetOptionStateTool(entry_id="e-1"), registry)
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={
+                "option_id": "ai_malware",
+                "profile_id": "p-1",
+                "value": "Aggressive",
+            },
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["before"] == {"value": ["Minimal"]}
 
 
 async def test_setting_the_default_rule_to_its_current_mode_is_a_no_op() -> None:

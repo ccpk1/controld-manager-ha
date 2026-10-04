@@ -94,13 +94,17 @@ async def test_catalog_skips_profiles_without_a_default_rule() -> None:
 
 @pytest.mark.parametrize(
     ("limit", "expected_truncated"),
-    [(1, True), (50, False)],
-    ids=["capped", "complete"],
+    [(1, True), (2, False), (50, False)],
+    ids=["capped", "exactly-the-item-count", "complete"],
 )
 async def test_catalog_reports_truncation_honestly(
     limit: int, expected_truncated: bool
 ) -> None:
-    """A capped catalog is reported, so it is never mistaken for complete."""
+    """A capped catalog is reported, so it is never mistaken for complete.
+
+    The catalog has two items, so a limit of two returns everything and must not
+    be flagged. Only a limit below the item count drops anything.
+    """
     response = await _manager(_registry()).async_build_catalog_response(
         config_entry_id=_CONFIG_ENTRY_ID,
         catalog_type="default_rule",

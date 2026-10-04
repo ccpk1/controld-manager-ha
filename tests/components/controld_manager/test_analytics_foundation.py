@@ -219,13 +219,17 @@ def test_retryable_signal(error: Exception, retryable: bool) -> None:
 
 
 @pytest.mark.parametrize(
-    ("returned", "truncated"),
-    [(24, False), (25, True)],
-    ids=["below-limit", "at-limit"],
+    ("total", "truncated"),
+    [(24, False), (25, False), (26, True)],
+    ids=["below-limit", "exactly-the-limit", "above-limit"],
 )
-def test_limit_meta_flags_truncation(returned: int, truncated: bool) -> None:
-    """A result that fills the limit is reported as truncated."""
-    assert build_limit_meta(25, returned) == {
+def test_limit_meta_flags_truncation(total: int, truncated: bool) -> None:
+    """Only a result that dropped items is reported as truncated.
+
+    A total exactly equal to the limit means every item was returned, so it must
+    not be flagged; flagging it would tell a model it is missing data it has.
+    """
+    assert build_limit_meta(25, total) == {
         "applied_limit": 25,
         "truncated": truncated,
     }

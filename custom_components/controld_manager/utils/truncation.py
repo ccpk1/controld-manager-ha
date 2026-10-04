@@ -10,15 +10,18 @@ from __future__ import annotations
 from typing import Any
 
 
-def build_limit_meta(applied_limit: int, returned_count: int) -> dict[str, Any]:
-    """Return truncation metadata for a capped ranked read.
+def build_limit_meta(applied_limit: int, total_count: int) -> dict[str, Any]:
+    """Return truncation metadata for a capped read that knows its total.
 
-    A ranked response that returns at least the requested limit is treated as
-    truncated, because the endpoint exposes no total to compare against.
+    Truncation is exact here because the caller counts the items before applying
+    the limit: a full result is only truncated when something was actually
+    dropped. This is deliberately not the "a full page may mean more" rule, which
+    applies to a surface that exposes no total to compare against. Reporting a
+    complete result as truncated would tell a model it is missing data it has.
     """
     return {
         "applied_limit": applied_limit,
-        "truncated": returned_count >= applied_limit,
+        "truncated": total_count > applied_limit,
     }
 
 
