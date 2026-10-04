@@ -4,6 +4,7 @@
 
 - **Status: Phases 0–5 complete (2026-10-04).** Branch `feature/llm-mcp-tools`. The API foundation, the tool spec, the gated tier shell, all five read tools, the full control surface (12 reversible controls plus the destructive `delete_rule`), the prompt fragment, the contract and error-path tests, the user-guide disclosure, the release-prep docs, and the post-review authorization and undo corrections are implemented and validated. Live-verified on the developer test profile. Next: final review and merge.
 - **Phase 5 (post-review corrections):** two defects found in owner review, both of which the plan had previously rationalized as facts rather than decisions. See §5 Phase 5.
+- **Accepted risks:** the ungated `get_activity_log`, the admin requirement as a behavior change for existing installs, and four smaller residuals are recorded with their revisit conditions in §10.
 - **Phase 4 findings (fixed in-phase):**
   - `quality_scale.yaml` declared `reconfigure-flow`, which is **not a valid Core rule id** (Core defines `reconfiguration-flow`). This was pre-existing, not introduced by this initiative. Corrected to `reconfiguration-flow: done`, which is accurate: the reconfigure flow exists and is tested.
   - The five new read response services were declared in `services.yaml` but **absent from the user guide**, which would have regressed the Bronze `docs-actions` rule. All five are now documented.
@@ -225,7 +226,7 @@ Ordering is deliberate: **retention, catalog currency, and the response/error co
 
 Both items were raised in owner review and both had been rationalized in this plan as platform facts rather than treated as decisions. The facts were accurate; the conclusions drawn from them were not.
 
-- [x] **5.1 Require an admin user for every write.** The plan recorded "there is no admin gate on Control D writes" as a constraint and then made the tier the entire write-control surface. That is backwards: the absence of a gate was a gap, not a design. All **13 write services** now register with `async_register_admin_service`; the **5 read services** stay ungated. `_async_admin_handler` only enforces the check when `call.context.user_id` is set, so a non-admin user (including a non-admin Assist request) is rejected while **automations and scripts keep working**. A rejected assistant write returns `status: failed` because the tool layer catches `HomeAssistantError`, and `Unauthorized` subclasses it. `get_activity_log` remains ungated by decision, though it does return DNS destinations — see the open risk below.
+- [x] **5.1 Require an admin user for every write.** The plan recorded "there is no admin gate on Control D writes" as a constraint and then made the tier the entire write-control surface. That is backwards: the absence of a gate was a gap, not a design. All **13 write services** now register with `async_register_admin_service`; the **5 read services** stay ungated. `_async_admin_handler` only enforces the check when `call.context.user_id` is set, so a non-admin user (including a non-admin Assist request) is rejected while **automations and scripts keep working**. A rejected assistant write returns `status: failed` because the tool layer catches `HomeAssistantError`, and `Unauthorized` subclasses it. `get_activity_log` remains ungated, and the admin requirement on writes is a user-visible behavior change; both are accepted risks (§10).
 - [x] **5.2 Fix `undo` coverage.** The root cause was the interface, not the data: `_undo(args)` never saw the pre-write state that `_before()` had already read, so only request-invertible tools could claim an undo. `_undo(hass, args)` now reads the registry itself, and `undo` became a **list** because a change spanning N targets needs N calls. Fixed: `set_service_state` and `set_option_state` (previous mode/value was already captured), `rename_endpoint` (the flat name list was unpaired, so each endpoint's own name is now resolved), `clear_client_alias` (the removed alias is now restored). Still `null` by fact, not by convenience: `delete_rule` (irreversible) and `set_endpoint_analytics_logging` (the endpoint summary carries no current logging level). `already_in_state` now reports `undo: null`, since nothing changed and the pre-write read would otherwise name the requested state as the undo.
 
 ## 6. Validation strategy
@@ -253,7 +254,8 @@ Both items were raised in owner review and both had been rationalized in this pl
 | D10 | 2 | Client terms in the inventory | Endpoint profile; assigned client **is** its own endpoint; expose `is_endpoint` | Yes |
 | D20 | 5 | Authorization model for writes | **Resolved:** `async_register_admin_service` on all 13 writes; reads stay ungated; the tier becomes a reachability limit rather than the only boundary | Done |
 | D21 | 5 | `undo` shape and coverage | **Resolved:** `undo` is a list of calls; `_undo` reads the pre-write state; `already_in_state` reports `null` | Done |
-| D22 | 5 | Should `get_activity_log` require admin? | **Open:** it returns DNS destinations but changes nothing, so it is ungated for now and called out as a residual risk | Pending |
+| D22 | 5 | Should `get_activity_log` require admin? | **Accepted risk:** left ungated. It changes nothing, so it is not a write; the tier still governs reachability and it is disclosed in the user guide | Accepted |
+| D23 | 5 | Admin requirement is a behavior change for existing users | **Accepted:** a non-admin user calling a write service now fails. Automations and scripts are unaffected because the admin check only applies to calls carrying a user. Disclosed in the user guide; the release summary is still a pending release-checklist item | Accepted |
 | D11 | 3 | Destructive scope, first release | Tier yes; tools = `delete_rule` only | Yes |
 | D12 | 3 | Endpoint-to-profile assignment | **Deferred:** still out of scope; widest blast radius | No |
 | D13 | 3 | Bulk actions | Exclude from first release | No |
@@ -322,7 +324,22 @@ follow-up pass should reconcile each against the client before any new tool is
 built on it.
 
 
-## 9. Builder handoff
+## 10. Accepted risks
+
+Risks the owner has reviewed and accepted rather than fixed. Each names the
+reason it is accepted and what would change the decision, so a later reader can
+tell an accepted risk from an oversight.
+
+| ID | Risk | Why accepted | Revisit if |
+| --- | --- | --- | --- |
+| D22 | `get_activity_log` does not require an admin, and it returns DNS destinations | It reads and changes nothing, so the admin gate for writes does not apply. Reachability is still governed by the tier, and the user guide states that the read tiers send domains and destinations | A non-admin role should not see browsing destinations, or Control D starts exposing client-identifying data on that surface |
+| D23 | Existing installs get a behavior change: a non-admin user calling a write service now fails | The change closes a real authorization gap, and the failure is loud and correct rather than silent. Automations and scripts are unaffected, since the admin check only applies to calls that carry a user | A non-admin UI path is expected to perform writes, which would need a deliberate per-service exemption rather than a blanket removal |
+| — | `set_endpoint_analytics_logging` cannot report `already_in_state` and offers no `undo` | The endpoint summary in the runtime registry carries no current logging level, so there is no previous value to compare or restore. Adding a mutable per-endpoint field to the registry to support this one tool is not worth the added state | The registry gains an endpoint logging level for another reason |
+| — | `delete_rule` has no `undo` | Deletion destroys the rule identity; re-creating a rule does not restore the original. The tool says so and steers to `set_rule_state` with `enabled: false` instead | Control D exposes a restore or recycle surface |
+| — | No live end-to-end MCP run of the full tool to service to MCP path | Every layer is unit-tested against the real schemas, and the API layer was live-verified, but the composed path has not been exercised against a real assistant client | Before publishing a release, or when an MCP client is available in the test environment |
+| — | Tools may read the runtime registry directly for the idempotency pre-check | Documented boundary relaxation in `docs/ARCHITECTURE.md`: it is a read-only view of data the coordinator already holds, and all writes still go through services | A tool starts reading the registry for anything other than a pre-check |
+
+## 11. Builder handoff
 
 Build in phase order; do not start Phase 1 before Phase 0's capture contract is settled, and do not start tool code before the Phase 1 spec exists.
 
