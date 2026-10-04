@@ -154,6 +154,8 @@ If Control D Manager is making your smart home or homelab better, I would genuin
 
 Why a write-capable token? Because this integration supports real mutation paths, not just read-only reporting. Profile pause, filter changes, service changes, option changes, and rule management all depend on that permission level.
 
+The optional AI assistant (MCP) tool surface requires Home Assistant `2026.10` or newer. On older versions every other feature works normally and the setting is simply not offered.
+
 ## ⚡ Quick installation
 
 ### One-click HACS install
@@ -194,6 +196,7 @@ It covers:
 - analytics sensors and Pi-hole-card compatibility
 - service examples and catalog discovery
 - diagnostics and availability behavior
+- AI assistant (MCP) tool access and its tiers
 
 ## 🧭 Design philosophy and scope
 
@@ -212,6 +215,8 @@ The durable project rules live in:
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [docs/DEVELOPMENT_STANDARDS.md](docs/DEVELOPMENT_STANDARDS.md)
+- [docs/ENGINEERING_FINDINGS.md](docs/ENGINEERING_FINDINGS.md)
+- [docs/MCP_TOOL_REFERENCE.md](docs/MCP_TOOL_REFERENCE.md)
 - [docs/QUALITY_REFERENCE.md](docs/QUALITY_REFERENCE.md)
 - [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 
@@ -223,6 +228,8 @@ Repository layout:
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── DEVELOPMENT_STANDARDS.md
+│   ├── ENGINEERING_FINDINGS.md
+│   ├── MCP_TOOL_REFERENCE.md
 │   ├── QUALITY_REFERENCE.md
 │   └── USER_GUIDE.md
 └── tests/

@@ -2,7 +2,11 @@
 
 ## 1. Initiative snapshot
 
-- **Status: Phases 0–3 complete (2026-10-04).** Branch `feature/llm-mcp-tools`. The API foundation, the tool spec, the gated tier shell, all five read tools, and the full control surface (12 reversible controls plus the destructive `delete_rule`) are implemented and validated. Live-verified on the developer test profile. Next: Phase 4 (prompt, docs, release).
+- **Status: Phases 0–4 complete (2026-10-04).** Branch `feature/llm-mcp-tools`. The API foundation, the tool spec, the gated tier shell, all five read tools, the full control surface (12 reversible controls plus the destructive `delete_rule`), the prompt fragment, the contract and error-path tests, the user-guide disclosure, and the release-prep docs are implemented and validated. Live-verified on the developer test profile. Next: final review and merge.
+- **Phase 4 findings (fixed in-phase):**
+  - `quality_scale.yaml` declared `reconfigure-flow`, which is **not a valid Core rule id** (Core defines `reconfiguration-flow`). This was pre-existing, not introduced by this initiative. Corrected to `reconfiguration-flow: done`, which is accurate: the reconfigure flow exists and is tested.
+  - The five new read response services were declared in `services.yaml` but **absent from the user guide**, which would have regressed the Bronze `docs-actions` rule. All five are now documented.
+  - Core defines **no LLM/MCP quality-scale rule** (54 rule ids reviewed), so the tool layer adds no rule and regresses none.
 - **What it builds:** an integration-owned `llm.API`, registered by this integration, that exposes Control D profiles, endpoints, clients, and analytics to Home Assistant Assist and any MCP client through Home Assistant's `mcp_server`. The surface is tiered, opt-in, read-first, and vendor-aligned in naming and terminology.
 - **Why now:** the integration already has the inventory, policy mutations, and analytics plumbing. The missing capability is a **troubleshooting and query surface**. Control D's per-record Activity Log and ranked breakdowns are high-cardinality telemetry that was deliberately kept out of the entity model; on-demand tooling is the correct home for it, not entities.
 - **Decisive platform facts (verified):**
@@ -208,12 +212,12 @@ Ordering is deliberate: **retention, catalog currency, and the response/error co
 
 ### Phase 4 — Prompt, contract tests, docs, disclosure, release
 
-- [ ] **4.1 Finalize the prompt fragment** derived from the spec. Keep it concise: units/envelopes, the two analytics surfaces and retention caveat, terminology, tier meaning, injection caution, prefer-these-tools, and confirmation guidance. Include one short **"why is this blocked" playbook** — `test_domain` → (if blocked) `get_activity_log` for that domain → `get_block_breakdown` → `get_policy` → control — as either a prompt paragraph or a `test_domain` description line.
-- [ ] **4.2 Contract tests.** Name prefix, `title`, `description`, `integration = DOMAIN`, all four annotations, per-parameter descriptions, the read vs action-result envelopes, and strict JSON-serializability of both. Add a **pragmatic** error-path set (missing required arg, unknown arg, invalid enum, and one upstream failure) rather than exhaustive per-tool coverage.
-- [ ] **4.3 User-guide disclosure.** The tier ladder, what each tier sends, the retention caveat, the Core 2026.10 requirement, and the no-admin-gate consequence.
-- [ ] **4.4 README footnote** for the Core requirement.
-- [ ] **4.5 Quality-scale check.** Confirm no rule regresses; document any new comment needed.
-- [ ] **4.6 Release checklist** and docs-link updates.
+- [x] **4.1 Finalize the prompt fragment** derived from the spec. Keep it concise: units/envelopes, the two analytics surfaces and retention caveat, terminology, tier meaning, injection caution, prefer-these-tools, and confirmation guidance. Include one short **"why is this blocked" playbook** — `test_domain` → (if blocked) `get_activity_log` for that domain → `get_block_breakdown` → `get_policy` → control — as either a prompt paragraph or a `test_domain` description line.
+- [x] **4.2 Contract tests.** Name prefix, `title`, `description`, `integration = DOMAIN`, all four annotations, per-parameter descriptions, the read vs action-result envelopes, and strict JSON-serializability of both. Add a **pragmatic** error-path set (missing required arg, unknown arg, invalid enum, and one upstream failure) rather than exhaustive per-tool coverage. Also added a label/key contract test pinning that schemas accept display labels (`Blocked`) while the runtime model exposes keys (`blocked`).
+- [x] **4.3 User-guide disclosure.** The tier ladder, what each tier sends, the retention caveat, the Core 2026.10 requirement, and the no-admin-gate consequence.
+- [x] **4.4 README footnote** for the Core requirement.
+- [x] **4.5 Quality-scale check.** Confirm no rule regresses; document any new comment needed. Found and fixed the invalid `reconfigure-flow` key and the four undocumented read services; confirmed Core has no LLM rule.
+- [x] **4.6 Release checklist** and docs-link updates. `ENGINEERING_FINDINGS.md` and `MCP_TOOL_REFERENCE.md` are now linked from the README docs index and repository layout.
 
 ## 6. Validation strategy
 
