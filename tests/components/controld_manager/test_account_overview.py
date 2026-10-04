@@ -126,9 +126,10 @@ def test_overview_account_counts_match_the_registry_accessors() -> None:
     )
     assert account["router_client_count"] == registry.router_client_count == 4
     assert account["region"] == "america"
-    # `status` is deliberately not exposed to a model: it is a bare integer
-    # whose code meanings the vendor schema does not define.
-    assert "status" not in account
+    # Integer, not a stringified integer: GET /users documents it as an integer
+    # and the field was silently null in production until the parse was fixed.
+    assert account["status"] == registry.user.status == 1
+    assert isinstance(account["status"], int)
 
 
 def test_overview_profile_rows_match_the_entity_accessors() -> None:

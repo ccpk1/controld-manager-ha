@@ -340,10 +340,11 @@ class IntegrationManager(BaseManager):
             "config_entry_id": config_entry_id,
             "account": {
                 "region": registry.user.stats_endpoint if registry.user else None,
-                # `status` is intentionally absent. Control D returns it as a
-                # bare integer whose code meanings the published schema does not
-                # define, and an unexplained number invites a model to invent
-                # meaning. It stays available on the Status sensor attribute.
+                # Control D's 0/1 account flag: 1 enabled, 0 disabled. This is the
+                # same enablement integer the API uses for filters, services,
+                # options, and restrictions, and reads back as 1 on a live
+                # account. The vendor defines no richer code set for accounts.
+                "status": registry.user.status if registry.user else None,
                 "profile_count": registry.profile_count,
                 "endpoint_count": registry.endpoint_count,
                 "discovered_endpoint_count": registry.discovered_endpoint_count,

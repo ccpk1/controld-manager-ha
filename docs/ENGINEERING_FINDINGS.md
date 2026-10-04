@@ -626,7 +626,10 @@ Observed on `GET /users`:
 **Field types matter here.** The published OpenAPI schema for `GET /users` declares
 `status`, `last_active`, `twofa`, `proxy_access`, and `email_status` as
 **`integer`**, and lists `status` as **required**. The example payload shows
-`"status": 1`. Only `email`, `date`, and `PK` are strings.
+`"status": 1`. Only `email`, `date`, and `PK` are strings. A live capture confirms
+the types and shows the payload carries many more fields than the schema lists
+(`auth_methods`, `has_usable_password`, `max_devices`, `max_profiles`,
+`res_proxy_access`, `tailnet`, `tutorials`, and others).
 
 This bit us: `status` and `last_active` were both parsed with a string-only
 helper, so a required documented field was **silently discarded** on every
@@ -635,15 +638,38 @@ string, which matched the broken parser and hid the defect until a live check.
 Any other `/users` field added later must be checked for its declared type before
 the default string parse is applied.
 
-The published schema does **not** define what the `status` codes mean, so the
-value is carried verbatim as an integer and never turned into a label or exposed
-to an LLM surface as a bare number.
+**What `status` means.** Control D uses `status` as a generic 0/1 enablement
+integer across the API, not as free-form code:
+
+- filter, service, and option writes send `{"status": 1}` to enable and
+  `{"status": 0}` to disable
+- rule enable/disable is the same shape, with payloads as small as `{"status":1}`
+- the restrictions reference documents disabling as *"equivalent to PUT on this
+  path with `status=0`"*
+- a live `GET /devices` capture over 19 endpoints returned only `0` and `1`
+  (18 endpoints `1`, one `0`)
+
+So on the account, `status = 1` means enabled and `status = 0` means disabled. A
+live capture reads `1` on this account. The vendor does not define a richer code
+set for the account field, so it is carried as an integer and never turned into a
+label.
+
+**Not the same as the dashboard's device Status.** The published *Status* page
+describes a **four-state device/endpoint setting** — Pending, Active, Soft
+Disabled, Hard Disabled — driven by a Device Setting in the dashboard. The API's
+`status` field collapses that to the 0/1 flag above; a live capture shows no
+endpoint reading 2 or 3. The integration currently derives endpoint status from
+the activity timestamp (`last_activity`) and does **not** read the device `status`
+field, so the four-state distinction is not surfaced anywhere. That is a
+candidate improvement, not a defect: `last_activity` alone cannot separate Soft
+from Hard Disabled, so a future endpoint sensor could use `status` to distinguish
+"no longer enforcing policy" from "not resolving at all".
 
 Implementation guidance:
 
 - `stats_endpoint` should be retained as meaningful instance metadata
 - `last_active` is a Unix epoch (integer) and is currently parsed but not consumed by any entity or payload
-- `status` is kept on the Status sensor attribute only, where a human can compare it to the Control D dashboard
+- `status` is a 0/1 enablement flag, exposed as an integer; it is also carried on the Status sensor attribute
 
 ### Billing metadata
 

@@ -190,12 +190,20 @@ come before controls.
 - **When to use** — first, to size the account and see which profile is doing what.
 - **When not to use** — for per-query detail (use `get_activity_log`).
 - **Inputs** — none. The tool binds to its own config entry.
-- **Returns** — `result.account` with `region`, `profile_count`,
+- **Returns** — `result.account` with `region`, `status`, `profile_count`,
   `endpoint_count`, `discovered_endpoint_count`, `router_client_count`, and an
   `analytics` block (`total_queries`, `blocked_queries`, `bypassed_queries`,
   `redirected_queries`, `blocked_queries_ratio`, `window_start`, `window_end`),
   plus `result.profiles[]` with `profile_id`, `profile_name`, `endpoint_count`,
   `paused`, and blocked/bypassed/redirected counts.
+- **`status` is Control D's 0/1 account flag**, not a free-form code: `1`
+  enabled, `0` disabled. It is the same enablement integer the API uses for
+  filters, services, options, and restrictions (`PUT`/`DELETE` on a restriction
+  is documented as equivalent to `status=0`). The vendor defines no richer code
+  set for accounts, and both values are integers upstream, so it is exposed as an
+  integer rather than a label. Note the dashboard's device *Status* setting
+  (Pending / Active / Soft Disabled / Hard Disabled) is a different, UI-level
+  concept and does not apply to this field.
 - **Counts never diverge from the entities.** Every count comes from the same
   `ControlDRegistry` accessors the account and profile entities read, so the tool
   and the sensors always agree. `endpoint_count` is the protected count

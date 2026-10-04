@@ -137,9 +137,11 @@ class GetAccountOverviewTool(_ControlDReadTool):
         "exact round hour. This tool reads no per-query detail; use "
         "`get_activity_log` for that.\n"
         "\n"
-        "Quote the account `endpoint_count`, not a sum of the profile rows. An "
-        "endpoint attached to more than one profile is counted under each of "
-        "them, so those rows deliberately total more than the account figure."
+        "`status` is Control D's 0/1 account flag: 1 when the account is "
+        "enabled, 0 when it is disabled. Quote the account `endpoint_count`, "
+        "not a sum of the profile rows. An endpoint attached to more than one "
+        "profile is counted under each of them, so those rows deliberately "
+        "total more than the account figure."
     )
     parameters = vol.Schema({})
     _service = SERVICE_GET_ACCOUNT_OVERVIEW
