@@ -171,22 +171,30 @@ async def test_control_tool_annotations_are_accurate(hass: HomeAssistant) -> Non
         assert by_name[f"{DOMAIN}__{name}"].annotations.destructive is False, name
 
 
-async def test_control_tools_never_claim_an_irreversible_undo(
+async def test_irreversible_tools_never_claim_an_undo(
     hass: HomeAssistant,
 ) -> None:
-    """Deleting a rule cannot be undone, so the tool must not name an undo call."""
+    """Tools that cannot be reversed must not name an undo call."""
     tools = await _tools(hass, LLM_TOOL_MODE_FULL)
-    (delete,) = [tool for tool in tools if tool.name == f"{DOMAIN}__delete_rule"]
-    assert delete._undo({}) is None
+    by_name = {tool.name: tool for tool in tools}
+    # Deletion destroys the rule's identity; the endpoint summary carries no
+    # current logging level to restore.
+    assert by_name[f"{DOMAIN}__delete_rule"]._undo(hass, {}) is None
+    assert (
+        by_name[f"{DOMAIN}__set_endpoint_analytics_logging"]._undo(
+            hass, {"endpoint_id": "ep-1", "mode": "Full"}
+        )
+        is None
+    )
 
 
 async def test_create_rule_names_delete_as_its_undo(hass: HomeAssistant) -> None:
     """create_rule is reversible only by deleting, and says so."""
     tools = await _tools(hass, LLM_TOOL_MODE_FULL)
     (create,) = [tool for tool in tools if tool.name == f"{DOMAIN}__create_rule"]
-    undo = create._undo({"hostname": "example.com", "profile_id": "p-1"})
+    undo = create._undo(hass, {"hostname": "example.com", "profile_id": "p-1"})
     assert undo is not None
-    assert f"{DOMAIN}__delete_rule" in undo
+    assert any(f"{DOMAIN}__delete_rule" in call for call in undo)
 
 
 async def test_a_service_failure_becomes_a_failed_action_result(

@@ -24,14 +24,20 @@ def build_action_result(
     changed: bool,
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
-    undo: str | None = None,
+    undo: list[str] | None = None,
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build one action-result payload.
 
     ``after`` states what the action requested, not a re-read of the box. ``undo``
-    is the call that reverses the action, or ``None`` when nothing reverses it;
-    callers must not describe an action with ``undo: None`` as reversible.
+    lists the calls that together reverse the action, or is ``None`` when nothing
+    reverses it; callers must not describe an action with ``undo: None`` as
+    reversible.
+
+    ``undo`` is a list rather than a single call because the tools accept lists of
+    targets. Reversing a change that spans three services with three different
+    previous modes takes three calls, and collapsing those into one string would
+    misreport what is needed.
     """
     return {
         "status": status,

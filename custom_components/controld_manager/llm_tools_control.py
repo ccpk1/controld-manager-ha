@@ -5,8 +5,9 @@ supported, so the Core 2026.10-only ``homeassistant.helpers.llm`` names below ar
 never imported on older Home Assistant.
 
 Each control tool delegates to an existing service and returns the action-result
-envelope. Control D writes have no admin gate, so the configured tier is the only
-thing deciding which of these are reachable at all.
+envelope. Every write service requires an admin user, so a non-admin caller is
+rejected by the service layer rather than by the tool; the configured tier
+additionally decides which of these tools are registered at all.
 """
 
 from __future__ import annotations
@@ -64,6 +65,7 @@ from .const import (
 )
 from .llm_tools_common import format_tool_name
 from .models import (
+    SERVICE_MODE_LABELS,
     default_rule_mode_labels,
     endpoint_analytics_logging_mode_labels,
     normalize_default_rule_mode,
@@ -236,8 +238,14 @@ class _ControlDControlTool(llm.Tool):
         """Return the state the action requests."""
         return None
 
-    def _undo(self, args: dict[str, Any]) -> str | None:
-        """Return the exact call that reverses the action, or None."""
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
+        """Return the calls that reverse the action, or None when none can.
+
+        Read the pre-write state here rather than from ``args``: reversing a
+        change means restoring the previous value, which only the runtime
+        registry knows. Each addressed target needs its own call, so this
+        returns a list.
+        """
         return None
 
     @override
@@ -253,6 +261,7 @@ class _ControlDControlTool(llm.Tool):
         before = self._before(hass, args)
 
         if self._is_already_in_state(hass, args):
+            # Nothing changed, so there is nothing to reverse.
             return llm.ToolResult(
                 data=build_action_result(
                     status=ACTION_STATUS_ALREADY_IN_STATE,
@@ -260,9 +269,12 @@ class _ControlDControlTool(llm.Tool):
                     changed=False,
                     before=before,
                     after=before,
-                    undo=self._undo(args),
                 )
             )
+
+        # Resolved before the write, while the registry still holds the
+        # pre-write state the undo has to restore.
+        undo = self._undo(hass, args)
 
         service_data = {**args, SERVICE_FIELD_CONFIG_ENTRY_ID: self._entry_id}
         try:
@@ -291,7 +303,7 @@ class _ControlDControlTool(llm.Tool):
                 changed=True,
                 before=before,
                 after=self._after(args),
-                undo=self._undo(args),
+                undo=undo,
             )
         )
 
@@ -394,18 +406,18 @@ class SetFilterStateTool(_ControlDControlTool):
         """Return the requested enabled state."""
         return {"enabled": args[SERVICE_FIELD_ENABLED]}
 
-    def _undo(self, args: dict[str, Any]) -> str:
-        """Return the call that flips the filter back."""
-        filters = args.get(SERVICE_FIELD_FILTER_ID) or args.get(
-            SERVICE_FIELD_FILTER_NAME
-        )
-        profile = args.get(SERVICE_FIELD_PROFILE_ID) or args.get(
-            SERVICE_FIELD_PROFILE_NAME
-        )
-        return (
-            f"{format_tool_name('set_filter_state')}(filter_id={filters!r}, "
-            f"profile_id={profile!r}, enabled={not args[SERVICE_FIELD_ENABLED]})"
-        )
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
+        """Return one call per filter, restoring its previous state."""
+        registry = self._registry(hass)
+        pairs = self._pairs(hass, args)
+        if registry is None or not pairs:
+            return None
+        return [
+            f"{format_tool_name('set_filter_state')}(filter_id={filter_pk!r}, "
+            f"profile_id={profile_pk!r}, "
+            f"enabled={registry.filters_by_profile[profile_pk][filter_pk].enabled})"
+            for profile_pk, filter_pk in pairs
+        ]
 
 
 class SetServiceStateTool(_ControlDControlTool):
@@ -520,9 +532,27 @@ class SetServiceStateTool(_ControlDControlTool):
         """Return the requested mode."""
         return {"mode": args[SERVICE_FIELD_MODE]}
 
-    def _undo(self, args: dict[str, Any]) -> str | None:
-        """Services have no single inverse mode, so no undo is claimed."""
-        return None
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
+        """Return one call per service, restoring its previous mode."""
+        registry = self._registry(hass)
+        pairs = self._pairs(hass, args)
+        if registry is None or not pairs:
+            return None
+        calls: list[str] = []
+        for profile_pk, service_pk in pairs:
+            # The schema takes display labels, so the key read from the registry
+            # is translated back before being emitted in a call.
+            label = SERVICE_MODE_LABELS.get(
+                registry.services_by_profile[profile_pk][service_pk].current_mode
+            )
+            if label is None:
+                continue
+            calls.append(
+                f"{format_tool_name('set_service_state')}("
+                f"service_id={service_pk!r}, profile_id={profile_pk!r}, "
+                f"mode={label!r})"
+            )
+        return calls or None
 
 
 class SetOptionStateTool(_ControlDControlTool):
@@ -638,9 +668,26 @@ class SetOptionStateTool(_ControlDControlTool):
             after["value"] = args[SERVICE_FIELD_VALUE]
         return after
 
-    def _undo(self, args: dict[str, Any]) -> str | None:
-        """The previous value is not read here, so no undo is claimed."""
-        return None
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
+        """Return one call per option, restoring its previous value."""
+        registry = self._registry(hass)
+        pairs = self._pairs(hass, args)
+        if registry is None or not pairs:
+            return None
+        calls: list[str] = []
+        for profile_pk, option_pk in pairs:
+            option = registry.options_by_profile[profile_pk][option_pk]
+            if option.entity_kind == "toggle":
+                undo_args = f"enabled={option.is_enabled}"
+            elif option.entity_kind == "select" and option.current_value_key:
+                undo_args = f"value={option.current_value_key!r}"
+            else:
+                continue
+            calls.append(
+                f"{format_tool_name('set_option_state')}("
+                f"option_id={option_pk!r}, profile_id={profile_pk!r}, {undo_args})"
+            )
+        return calls or None
 
 
 class SetRuleStateTool(_ControlDControlTool):
@@ -922,12 +969,12 @@ class EnableProfileTool(_ControlDControlTool):
         """Return the requested paused state."""
         return {"paused": False}
 
-    def _undo(self, args: dict[str, Any]) -> str:
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str]:
         """Return the call that pauses the profile again."""
         profile = args.get(SERVICE_FIELD_PROFILE_ID) or args.get(
             SERVICE_FIELD_PROFILE_NAME
         )
-        return f"{format_tool_name('disable_profile')}(profile_id={profile!r})"
+        return [f"{format_tool_name('disable_profile')}(profile_id={profile!r})"]
 
 
 class DisableProfileTool(_ControlDControlTool):
@@ -1006,12 +1053,12 @@ class DisableProfileTool(_ControlDControlTool):
         """Return the requested paused state and duration."""
         return {"paused": True, "minutes": args.get(SERVICE_FIELD_MINUTES)}
 
-    def _undo(self, args: dict[str, Any]) -> str:
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str]:
         """Return the call that re-enables the profile."""
         profile = args.get(SERVICE_FIELD_PROFILE_ID) or args.get(
             SERVICE_FIELD_PROFILE_NAME
         )
-        return f"{format_tool_name('enable_profile')}(profile_id={profile!r})"
+        return [f"{format_tool_name('enable_profile')}(profile_id={profile!r})"]
 
 
 class CreateRuleTool(_ControlDControlTool):
@@ -1114,16 +1161,16 @@ class CreateRuleTool(_ControlDControlTool):
             "enabled": args.get(SERVICE_FIELD_ENABLED, True),
         }
 
-    def _undo(self, args: dict[str, Any]) -> str:
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str]:
         """Return the delete call that removes the created rule."""
         hostname = args[SERVICE_FIELD_HOSTNAME]
         profile = args.get(SERVICE_FIELD_PROFILE_ID) or args.get(
             SERVICE_FIELD_PROFILE_NAME
         )
-        return (
+        return [
             f"{format_tool_name('delete_rule')}(rule_identity={hostname!r}, "
             f"profile_id={profile!r})"
-        )
+        ]
 
 
 class DeleteRuleTool(_ControlDControlTool):
@@ -1169,7 +1216,7 @@ class DeleteRuleTool(_ControlDControlTool):
         """Return the deleted rule target."""
         return {"rule_identity": args[SERVICE_FIELD_RULE_IDENTITY]}
 
-    def _undo(self, args: dict[str, Any]) -> None:
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> None:
         """Deletion is irreversible, so no undo is claimed."""
         return None
 
@@ -1254,6 +1301,22 @@ class RenameEndpointTool(_ControlDControlTool):
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the requested name."""
         return {"name": args[SERVICE_FIELD_NEW_NAME]}
+
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
+        """Return one call per endpoint, restoring its previous name."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        calls: list[str] = []
+        for device_id in _as_list(args[SERVICE_FIELD_ENDPOINT_ID]):
+            endpoint = registry.endpoints.get(device_id)
+            if endpoint is None or not endpoint.name:
+                continue
+            calls.append(
+                f"{format_tool_name('rename_endpoint')}("
+                f"endpoint_id={device_id!r}, new_name={endpoint.name!r})"
+            )
+        return calls or None
 
 
 class SetEndpointAnalyticsLoggingTool(_ControlDControlTool):
@@ -1403,12 +1466,12 @@ class SetClientAliasTool(_ControlDControlTool):
         """Return the requested alias."""
         return {"alias": args[SERVICE_FIELD_ALIAS]}
 
-    def _undo(self, args: dict[str, Any]) -> str:
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str]:
         """Return the call that clears the alias."""
-        return (
+        return [
             f"{format_tool_name('clear_client_alias')}("
             f"endpoint_mac={args[SERVICE_FIELD_ENDPOINT_MAC]!r})"
-        )
+        ]
 
 
 class ClearClientAliasTool(_ControlDControlTool):
@@ -1485,9 +1548,16 @@ class ClearClientAliasTool(_ControlDControlTool):
         """Return the cleared state."""
         return {"alias": None}
 
-    def _undo(self, args: dict[str, Any]) -> None:
-        """The removed alias is not captured, so no undo is claimed."""
-        return None
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
+        """Return one call per client, restoring the alias that was removed."""
+        calls = [
+            f"{format_tool_name('set_client_alias')}("
+            f"endpoint_mac={target.client_mac_address!r}, "
+            f"alias={target.client_alias!r})"
+            for target in self._matching_targets(hass, args)
+            if target.client_mac_address and target.client_alias
+        ]
+        return calls or None
 
 
 def build_control_tools(*, entry_id: str, include_destructive: bool) -> list[llm.Tool]:
