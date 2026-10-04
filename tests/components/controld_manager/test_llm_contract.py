@@ -57,6 +57,10 @@ _CONTROL_TOOLS: Final = frozenset(
         "set_default_rule_state",
         "enable_profile",
         "disable_profile",
+        "rename_endpoint",
+        "set_endpoint_analytics_logging",
+        "set_client_alias",
+        "clear_client_alias",
         "create_rule",
     }
 )

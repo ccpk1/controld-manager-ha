@@ -2,7 +2,7 @@
 
 ## 1. Initiative snapshot
 
-- **Status: Phases 0–2 complete; Phase 3 in progress (2026-10-04).** Branch `feature/llm-mcp-tools`. All five read tools are implemented, plus the Phase 3a control surface: the action-result envelope and eight control tools, with the destructive `delete_rule` gated behind the Full tier. Remaining: endpoint/client control tools (rename, analytics logging, client alias) in Phase 3b, then Phase 4 (prompt, docs, release).
+- **Status: Phases 0–3 complete (2026-10-04).** Branch `feature/llm-mcp-tools`. The API foundation, the tool spec, the gated tier shell, all five read tools, and the full control surface (12 reversible controls plus the destructive `delete_rule`) are implemented and validated. Live-verified on the developer test profile. Next: Phase 4 (prompt, docs, release).
 - **What it builds:** an integration-owned `llm.API`, registered by this integration, that exposes Control D profiles, endpoints, clients, and analytics to Home Assistant Assist and any MCP client through Home Assistant's `mcp_server`. The surface is tiered, opt-in, read-first, and vendor-aligned in naming and terminology.
 - **Why now:** the integration already has the inventory, policy mutations, and analytics plumbing. The missing capability is a **troubleshooting and query surface**. Control D's per-record Activity Log and ranked breakdowns are high-cardinality telemetry that was deliberately kept out of the entity model; on-demand tooling is the correct home for it, not entities.
 - **Decisive platform facts (verified):**
@@ -239,7 +239,7 @@ Ordering is deliberate: **retention, catalog currency, and the response/error co
 | D9 | 2 | Cause attribution pattern | **Resolved:** activity log for detail, overview for counts; ranked tools dropped | Done |
 | D10 | 2 | Client terms in the inventory | Endpoint profile; assigned client **is** its own endpoint; expose `is_endpoint` | Yes |
 | D11 | 3 | Destructive scope, first release | Tier yes; tools = `delete_rule` only | Yes |
-| D12 | 3 | Endpoint-to-profile assignment | Defer; read-only first | Yes |
+| D12 | 3 | Endpoint-to-profile assignment | **Deferred:** still out of scope; widest blast radius | No |
 | D13 | 3 | Bulk actions | Exclude from first release | No |
 | D14 | 3 | `create_rule` in first release | Include; control tier, non-idempotent | Yes |
 | D15 | 3 | `undo` for non-idempotent create | Always name `delete_rule`; report tier limit; session-scoped ids later | No |

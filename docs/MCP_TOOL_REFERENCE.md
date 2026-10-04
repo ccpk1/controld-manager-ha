@@ -110,6 +110,13 @@ resolved, because a rule write does not echo which rule it changed.
 `status` values: `applied`, `already_in_state`, `failed`. A rejected write
 returns `status: "failed"` with `error` set rather than raising.
 
+**`already_in_state`** is decided by reading the runtime registry before writing:
+if every addressed target is already in the requested state, the service is not
+called at all and `changed` is `false`. Tools may read the registry for exactly
+this purpose (see the LLM tool layer rules in `ARCHITECTURE.md`); all writes still
+go through services. When the state cannot be read, the write proceeds rather than
+being skipped.
+
 - `status` — `applied` | `already_in_state` | `failed`.
 - `changed` — whether anything actually changed.
 - `target` — the **resolved** object acted on (id + name).
@@ -241,6 +248,10 @@ tiers:
 | `set_rule_state` | Enable, disable, or modify one custom rule |
 | `set_default_rule_state` | Set a profile's catch-all action |
 | `enable_profile` / `disable_profile` | Control D's own pause, reversible (disable can be timed) |
+| `rename_endpoint` | Rename an endpoint (cosmetic, endpoint-scoped) |
+| `set_endpoint_analytics_logging` | Set an endpoint's logging to None, Some, or Full |
+| `set_client_alias` | Label one client under an endpoint (cosmetic, client-scoped) |
+| `clear_client_alias` | Remove a client's alias |
 | `create_rule` | Create a custom rule — **not idempotent**; undo is `delete_rule` |
 
 ### Destructive *(Full tier only)*
@@ -249,13 +260,18 @@ tiers:
 | --- | --- |
 | `delete_rule` | Permanently delete a custom rule. No undo; prefer `set_rule_state` with `enabled: false` |
 
+## Endpoint identity
+
+Endpoint-scoped services accept **`endpoint_id`** (from `get_inventory`) and
+`endpoint_name`. Ids take precedence, because an id is an exact, unique key while
+endpoint names are not guaranteed to be unique. Prefer the id for any write; use
+the name only when a human is choosing interactively.
+
 ## Not yet exposed
 
-The endpoint- and client-scoped controls — `rename_endpoint`,
-`set_endpoint_analytics_logging`, `set_client_alias`, and `clear_client_alias` —
-are a separate family and land in a later phase. Endpoint-to-profile assignment is
-deferred: changing which policy governs a whole segment has the widest blast
-radius of anything in this integration.
+Endpoint-to-profile assignment is deferred: changing which policy governs a whole
+segment has the widest blast radius of anything in this integration, and it needs
+firm multi-profile precedence handling before a model may call it.
 
 ---
 
