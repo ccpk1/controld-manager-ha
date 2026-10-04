@@ -12,6 +12,7 @@ additionally decides which of these tools are registered at all.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Final, cast, override
 
 import voluptuous as vol
@@ -80,6 +81,8 @@ from .utils.action_result import (
     ACTION_STATUS_FAILED,
     build_action_result,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 _CONTROL_ANNOTATIONS: Final = llm.ToolAnnotations(
     read_only=False,
@@ -330,6 +333,24 @@ class _ControlDControlTool(llm.Tool):
                     # The reason is the only thing that distinguishes a missing
                     # target from a rejected value, so it must not be dropped.
                     error=str(err) or type(err).__name__,
+                ),
+                error=True,
+            )
+        except Exception as err:
+            # An unexpected error must still leave the model with a coherent
+            # action result. Letting it escape handed back a bare repr such as
+            # `'group:1|example.com'` (a KeyError), which reads like data. The
+            # error is logged so the underlying defect is still discoverable.
+            LOGGER.exception(
+                "Control D tool %s failed unexpectedly for %s", self._service, target
+            )
+            return llm.ToolResult(
+                data=build_action_result(
+                    status=ACTION_STATUS_FAILED,
+                    target=target,
+                    changed=False,
+                    before=before,
+                    error=f"{type(err).__name__}: {err}",
                 ),
                 error=True,
             )

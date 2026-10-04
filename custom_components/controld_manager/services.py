@@ -494,6 +494,10 @@ class ResolvedRuleServiceTarget:
 
     entry: ControlDManagerConfigEntry
     profile_rules: dict[str, frozenset[str]]
+    # Populated when resolution had to fetch live rows because the profile does
+    # not expose its rules. The write needs the same rows, since the registry
+    # has none for an unexposed rule.
+    rule_rows_by_profile: dict[str, dict[str, ControlDRule]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -702,6 +706,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 comment=mutation.comment,
                 redirect_target=mutation.redirect_target,
                 redirect_target_type=mutation.redirect_target_type,
+                rule_rows_by_profile=resolved_target.rule_rows_by_profile,
             )
         except (
             ControlDApiAuthError,
@@ -745,7 +750,10 @@ async def async_register_services(hass: HomeAssistant) -> None:
         resolved_target = await _resolve_rule_service_target(hass, call)
         try:
             profile_manager = resolved_target.entry.runtime_data.managers.profile
-            await profile_manager.async_delete_rules(resolved_target.profile_rules)
+            await profile_manager.async_delete_rules(
+                resolved_target.profile_rules,
+                rule_rows_by_profile=resolved_target.rule_rows_by_profile,
+            )
         except (
             ControlDApiAuthError,
             ControlDApiConnectionError,
@@ -1780,6 +1788,7 @@ async def _resolve_rule_service_target(
     requested_rule_identities = _ensure_name_list(
         call.data.get(SERVICE_FIELD_RULE_IDENTITY)
     )
+    rule_rows_by_profile: dict[str, dict[str, ControlDRule]] | None = None
     try:
         profile_rules = _resolve_selected_rule_identities(
             resolved_profiles.entry,
@@ -1798,12 +1807,12 @@ async def _resolve_rule_service_target(
             resolved_profiles.entry,
             resolved_profiles.profile_pks,
         )
+        rule_rows_by_profile = {
+            profile_pk: rows[1] for profile_pk, rows in live_rules_by_profile.items()
+        }
         try:
             profile_rules = _resolve_selected_rule_identities_from_rows(
-                {
-                    profile_pk: rows[1]
-                    for profile_pk, rows in live_rules_by_profile.items()
-                },
+                rule_rows_by_profile,
                 resolved_profiles.profile_pks,
                 requested_rule_identities=requested_rule_identities,
             )
@@ -1812,6 +1821,7 @@ async def _resolve_rule_service_target(
     return ResolvedRuleServiceTarget(
         entry=resolved_profiles.entry,
         profile_rules=profile_rules,
+        rule_rows_by_profile=rule_rows_by_profile,
     )
 
 

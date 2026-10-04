@@ -49,8 +49,22 @@ class ProfileManager(BaseManager):
         """Return one cached rule-group row from the current registry."""
         return self.runtime.registry.rule_groups_by_profile[profile_pk][group_pk]
 
-    def _rule_row(self, profile_pk: str, rule_identity: str) -> ControlDRule:
-        """Return one cached rule row from the current registry."""
+    def _rule_row(
+        self,
+        profile_pk: str,
+        rule_identity: str,
+        rule_rows_by_profile: dict[str, dict[str, ControlDRule]] | None = None,
+    ) -> ControlDRule:
+        """Return one rule row, preferring live rows over the cached registry.
+
+        Resolution can answer for a rule the profile does not expose, in which
+        case the registry holds no row for it. The live rows fetched during
+        resolution carry it, so they take precedence when present.
+        """
+        if rule_rows_by_profile is not None:
+            live_rows = rule_rows_by_profile.get(profile_pk)
+            if live_rows is not None and rule_identity in live_rows:
+                return live_rows[rule_identity]
         return self.runtime.registry.rules_by_profile[profile_pk][rule_identity]
 
     def _updated_filter_rows(
@@ -881,6 +895,7 @@ class ProfileManager(BaseManager):
         comment: str | None,
         redirect_target: str | None,
         redirect_target_type: str | None,
+        rule_rows_by_profile: dict[str, dict[str, ControlDRule]] | None = None,
     ) -> None:
         """Update one or more selected rules across profiles."""
         updated_rules: list[
@@ -901,7 +916,9 @@ class ProfileManager(BaseManager):
 
         for profile_pk, rule_identities in profile_rules.items():
             for rule_identity in rule_identities:
-                rule_row = self._rule_row(profile_pk, rule_identity)
+                rule_row = self._rule_row(
+                    profile_pk, rule_identity, rule_rows_by_profile
+                )
                 (
                     next_enabled,
                     next_action_do,
@@ -1137,13 +1154,14 @@ class ProfileManager(BaseManager):
     async def async_delete_rules(
         self,
         profile_rules: dict[str, frozenset[str]],
+        rule_rows_by_profile: dict[str, dict[str, ControlDRule]] | None = None,
     ) -> None:
         """Delete one or more selected rules across profiles."""
         delete_requests: list[tuple[str, list[str], tuple[str, ...]]] = []
 
         for profile_pk, rule_identities in profile_rules.items():
             hostnames = [
-                self._rule_row(profile_pk, rule_identity).rule_pk
+                self._rule_row(profile_pk, rule_identity, rule_rows_by_profile).rule_pk
                 for rule_identity in rule_identities
             ]
             delete_requests.append((profile_pk, hostnames, tuple(rule_identities)))
