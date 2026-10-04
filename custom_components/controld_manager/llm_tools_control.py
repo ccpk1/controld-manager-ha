@@ -63,7 +63,7 @@ from .const import (
     SERVICE_SET_RULE_STATE,
     SERVICE_SET_SERVICE_STATE,
 )
-from .llm_tools_common import format_tool_name
+from .llm_tools_common import as_list, format_tool_name
 from .models import (
     SERVICE_MODE_LABELS,
     default_rule_mode_labels,
@@ -135,25 +135,16 @@ _EXPIRATION_DESCRIPTION: Final = (
 _COMMENT_DESCRIPTION: Final = "Optional. A comment to record on the rule."
 
 
-def _as_list(value: object) -> list[str]:
-    """Return a selector value as a list of strings."""
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list):
-        return [item for item in value if isinstance(item, str)]
-    return []
-
-
 def _resolve_profile_pks(registry: Any, args: dict[str, Any]) -> tuple[str, ...]:
     """Return the profile ids a tool call addresses.
 
     Ids win over names. With neither, the call covers every profile, which is
     also how the services behave.
     """
-    profile_ids = _as_list(args.get(SERVICE_FIELD_PROFILE_ID))
+    profile_ids = as_list(args.get(SERVICE_FIELD_PROFILE_ID))
     if profile_ids:
         return tuple(pk for pk in profile_ids if pk in registry.profiles)
-    profile_names = _as_list(args.get(SERVICE_FIELD_PROFILE_NAME))
+    profile_names = as_list(args.get(SERVICE_FIELD_PROFILE_NAME))
     if profile_names:
         wanted = {name.casefold() for name in profile_names}
         return tuple(
@@ -177,8 +168,8 @@ def _resolve_row_pks(
 
     Rows are matched by id when given, otherwise by their display name.
     """
-    row_ids = _as_list(args.get(id_field))
-    row_names = _as_list(args.get(name_field))
+    row_ids = as_list(args.get(id_field))
+    row_names = as_list(args.get(name_field))
     wanted_names = {name.casefold() for name in row_names}
     pairs: list[tuple[str, str]] = []
     for profile_pk in profile_pks:
@@ -219,6 +210,36 @@ class _ControlDControlTool(llm.Tool):
             return None
         runtime = getattr(entry, "runtime_data", None)
         return getattr(runtime, "registry", None)
+
+    def _translate_profile_ids(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Map Control D profile PKs onto the device ids these services target.
+
+        The profile services declare ``profile_id`` with a Home Assistant device
+        selector, but every read surface hands the caller a Control D profile PK.
+        The PK is translated here so the model is given one identifier to work
+        with instead of having to learn a second, unpublished one.
+
+        Only the service call is translated: the pre-write reads above resolve
+        against the registry, which is keyed by the PK.
+        """
+        raw_profile_ids = args.get(SERVICE_FIELD_PROFILE_ID)
+        if raw_profile_ids is None:
+            return args
+        entry = hass.config_entries.async_get_entry(self._entry_id)
+        runtime = getattr(entry, "runtime_data", None)
+        device_manager = getattr(getattr(runtime, "managers", None), "device", None)
+        if device_manager is None:
+            return args
+        mapping = device_manager.profile_device_ids
+        return {
+            **args,
+            SERVICE_FIELD_PROFILE_ID: [
+                mapping.get(profile_pk, profile_pk)
+                for profile_pk in as_list(raw_profile_ids)
+            ],
+        }
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the resolved target to report, from the caller's own input."""
@@ -276,7 +297,10 @@ class _ControlDControlTool(llm.Tool):
         # pre-write state the undo has to restore.
         undo = self._undo(hass, args)
 
-        service_data = {**args, SERVICE_FIELD_CONFIG_ENTRY_ID: self._entry_id}
+        service_data = {
+            **self._translate_profile_ids(hass, args),
+            SERVICE_FIELD_CONFIG_ENTRY_ID: self._entry_id,
+        }
         try:
             await hass.services.async_call(
                 DOMAIN,
@@ -773,7 +797,7 @@ class SetRuleStateTool(_ControlDControlTool):
         registry = self._registry(hass)
         if registry is None:
             return ()
-        identities = set(_as_list(args[SERVICE_FIELD_RULE_IDENTITY]))
+        identities = set(as_list(args[SERVICE_FIELD_RULE_IDENTITY]))
         return tuple(
             rule
             for profile_pk in _resolve_profile_pks(registry, args)
@@ -1278,7 +1302,7 @@ class RenameEndpointTool(_ControlDControlTool):
             return None
         names = [
             registry.endpoints[device_id].name
-            for device_id in _as_list(args[SERVICE_FIELD_ENDPOINT_ID])
+            for device_id in as_list(args[SERVICE_FIELD_ENDPOINT_ID])
             if device_id in registry.endpoints
         ]
         return {"name": names} if names else None
@@ -1291,7 +1315,7 @@ class RenameEndpointTool(_ControlDControlTool):
         new_name = args[SERVICE_FIELD_NEW_NAME]
         endpoints = [
             registry.endpoints[device_id]
-            for device_id in _as_list(args[SERVICE_FIELD_ENDPOINT_ID])
+            for device_id in as_list(args[SERVICE_FIELD_ENDPOINT_ID])
             if device_id in registry.endpoints
         ]
         return bool(endpoints) and all(
@@ -1308,7 +1332,7 @@ class RenameEndpointTool(_ControlDControlTool):
         if registry is None:
             return None
         calls: list[str] = []
-        for device_id in _as_list(args[SERVICE_FIELD_ENDPOINT_ID]):
+        for device_id in as_list(args[SERVICE_FIELD_ENDPOINT_ID]):
             endpoint = registry.endpoints.get(device_id)
             if endpoint is None or not endpoint.name:
                 continue
@@ -1438,7 +1462,7 @@ class SetClientAliasTool(_ControlDControlTool):
         registry = self._registry(hass)
         if registry is None:
             return ()
-        macs = {mac.casefold() for mac in _as_list(args[SERVICE_FIELD_ENDPOINT_MAC])}
+        macs = {mac.casefold() for mac in as_list(args[SERVICE_FIELD_ENDPOINT_MAC])}
         return tuple(
             target
             for target in registry.client_alias_targets.values()
@@ -1521,7 +1545,7 @@ class ClearClientAliasTool(_ControlDControlTool):
         registry = self._registry(hass)
         if registry is None:
             return ()
-        macs = {mac.casefold() for mac in _as_list(args[SERVICE_FIELD_ENDPOINT_MAC])}
+        macs = {mac.casefold() for mac in as_list(args[SERVICE_FIELD_ENDPOINT_MAC])}
         return tuple(
             target
             for target in registry.client_alias_targets.values()

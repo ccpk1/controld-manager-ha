@@ -53,7 +53,7 @@ from .const import (
     SERVICE_GET_INVENTORY,
     SERVICE_TEST_DOMAIN,
 )
-from .llm_tools_common import format_tool_name
+from .llm_tools_common import as_list, format_tool_name
 from .utils.time_window import ACTIVITY_LOG_WINDOWS, DEFAULT_ACTIVITY_LOG_WINDOW
 
 # Every read tool is a bounded, read-only query against the user's own account.
@@ -74,6 +74,11 @@ class _ControlDReadTool(llm.Tool):
     _service: str
     _response_type: str
 
+    # Most read services take the Control D profile PK straight through, but
+    # `get_catalog` targets profiles through the Home Assistant device registry,
+    # so its tool has to translate the PK first.
+    _profile_id_is_device_id: bool = False
+
     def __init__(self, *, entry_id: str) -> None:
         """Bind the tool to the config entry it was registered for."""
         self._entry_id = entry_id
@@ -87,6 +92,32 @@ class _ControlDReadTool(llm.Tool):
         """
         return cast(dict[str, Any], self.parameters(tool_input.tool_args))
 
+    def _translate_profile_ids(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Map Control D profile PKs onto the device ids this service targets.
+
+        Only applied where the service declares a Home Assistant device selector.
+        The model is handed a profile PK by the read tools, so the translation
+        keeps one identifier in play rather than exposing an unpublished second
+        one.
+        """
+        raw_profile_ids = args.get(SERVICE_FIELD_PROFILE_ID)
+        if not self._profile_id_is_device_id or raw_profile_ids is None:
+            return args
+        entry = hass.config_entries.async_get_entry(self._entry_id)
+        runtime = getattr(entry, "runtime_data", None)
+        device_manager = getattr(getattr(runtime, "managers", None), "device", None)
+        if device_manager is None:
+            return args
+        return {
+            **args,
+            SERVICE_FIELD_PROFILE_ID: [
+                device_manager.profile_device_ids.get(profile_pk, profile_pk)
+                for profile_pk in as_list(raw_profile_ids)
+            ],
+        }
+
     @override
     async def async_call(
         self,
@@ -95,7 +126,7 @@ class _ControlDReadTool(llm.Tool):
         llm_context: llm.LLMContext,
     ) -> llm.ToolResult:
         """Call the backing service and return the wrapped payload."""
-        service_data = self._args(tool_input)
+        service_data = self._translate_profile_ids(hass, self._args(tool_input))
         service_data[SERVICE_FIELD_CONFIG_ENTRY_ID] = self._entry_id
         result = await hass.services.async_call(
             DOMAIN,
@@ -510,6 +541,7 @@ class GetCatalogTool(_ControlDReadTool):
     )
     _service = SERVICE_GET_CATALOG
     _response_type = "catalog"
+    _profile_id_is_device_id = True
 
 
 def build_read_tools(*, entry_id: str) -> list[llm.Tool]:

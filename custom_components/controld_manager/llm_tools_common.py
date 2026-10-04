@@ -60,7 +60,9 @@ PROMPT: Final = (
     "\n"
     "Resolve before you act. Get the profile id, endpoint id, filter id, rule "
     "identity, or client MAC from a read tool first; the control tools need "
-    "those exact identifiers and cannot guess them.\n"
+    "those exact identifiers and cannot guess them. The `profile_id` argument "
+    "takes the Control D profile id from `get_account_overview`, not a Home "
+    "Assistant device id.\n"
     "\n"
     "Control tools return an action result: `status` (`applied`, "
     "`already_in_state`, or `failed`), `changed`, the resolved `target`, "
@@ -95,3 +97,16 @@ PROMPT: Final = (
 def format_tool_name(action: str) -> str:
     """Return a namespaced LLM tool name."""
     return f"{DOMAIN}__{action}"
+
+
+def as_list(value: object) -> list[str]:
+    """Return a selector value as a list of strings.
+
+    Tool schemas accept either a single value or a list for most identifiers, so
+    every consumer normalizes through here.
+    """
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str)]
+    return []

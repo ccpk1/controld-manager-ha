@@ -24,6 +24,22 @@ therefore a disclosure decision, and the tier is the control that governs it.
 
 ## Conventions
 
+### Identifier spaces
+
+Every identifier a tool accepts is a **Control D** identifier, obtained from a
+read tool. The model is never asked for a Home Assistant id.
+
+That distinction matters for `profile_id`, because the underlying services
+declare it with a Home Assistant device selector while every read surface returns
+the Control D profile PK. The tool layer translates the PK to the profile's device
+id before calling the service, so one identifier flows end to end. A value that
+does not map is passed through untouched and the service rejects it, rather than
+the tool silently dropping the scope.
+
+`get_inventory` and `get_activity_log` are the exception in the other direction:
+their services filter on the Control D PK directly, so their `profile_id` is
+passed through and is never translated.
+
 ### Terminology
 
 These words are exact and are not interchangeable. They come from the repository
