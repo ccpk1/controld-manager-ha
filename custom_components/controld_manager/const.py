@@ -81,7 +81,8 @@ SUPPORTED_PROFILE_OPTION_SELECTS = (
 MIN_LLM_TOOLS_HA_VERSION: Final = (2026, 10)
 
 # LLM/MCP tool exposure tiers. The tier is the only write control: Control D
-# writes have no admin gate, so what is registered is what a caller can reach.
+# Write services require an admin user, so the tier decides what is registered
+# and the service layer decides who may call it.
 CONF_LLM_TOOL_MODE: Final = "llm_tool_mode"
 LLM_TOOL_MODE_OFF: Final = "off"
 LLM_TOOL_MODE_SUMMARY_ONLY: Final = "summary_only"

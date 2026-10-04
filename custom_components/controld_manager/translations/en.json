@@ -87,7 +87,7 @@
         },
         "data_description": {
           "configuration_sync_interval_minutes": "How often to fetch the currently implemented Control D inventory and configuration data, including profiles, endpoints, filters, options, default rules, and any enabled service or rule catalogs. Default: 15.",
-          "llm_tool_mode": "How much of the integration an AI assistant or MCP client may reach. This is independent of the entity exposure settings above. Off registers nothing; Summary only sends account counts and each profile's name with its counts; Read only adds endpoint and client names, addresses, and query-level analytics; Read and control adds reversible changes; Full adds destructive actions. Control D has no separate admin gate, so this setting is the only limit on what a connected assistant can change. Requires Home Assistant 2026.10 or newer."
+          "llm_tool_mode": "How much of the integration an AI assistant or MCP client may reach. This is independent of the entity exposure settings above. Off registers nothing; Summary only sends account counts and each profile's name with its counts; Read only adds endpoint and client names, addresses, and query-level analytics; Read and control adds reversible changes; Full adds destructive actions. Changing anything through these tools also requires an administrator: a non-admin user is rejected by the services themselves. Requires Home Assistant 2026.10 or newer."
         }
       }
     }

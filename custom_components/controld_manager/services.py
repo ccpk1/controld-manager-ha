@@ -21,6 +21,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.util import dt as dt_util
 
 from .api import (
@@ -909,91 +910,104 @@ async def async_register_services(hass: HomeAssistant) -> None:
             hass.services.async_remove(DOMAIN, legacy_service)
 
     if not hass.services.has_service(DOMAIN, SERVICE_DISABLE_PROFILE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_DISABLE_PROFILE,
             async_handle_disable_profile,
             schema=DISABLE_PROFILE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_ENABLE_PROFILE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_ENABLE_PROFILE,
             async_handle_enable_profile,
             schema=ENABLE_PROFILE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_CLIENT_ALIAS):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_CLIENT_ALIAS,
             async_handle_set_client_alias,
             schema=SET_CLIENT_ALIAS_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_CLEAR_CLIENT_ALIAS):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_CLEAR_CLIENT_ALIAS,
             async_handle_clear_client_alias,
             schema=CLEAR_CLIENT_ALIAS_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_RENAME_ENDPOINT):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_RENAME_ENDPOINT,
             async_handle_rename_endpoint,
             schema=RENAME_ENDPOINT_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING,
             async_handle_set_endpoint_analytics_logging,
             schema=SET_ENDPOINT_ANALYTICS_LOGGING_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_FILTER_STATE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_FILTER_STATE,
             async_handle_set_filter_state,
             schema=SET_FILTER_STATE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_RULE_STATE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_RULE_STATE,
             async_handle_set_rule_state,
             schema=SET_RULE_STATE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_CREATE_RULE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_CREATE_RULE,
             async_handle_create_rule,
             schema=CREATE_RULE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_DELETE_RULE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_DELETE_RULE,
             async_handle_delete_rule,
             schema=DELETE_RULE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_SERVICE_STATE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_SERVICE_STATE,
             async_handle_set_service_state,
             schema=SET_SERVICE_STATE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_OPTION_STATE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_OPTION_STATE,
             async_handle_set_option_state,
             schema=SET_OPTION_STATE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_DEFAULT_RULE_STATE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_DEFAULT_RULE_STATE,
             async_handle_set_default_rule_state,
