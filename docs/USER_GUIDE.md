@@ -1160,7 +1160,7 @@ to Home Assistant entities does not restrict an assistant, and vice versa.
 | Tier | What an assistant can do |
 | --- | --- |
 | Off | Nothing. No tools are registered. |
-| Summary only (default) | Read account-wide counts and per-profile names with counts. |
+| Summary only (default) | Read account-wide counts and block statistics, plus one row per profile with the profile's name, endpoint count, paused state, and block counts. |
 | Read only | Read everything: profiles, endpoints, clients, filters, services, options, rules, the activity log, and DNS lookups for a specific domain. |
 | Read and control | Everything above, plus reversible changes such as enabling or disabling a profile, filter, service, option, or rule, and renaming endpoints and clients. |
 | Full | Everything above, plus destructive actions. Today this means deleting custom rules. |
@@ -1171,17 +1171,17 @@ configured tier does not permit the action rather than performing it.
 
 ### What each tier sends
 
-Tiers above Summary only send identifying detail to whichever model the
-assistant uses. That includes:
+Every tier above Off sends profile names, because the account overview lists one
+row per profile. Tiers above Summary only additionally send identifying detail to
+whichever model the assistant uses. That includes:
 
-- profile names and endpoint names
-- endpoint hardware identifiers
+- endpoint names and endpoint hardware identifiers
 - client names and IP addresses
 - domains and destination addresses from the activity log
 
-Summary only is the only tier that keeps names and identifiers out, sending only
-counts. Profile names are treated as a low-risk label because they are
-user-assigned text that already appears as Home Assistant device names.
+Summary only is the narrowest tier. It sends counts and the per-profile row
+described above, and stops there: no endpoint or client detail, and no
+query-level analytics.
 
 **Control D has no separate admin gate.** Changing anything in Home Assistant
 services normally requires an administrator, but a connected assistant is
