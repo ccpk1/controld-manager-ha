@@ -623,10 +623,27 @@ Observed on `GET /users`:
 - `sso`
 - `safe_countries`
 
+**Field types matter here.** The published OpenAPI schema for `GET /users` declares
+`status`, `last_active`, `twofa`, `proxy_access`, and `email_status` as
+**`integer`**, and lists `status` as **required**. The example payload shows
+`"status": 1`. Only `email`, `date`, and `PK` are strings.
+
+This bit us: `status` and `last_active` were both parsed with a string-only
+helper, so a required documented field was **silently discarded** on every
+refresh and surfaced as `null`. The test fixture supplied `status="1"` as a
+string, which matched the broken parser and hid the defect until a live check.
+Any other `/users` field added later must be checked for its declared type before
+the default string parse is applied.
+
+The published schema does **not** define what the `status` codes mean, so the
+value is carried verbatim as an integer and never turned into a label or exposed
+to an LLM surface as a bare number.
+
 Implementation guidance:
 
 - `stats_endpoint` should be retained as meaningful instance metadata
-- `last_active` is useful for diagnostics and possibly instance metadata, but should not be treated as a critical dependency
+- `last_active` is a Unix epoch (integer) and is currently parsed but not consumed by any entity or payload
+- `status` is kept on the Status sensor attribute only, where a human can compare it to the Control D dashboard
 
 ### Billing metadata
 

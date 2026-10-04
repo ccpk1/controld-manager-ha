@@ -35,7 +35,10 @@ def _registry() -> ControlDRegistry:
             instance_id="user-1",
             account_pk="pk-1",
             stats_endpoint="america",
-            status="1",
+            # GET /users documents both of these as integers. A string here
+            # would hide the type bug that made them parse as null live.
+            status=1,
+            last_active=1669595046,
         ),
         account_analytics=ControlDAccountAnalytics(
             total_queries=1000,
@@ -123,7 +126,9 @@ def test_overview_account_counts_match_the_registry_accessors() -> None:
     )
     assert account["router_client_count"] == registry.router_client_count == 4
     assert account["region"] == "america"
-    assert account["status"] == "1"
+    # `status` is deliberately not exposed to a model: it is a bare integer
+    # whose code meanings the vendor schema does not define.
+    assert "status" not in account
 
 
 def test_overview_profile_rows_match_the_entity_accessors() -> None:

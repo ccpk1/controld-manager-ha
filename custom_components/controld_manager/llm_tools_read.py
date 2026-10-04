@@ -135,7 +135,11 @@ class GetAccountOverviewTool(_ControlDReadTool):
         "exist for endpoints that have analytics logging enabled, and the "
         "reported window is whatever the account returns, which may not be an "
         "exact round hour. This tool reads no per-query detail; use "
-        "`get_activity_log` for that."
+        "`get_activity_log` for that.\n"
+        "\n"
+        "Quote the account `endpoint_count`, not a sum of the profile rows. An "
+        "endpoint attached to more than one profile is counted under each of "
+        "them, so those rows deliberately total more than the account figure."
     )
     parameters = vol.Schema({})
     _service = SERVICE_GET_ACCOUNT_OVERVIEW

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -163,6 +163,69 @@ async def test_client_reads_org_stats_endpoint_from_nested_org_payload() -> None
     assert identity.instance_id == "user-123"
     assert identity.account_pk == "pk-1"
     assert identity.stats_endpoint == "us-east1-org01"
+
+
+async def test_client_parses_the_integer_user_fields() -> None:
+    """`status` and `last_active` are integers on GET /users, not strings.
+
+    They were parsed with a string-only helper, so both were silently null in
+    production while the test fixture supplied a string and hid it.
+    """
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    with patch.object(
+        client,
+        "async_get_user",
+        AsyncMock(
+            return_value={
+                "id": "user-123",
+                "PK": "pk-1",
+                "status": 1,
+                "last_active": 1669595046,
+            }
+        ),
+    ):
+        identity = await client.async_get_instance_identity()
+
+    assert identity.status == 1
+    assert identity.last_active == 1669595046
+
+
+async def test_client_accepts_numeric_strings_for_the_integer_user_fields() -> None:
+    """A stringified number still parses, so a transport change cannot drop it."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    with patch.object(
+        client,
+        "async_get_user",
+        AsyncMock(
+            return_value={
+                "id": "user-123",
+                "PK": "pk-1",
+                "status": "1",
+                "last_active": "1669595046",
+            }
+        ),
+    ):
+        identity = await client.async_get_instance_identity()
+
+    assert identity.status == 1
+    assert identity.last_active == 1669595046
+
+
+@pytest.mark.parametrize("value", [None, True, False, "", "not-a-number", 1.5])
+async def test_client_treats_non_integer_user_fields_as_absent(value: Any) -> None:
+    """Anything that is not the documented integer type is reported as absent."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    with patch.object(
+        client,
+        "async_get_user",
+        AsyncMock(return_value={"id": "user-123", "PK": "pk-1", "status": value}),
+    ):
+        identity = await client.async_get_instance_identity()
+
+    assert identity.status is None
 
 
 async def test_client_fetches_account_analytics() -> None:

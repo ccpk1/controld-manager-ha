@@ -340,7 +340,10 @@ class IntegrationManager(BaseManager):
             "config_entry_id": config_entry_id,
             "account": {
                 "region": registry.user.stats_endpoint if registry.user else None,
-                "status": registry.user.status if registry.user else None,
+                # `status` is intentionally absent. Control D returns it as a
+                # bare integer whose code meanings the published schema does not
+                # define, and an unexplained number invites a model to invent
+                # meaning. It stays available on the Status sensor attribute.
                 "profile_count": registry.profile_count,
                 "endpoint_count": registry.endpoint_count,
                 "discovered_endpoint_count": registry.discovered_endpoint_count,
@@ -1348,13 +1351,29 @@ class IntegrationManager(BaseManager):
         return ControlDUser(
             instance_id=instance_id,
             account_pk=account_pk,
-            last_active=IntegrationManager._optional_string(
+            last_active=IntegrationManager._optional_int_value(
                 user_payload.get("last_active")
             ),
             stats_endpoint=IntegrationManager._extract_stats_endpoint(user_payload),
-            status=IntegrationManager._optional_string(user_payload.get("status")),
+            status=IntegrationManager._optional_int_value(user_payload.get("status")),
             safe_countries=safe_countries,
         )
+
+    @staticmethod
+    def _optional_int_value(value: Any) -> int | None:
+        """Return an optional integer field from a payload.
+
+        Control D returns several documented fields as integers even when their
+        names read like strings, so a string-only parse silently drops them.
+        Booleans are rejected because they are not the documented type.
+        """
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.lstrip("-").isdigit():
+            return int(value)
+        return None
 
     @staticmethod
     def _extract_stats_endpoint(payload: dict[str, Any]) -> str | None:

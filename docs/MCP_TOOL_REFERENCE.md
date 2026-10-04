@@ -188,10 +188,9 @@ come before controls.
 
 - **Answers** — "What is the overall state of my account, and is anything being blocked?"
 - **When to use** — first, to size the account and see which profile is doing what.
-- **When not to use** — for per-query detail (use `get_activity_log`) or for what
-  is blocked (use `get_top_blocked_domains` / `get_block_breakdown`).
+- **When not to use** — for per-query detail (use `get_activity_log`).
 - **Inputs** — none. The tool binds to its own config entry.
-- **Returns** — `result.account` with `region`, `status`, `profile_count`,
+- **Returns** — `result.account` with `region`, `profile_count`,
   `endpoint_count`, `discovered_endpoint_count`, `router_client_count`, and an
   `analytics` block (`total_queries`, `blocked_queries`, `bypassed_queries`,
   `redirected_queries`, `blocked_queries_ratio`, `window_start`, `window_end`),
@@ -201,6 +200,12 @@ come before controls.
   `ControlDRegistry` accessors the account and profile entities read, so the tool
   and the sensors always agree. `endpoint_count` is the protected count
   (`discovered + router clients`), not the raw `/devices` row count.
+- **The per-profile `endpoint_count` rows do not sum to the account total.** An
+  endpoint attached to more than one profile (Control D's `profile` plus
+  `profile2`) is counted under each attachment, so the rows intentionally total
+  more than `account.endpoint_count`. Both figures are correct; the account one
+  is the count of distinct protected endpoints. Callers must quote the account
+  figure rather than adding the rows up.
 - **Availability** — every enabled tier, including Summary.
 - **Reversibility** — read-only; `undo` is `null`.
 - **Annotations** — `read_only=True`, `destructive=False`, `idempotent=True`,

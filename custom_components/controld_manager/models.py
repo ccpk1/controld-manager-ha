@@ -94,9 +94,13 @@ class ControlDUser:
     instance_id: str
     account_pk: str
     display_name: str | None = None
-    last_active: str | None = None
+    # Control D returns both of these as integers on GET /users, despite the
+    # names reading like strings. `status` is a required field whose code
+    # meanings the published schema does not define, so it is carried verbatim
+    # and never turned into a label.
+    last_active: int | None = None
     stats_endpoint: str | None = None
-    status: str | None = None
+    status: int | None = None
     safe_countries: tuple[str, ...] = ()
 
 

@@ -67,9 +67,9 @@ class ControlDAPIClient:
                 or self._optional_string(user_payload.get("email"))
                 or self._optional_string(user_payload.get("username"))
             ),
-            last_active=self._optional_string(user_payload.get("last_active")),
+            last_active=self._optional_int_value(user_payload.get("last_active")),
             stats_endpoint=self._extract_stats_endpoint(user_payload),
-            status=self._optional_string(user_payload.get("status")),
+            status=self._optional_int_value(user_payload.get("status")),
             safe_countries=safe_countries,
         )
 
@@ -928,6 +928,22 @@ class ControlDAPIClient:
     def _optional_string(value: Any) -> str | None:
         """Return an optional string field from a payload."""
         return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def _optional_int_value(value: Any) -> int | None:
+        """Return an optional integer field from a payload.
+
+        Control D returns several documented fields as integers even when their
+        names read like strings, so a string-only parse silently drops them.
+        Booleans are rejected because they are not the documented type.
+        """
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.lstrip("-").isdigit():
+            return int(value)
+        return None
 
     @staticmethod
     def _optional_int(value: Any, default: int) -> int:
