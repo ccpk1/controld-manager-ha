@@ -134,10 +134,13 @@ if every addressed target is already in the requested state, the service is not
 called at all and `changed` is `false`. Tools may read the registry for exactly
 this purpose (see the LLM tool layer rules in `ARCHITECTURE.md`); all writes still
 go through services. When the state cannot be read, the write proceeds rather than
-being skipped.
+being skipped, and the result carries a warning (see below) because the comparison
+that supports `changed` and `undo` could not be made.
 
 - `status` — `applied` | `already_in_state` | `failed`.
-- `changed` — whether anything actually changed.
+- `changed` — whether anything actually changed. When the prior state could not
+  be read this reports that the action was **sent**, not that the value differs,
+  and the result says so in `warnings`.
 - `target` — the **resolved** object acted on (id + name).
 - `before` / `after` — `before` is the state observed before the action; `after`
   is the state the action **requested**, not a fresh reading.
@@ -148,7 +151,9 @@ being skipped.
   configured tier does not permit it. The undo restores the value read **before**
   the write, so it is `null` for `already_in_state` (nothing changed) and for the
   tools that cannot read their own previous value.
-- `warnings` — degradations or side effects.
+- `warnings` — degradations or side effects. A write whose prior state could not
+  be read returns one warning saying so, so `changed` and a missing `undo` are
+  never mistaken for a confirmed account of what happened.
 
 `already_in_state` applies to **idempotent** tools only. `create_rule` is not
 idempotent and can never report it.

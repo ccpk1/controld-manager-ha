@@ -19,6 +19,7 @@ from homeassistant.core import Context
 from homeassistant.helpers import llm
 
 from custom_components.controld_manager.llm_tools_control import (
+    CreateRuleTool,
     DisableProfileTool,
     SetFilterStateTool,
 )
@@ -212,3 +213,79 @@ async def test_a_call_without_a_profile_scope_is_unchanged(
 
     sent = service_call.await_args.args[2]
     assert "profile_id" not in sent
+
+
+async def test_an_unreadable_precheck_is_reported_as_a_warning() -> None:
+    """A write that could not read the prior state must say so.
+
+    Observed live: addressing a profile by a value the registry cannot resolve
+    made the pre-check return nothing, so the tool reported `changed: true` when
+    the filter was already disabled and nothing actually changed.
+    """
+    service_call = AsyncMock()
+    tool = SetFilterStateTool(entry_id="e-1")
+    # A registry whose profiles are keyed differently, so nothing resolves.
+    tool._registry = lambda _hass: _Registry(profiles={})  # type: ignore[method-assign]
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={
+                "filter_id": "games",
+                "profile_id": "unknown-profile",
+                "enabled": False,
+            },
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["before"] is None
+    assert result.data["undo"] is None
+    assert len(result.data["warnings"]) == 1
+    assert "could not be read" in result.data["warnings"][0]
+    service_call.assert_called_once()
+
+
+async def test_a_resolved_write_carries_no_warning() -> None:
+    """When the prior state is readable the result is fully qualified."""
+    service_call = AsyncMock()
+    tool = SetFilterStateTool(entry_id="e-1")
+    registry = _Registry(
+        profiles={_PROFILE_PK: SimpleNamespace(name="Developer Testing")},
+        filters_by_profile={_PROFILE_PK: {"ads": SimpleNamespace(enabled=True)}},
+    )
+    tool._registry = lambda _hass: registry  # type: ignore[method-assign]
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"filter_id": "ads", "profile_id": _PROFILE_PK, "enabled": False},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    assert result.data["before"] == {"enabled": [True]}
+    assert result.data["undo"] is not None
+    assert result.data["warnings"] == []
+
+
+async def test_create_rule_is_not_warned_for_having_no_precheck() -> None:
+    """`create_rule` cannot read a prior state by design, so it must not warn."""
+    service_call = AsyncMock()
+    tool = CreateRuleTool(entry_id="e-1")
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"hostname": "example.com"},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    assert result.data["warnings"] == []
+    assert result.data["undo"] is not None

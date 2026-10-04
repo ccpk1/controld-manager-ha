@@ -189,6 +189,16 @@ class _ControlDControlTool(llm.Tool):
 
     _service: str
 
+    # Whether a pre-write state can be read at all. `create_rule` cannot: it is
+    # additive, so there is no previous state to compare against.
+    _has_precheck: bool = True
+
+    _UNREADABLE_STATE_WARNING: Final = (
+        "The previous state could not be read, so `changed` reports that the "
+        "action was sent, not that the value differs. `undo` is not available "
+        "for the same reason."
+    )
+
     def __init__(self, *, entry_id: str) -> None:
         """Bind the tool to the config entry it was registered for."""
         self._entry_id = entry_id
@@ -328,8 +338,23 @@ class _ControlDControlTool(llm.Tool):
                 before=before,
                 after=self._after(args),
                 undo=undo,
+                warnings=self._warnings(before, undo),
             )
         )
+
+    def _warnings(
+        self, before: dict[str, Any] | None, undo: list[str] | None
+    ) -> list[str]:
+        """Return warnings about what this action could and could not report.
+
+        A tool that could not read the pre-write state cannot honestly claim the
+        value changed, nor name the call that reverses it. Reporting the action
+        as applied is still correct, so the caveat is carried as a warning rather
+        than as a failure.
+        """
+        if self._has_precheck and before is None and undo is None:
+            return [self._UNREADABLE_STATE_WARNING]
+        return []
 
 
 class SetFilterStateTool(_ControlDControlTool):
@@ -1173,6 +1198,7 @@ class CreateRuleTool(_ControlDControlTool):
     )
     _service = SERVICE_CREATE_RULE
     annotations = _NON_IDEMPOTENT_ANNOTATIONS
+    _has_precheck = False
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the created rule target."""
