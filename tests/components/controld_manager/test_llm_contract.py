@@ -53,6 +53,7 @@ _CONTROL_TOOLS: Final = frozenset(
     {
         "set_filter_state",
         "set_service_state",
+        "delete_service",
         "set_option_state",
         "set_rule_state",
         "set_default_rule_state",
@@ -238,6 +239,22 @@ async def test_control_tool_annotations_are_accurate(hass: HomeAssistant) -> Non
     assert by_name[f"{DOMAIN}__delete_rule"].annotations.destructive is True
     for name in _CONTROL_TOOLS:
         assert by_name[f"{DOMAIN}__{name}"].annotations.destructive is False, name
+
+
+async def test_delete_service_is_not_a_destructive_tool(hass: HomeAssistant) -> None:
+    """Removing a service is reversible, so it must not claim destructiveness.
+
+    The row is removed, but configuring the service again restores it, and the
+    tool names that call as its undo. It therefore belongs at the control tier
+    alongside the other reversible tools, not behind the destructive gate.
+    """
+    tools = await _tools(hass, LLM_TOOL_MODE_READ_AND_CONTROL)
+    by_name = {tool.name: tool for tool in tools}
+    tool = by_name[f"{DOMAIN}__delete_service"]
+
+    assert tool.annotations.destructive is False
+    assert tool.annotations.read_only is False
+    assert tool.annotations.idempotent is True
 
 
 async def test_irreversible_tools_never_claim_an_undo(

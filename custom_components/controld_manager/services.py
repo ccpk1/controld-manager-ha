@@ -41,6 +41,7 @@ from .const import (
     SERVICE_CLEAR_CLIENT_ALIAS,
     SERVICE_CREATE_RULE,
     SERVICE_DELETE_RULE,
+    SERVICE_DELETE_SERVICE,
     SERVICE_DISABLE_PROFILE,
     SERVICE_ENABLE_PROFILE,
     SERVICE_FIELD_ALIAS,
@@ -123,6 +124,7 @@ from .const import (
     TRANS_KEY_DEFAULT_RULE_REDIRECT_TARGET_INVALID,
     TRANS_KEY_DEFAULT_RULE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE,
     TRANS_KEY_DELETE_RULES_FAILED,
+    TRANS_KEY_DELETE_SERVICES_FAILED,
     TRANS_KEY_DISABLE_PROFILES_FAILED,
     TRANS_KEY_ENABLE_PROFILES_FAILED,
     TRANS_KEY_ENDPOINT_NAME_INVALID,
@@ -317,6 +319,14 @@ SET_SERVICE_STATE_SERVICE_SCHEMA = vol.Schema(
         **_SERVICE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Required(SERVICE_FIELD_MODE): vol.In(service_mode_labels()),
         **_RULE_REDIRECT_SERVICE_FIELDS,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+DELETE_SERVICE_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        **_SERVICE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
@@ -786,6 +796,21 @@ async def async_register_services(hass: HomeAssistant) -> None:
         ) as err:
             raise _ha_error(TRANS_KEY_SET_SERVICES_FAILED) from err
 
+    async def async_handle_delete_service(call: ServiceCall) -> None:
+        """Remove one or more configured Control D service rows."""
+        resolved_target = await _resolve_service_service_target(hass, call)
+        try:
+            profile_manager = resolved_target.entry.runtime_data.managers.profile
+            await profile_manager.async_delete_services(
+                resolved_target.profile_services,
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_DELETE_SERVICES_FAILED) from err
+
     async def async_handle_set_option_state(call: ServiceCall) -> None:
         """Set one or more targeted Control D options across selected profiles."""
         enabled = call.data.get(SERVICE_FIELD_ENABLED)
@@ -1007,6 +1032,14 @@ async def async_register_services(hass: HomeAssistant) -> None:
             SERVICE_SET_SERVICE_STATE,
             async_handle_set_service_state,
             schema=SET_SERVICE_STATE_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_DELETE_SERVICE):
+        async_register_admin_service(
+            hass,
+            DOMAIN,
+            SERVICE_DELETE_SERVICE,
+            async_handle_delete_service,
+            schema=DELETE_SERVICE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_OPTION_STATE):
         async_register_admin_service(

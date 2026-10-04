@@ -532,6 +532,7 @@ The integration registers these Home Assistant services:
 
 - `controld_manager.create_rule`
 - `controld_manager.delete_rule`
+- `controld_manager.delete_service`
 - `controld_manager.disable_profile`
 - `controld_manager.enable_profile`
 - `controld_manager.get_account_overview`
@@ -645,6 +646,26 @@ Manual examples:
 	`config_entry_id: "a1b2c3d4e5f6g7h8i9j0"`
 	`endpoint_name: ["Cabin Tablet"]`
 	`mode: "Some"`
+
+### Delete service
+
+`controld_manager.delete_service` removes a configured service from a profile
+entirely, so the profile no longer carries a row for it.
+
+This is **not** the same as setting the service to Off with
+`controld_manager.set_service_state`:
+
+- **Off** switches the service off but leaves it configured on the profile, and
+	you can switch it back on at any time.
+- **Delete** removes the configuration, so using the service again means adding
+	it back.
+
+Prefer Off when you only want to stop a service applying, because it keeps the
+configuration. Delete only when the service should not remain configured.
+
+Targeting follows the same rules as the other services: select a profile by ID or
+name, and a service by ID or name. Deleting is reversible, because setting the
+service again on the profile adds it back.
 
 ### Enable and disable profile services
 

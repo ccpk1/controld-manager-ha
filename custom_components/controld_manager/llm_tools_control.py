@@ -25,6 +25,7 @@ from .const import (
     SERVICE_CLEAR_CLIENT_ALIAS,
     SERVICE_CREATE_RULE,
     SERVICE_DELETE_RULE,
+    SERVICE_DELETE_SERVICE,
     SERVICE_DISABLE_PROFILE,
     SERVICE_ENABLE_PROFILE,
     SERVICE_FIELD_ALIAS,
@@ -634,6 +635,115 @@ class SetServiceStateTool(_ControlDControlTool):
                 f"{format_tool_name('set_service_state')}("
                 f"service_id={service_pk!r}, profile_id={profile_pk!r}, "
                 f"mode={label!r})"
+            )
+        return calls or None
+
+
+class DeleteServiceTool(_ControlDControlTool):
+    """Remove a configured service from a profile."""
+
+    name = format_tool_name("delete_service")
+    title = "Delete service"
+    description = (
+        "Remove one or more configured services from a profile entirely, so the "
+        "profile no longer carries a row for them.\n"
+        "\n"
+        "This is **not** the same as setting a service to `'Off'`. `Off` leaves "
+        "the service on the profile switched off, and it can be switched back on "
+        "at any time. Deleting removes the row, and re-adding it means "
+        "configuring the service again.\n"
+        "\n"
+        "Prefer `set_service_state` with `'Off'` when you only want to stop a "
+        "service applying — that is almost always the intent, and it preserves "
+        "the configuration. Delete only when the service should not remain "
+        "configured on the profile at all.\n"
+        "\n"
+        "This is reversible: the `undo` field names the call that configures the "
+        "service again with the mode it had. It is not a destructive tool, "
+        "because the service can be re-added."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Optional(
+                SERVICE_FIELD_SERVICE_ID,
+                description=(
+                    "Optional. A service id or list of ids (from get_catalog, "
+                    "catalog_type 'services'). Provide this or service_name."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_SERVICE_NAME,
+                description=(
+                    "Optional. A service name or list of names (from "
+                    "get_catalog). Provide this or service_id."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_PROFILE_ID, description=_PROFILE_ID_DESCRIPTION
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_PROFILE_NAME, description=_PROFILE_NAME_DESCRIPTION
+            ): str,
+        }
+    )
+    _service = SERVICE_DELETE_SERVICE
+
+    def _pairs(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> tuple[tuple[str, str], ...]:
+        """Return the (profile, service) rows this call addresses."""
+        registry = self._registry(hass)
+        if registry is None:
+            return ()
+        return _resolve_row_pks(
+            registry.services_by_profile,
+            _resolve_profile_pks(registry, args),
+            id_field=SERVICE_FIELD_SERVICE_ID,
+            name_field=SERVICE_FIELD_SERVICE_NAME,
+            args=args,
+            name_attr="name",
+        )
+
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return the modes the addressed services currently hold."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        modes = [
+            SERVICE_MODE_LABELS.get(
+                registry.services_by_profile[profile_pk][service_pk].current_mode
+            )
+            for profile_pk, service_pk in self._pairs(hass, args)
+        ]
+        modes = [mode for mode in modes if mode is not None]
+        return {"mode": modes} if modes else None
+
+    def _after(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return the removed state."""
+        del args
+        return {"configured": False}
+
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
+        """Return one call per service, configuring it again as it was.
+
+        Deletion is reversible by configuring the service again, so this is not a
+        destructive tool even though the row is removed.
+        """
+        registry = self._registry(hass)
+        pairs = self._pairs(hass, args)
+        if registry is None or not pairs:
+            return None
+        calls: list[str] = []
+        for profile_pk, service_pk in pairs:
+            label = SERVICE_MODE_LABELS.get(
+                registry.services_by_profile[profile_pk][service_pk].current_mode
+            )
+            calls.append(
+                f"{format_tool_name('set_service_state')}("
+                f"service_id={service_pk!r}, profile_id={profile_pk!r}, "
+                f"mode={label or 'Blocked'!r})"
             )
         return calls or None
 
@@ -1697,6 +1807,7 @@ def build_control_tools(*, entry_id: str, include_destructive: bool) -> list[llm
     tools: list[llm.Tool] = [
         SetFilterStateTool(entry_id=entry_id),
         SetServiceStateTool(entry_id=entry_id),
+        DeleteServiceTool(entry_id=entry_id),
         SetOptionStateTool(entry_id=entry_id),
         SetRuleStateTool(entry_id=entry_id),
         SetDefaultRuleStateTool(entry_id=entry_id),

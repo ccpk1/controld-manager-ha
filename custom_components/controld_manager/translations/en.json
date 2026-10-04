@@ -221,6 +221,9 @@
     "delete_rules_failed": {
       "message": "Unable to delete the selected Control D rules."
     },
+    "delete_services_failed": {
+      "message": "Unable to delete the targeted Control D services"
+    },
     "set_default_rules_failed": {
       "message": "Unable to update the selected Control D default rule settings."
     },
@@ -698,6 +701,36 @@
         "config_entry_name": {
           "name": "Configuration Entry name",
           "description": "Optional. Only needed when more than one Control D integration is loaded and you are not using Configuration Entry ID."
+        }
+      }
+    },
+    "delete_service": {
+      "name": "Delete service",
+      "description": "Remove one or more configured Control D services from the selected profiles. This unconfigures the row, so the service no longer appears on the profile. It is reversible by setting the service again with the Set service state service.",
+      "fields": {
+        "profile_id": {
+          "name": "Select a profile",
+          "description": "Required unless you provide Profile names. Select one or more managed Control D profiles by ID. If Profile IDs and Profile names are both provided, Profile IDs take precedence."
+        },
+        "profile_name": {
+          "name": "Profile names",
+          "description": "Required unless you select a profile by ID. Enter one or more managed Control D profile names, separated by commas, such as Primary,Kids."
+        },
+        "service_id": {
+          "name": "Service IDs",
+          "description": "Required unless you provide Service names. Enter one or more raw Control D service IDs, such as amazonmusic. If Service IDs and Service names are both provided, Service IDs take precedence."
+        },
+        "service_name": {
+          "name": "Service names",
+          "description": "Required unless you provide Service IDs. Enter one or more user-facing Control D service names, separated by commas, such as Amazon Music."
+        },
+        "config_entry_id": {
+          "name": "Configuration entry",
+          "description": "Optional. Select the Control D account when more than one is configured. If both Configuration entry and Configuration entry name are provided, Configuration entry takes precedence."
+        },
+        "config_entry_name": {
+          "name": "Configuration entry name",
+          "description": "Optional. Enter the Control D account name when more than one is configured."
         }
       }
     },

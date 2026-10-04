@@ -2,7 +2,7 @@ rules:
   # Bronze
   action-setup:
     status: done
-    comment: All services are documented in docs/USER_GUIDE.md. The 13 services that change Control D policy register with async_register_admin_service, so they require an administrator; the 5 read-only response services do not.
+    comment: All services are documented in docs/USER_GUIDE.md. The 14 services that change Control D policy register with async_register_admin_service, so they require an administrator; the 5 read-only response services do not.
   appropriate-polling:
     status: done
     comment: The current implementation uses one bounded configuration-sync poller and does not expose inactive polling paths.

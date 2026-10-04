@@ -17,6 +17,7 @@ from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import llm
 
 from custom_components.controld_manager.llm_tools_control import (
+    DeleteServiceTool,
     DisableProfileTool,
     EnableProfileTool,
     SetDefaultRuleStateTool,
@@ -370,6 +371,54 @@ async def test_a_service_before_state_uses_the_same_vocabulary_as_after() -> Non
     # The registry row is action_do=0, i.e. blocked, reported as its label.
     assert result.data["before"] == {"mode": ["Blocked"]}
     assert result.data["after"] == {"mode": "Bypassed"}
+
+
+async def test_deleting_a_service_names_the_call_that_re_adds_it() -> None:
+    """A service delete is reversible, so it must offer a re-add undo.
+
+    Removing the row is not the same as the destructive rule delete: the service
+    can be configured again, so the tool belongs at the control tier and must
+    name that call.
+    """
+    service_call = AsyncMock()
+    tool = _tool_with_registry(DeleteServiceTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"service_id": "instagram", "profile_id": "p-1"},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    # The registry row is action_do=0, so re-adding restores Blocked.
+    assert result.data["undo"] == [
+        "controld_manager__set_service_state(service_id='instagram', "
+        "profile_id='p-1', mode='Blocked')"
+    ]
+    assert result.data["after"] == {"configured": False}
+    service_call.assert_called_once()
+
+
+async def test_deleting_an_unconfigured_service_carries_no_undo() -> None:
+    """With nothing to read, the tool must not invent an undo or a change."""
+    service_call = AsyncMock()
+    tool = _tool_with_registry(DeleteServiceTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"service_id": "not-configured", "profile_id": "p-1"},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["before"] is None
+    assert result.data["undo"] is None
+    assert len(result.data["warnings"]) == 1
     """Enabling a profile that is not paused reports already_in_state."""
     service_call = AsyncMock()
     tool = _tool_with_registry(EnableProfileTool(entry_id="e-1"), _registry())

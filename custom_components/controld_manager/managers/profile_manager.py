@@ -584,6 +584,36 @@ class ProfileManager(BaseManager):
 
         self._schedule_runtime_refresh()
 
+    async def async_delete_services(
+        self,
+        profile_services: dict[str, frozenset[str]],
+    ) -> None:
+        """Remove one or more configured service rows from their profiles.
+
+        This unconfigures the row rather than switching it off, so the service no
+        longer appears on the profile at all. It is reversible: setting the
+        service again on the profile re-adds it.
+        """
+        targets: list[tuple[str, str]] = [
+            (profile_pk, service_pk)
+            for profile_pk, service_pks in profile_services.items()
+            for service_pk in service_pks
+        ]
+
+        await asyncio.gather(
+            *(
+                self.runtime.client.async_delete_profile_service(profile_pk, service_pk)
+                for profile_pk, service_pk in targets
+            )
+        )
+
+        for profile_pk, service_pk in targets:
+            self.runtime.registry.services_by_profile.get(profile_pk, {}).pop(
+                service_pk, None
+            )
+
+        self._schedule_runtime_refresh()
+
     async def async_set_profile_options_state(
         self,
         profile_options: dict[str, frozenset[str]],

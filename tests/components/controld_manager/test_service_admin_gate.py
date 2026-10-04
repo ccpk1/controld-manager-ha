@@ -34,6 +34,7 @@ _WRITE_PAYLOADS: dict[str, dict[str, Any]] = {
     "clear_client_alias": {"endpoint_mac": "AA:BB"},
     "create_rule": {"hostname": "example.com"},
     "delete_rule": {"rule_identity": "example.com"},
+    "delete_service": {"service_id": "missing"},
     "disable_profile": {},
     "enable_profile": {},
     "rename_endpoint": {"endpoint_id": "missing", "new_name": "Renamed"},

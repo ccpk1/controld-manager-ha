@@ -285,6 +285,7 @@ tiers:
 | --- | --- |
 | `set_filter_state` | Enable or disable a blocklist filter on a profile |
 | `set_service_state` | Set a service to blocked, bypassed, or redirected |
+| `delete_service` | Remove a configured service from a profile — reversible by re-adding it |
 | `set_option_state` | Enable, disable, or set a profile option |
 | `set_rule_state` | Enable, disable, or modify one custom rule |
 | `set_default_rule_state` | Set a profile's catch-all action |

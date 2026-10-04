@@ -656,6 +656,22 @@ class ControlDAPIClient:
             )
         )
 
+    async def async_delete_profile_service(
+        self,
+        profile_pk: str,
+        service_pk: str,
+    ) -> dict[str, Any] | None:
+        """Remove one profile service row using the unconfigure contract.
+
+        This is distinct from setting the service to `status: 0`, which only
+        switches the row off and leaves it on the profile.
+        """
+        return self._optional_body_mapping(
+            await self._async_request(
+                "DELETE", f"/profiles/{profile_pk}/services/{service_pk}"
+            )
+        )
+
     async def async_set_profile_rule(
         self,
         profile_pk: str,
