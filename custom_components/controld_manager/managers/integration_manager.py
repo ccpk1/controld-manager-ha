@@ -909,6 +909,10 @@ class IntegrationManager(BaseManager):
                         "option_type": option_row.option_type,
                         "entity_kind": option_row.entity_kind,
                         "current_value": option_row.current_select_option,
+                        # The accepted `value` labels, so a caller can pick a
+                        # supported one instead of guessing. Empty for a toggle,
+                        # which is set through `enabled` rather than `value`.
+                        "choices": [choice.label for choice in option_row.choices],
                     }
                 )
                 text_lines.append(f"{option_row.option_pk}, {option_row.title}")
