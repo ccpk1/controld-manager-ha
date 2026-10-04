@@ -22,12 +22,14 @@ from custom_components.controld_manager.llm_tools_control import (
     SetDefaultRuleStateTool,
     SetFilterStateTool,
     SetOptionStateTool,
+    SetServiceStateTool,
 )
 from custom_components.controld_manager.models import (
     ControlDDefaultRule,
     ControlDFilter,
     ControlDProfileOption,
     ControlDProfileSummary,
+    ControlDService,
 )
 
 
@@ -38,7 +40,23 @@ class _Registry:
     profiles: dict[str, Any] = field(default_factory=dict)
     filters_by_profile: dict[str, dict[str, Any]] = field(default_factory=dict)
     options_by_profile: dict[str, dict[str, Any]] = field(default_factory=dict)
+    services_by_profile: dict[str, dict[str, Any]] = field(default_factory=dict)
     default_rules_by_profile: dict[str, Any] = field(default_factory=dict)
+
+
+def _service(
+    pk: str, name: str, *, action_do: int, enabled: bool = True
+) -> ControlDService:
+    """Return one normalized service row."""
+    return ControlDService(
+        service_pk=pk,
+        name=name,
+        category_pk="video",
+        category_name="Video",
+        auto_exposed=True,
+        enabled=enabled,
+        action_do=action_do,
+    )
 
 
 def _filter(pk: str, name: str, *, enabled: bool) -> ControlDFilter:
@@ -77,6 +95,10 @@ def _registry() -> _Registry:
         },
         options_by_profile={
             "p-1": {"safesearch": _option("safesearch", "Safe Search", value="1")},
+            "p-2": {},
+        },
+        services_by_profile={
+            "p-1": {"instagram": _service("instagram", "Instagram", action_do=0)},
             "p-2": {},
         },
         default_rules_by_profile={
@@ -309,6 +331,60 @@ async def test_filter_precheck_across_an_explicit_profile(
 
     assert result.data["status"] == expected_status
     assert service_call.called is called
+
+
+async def test_service_precheck_accepts_the_display_label() -> None:
+    """A service already blocked, addressed with the label 'Blocked', is a no-op.
+
+    The schema offers display labels while `current_mode` is an internal key, so
+    the pre-check must normalize before comparing. Without that normalization
+    this test fails: the values never match, the write is issued anyway, and the
+    result wrongly claims a change.
+    """
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetServiceStateTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={
+                "service_id": "instagram",
+                "profile_id": "p-1",
+                "mode": "Blocked",
+            },
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "already_in_state"
+    service_call.assert_not_called()
+
+
+async def test_service_mode_schema_accepts_only_labels() -> None:
+    """The tool schema is label-only, which is why normalization is required.
+
+    The schema is deliberately not a mixed vocabulary: the caller must send the
+    friendly label, and the tool normalizes it internally. Asserting this keeps
+    the two vocabularies from being quietly merged.
+    """
+    service_call = AsyncMock()
+    tool = _tool_with_registry(SetServiceStateTool(entry_id="e-1"), _registry())
+
+    with pytest.raises(Exception):  # noqa: B017 - schema error type is not ValueError
+        await tool.async_call(
+            _hass(service_call),
+            llm.ToolInput(
+                tool_name=tool.name,
+                tool_args={
+                    "service_id": "instagram",
+                    "profile_id": "p-1",
+                    "mode": "blocked",
+                },
+            ),
+            _llm_context(),
+        )
+    service_call.assert_not_called()
 
 
 def test_changed_is_false_for_a_no_op_and_true_for_a_change(
