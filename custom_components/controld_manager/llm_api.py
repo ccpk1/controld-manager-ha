@@ -10,6 +10,7 @@ is equally hazardous for the same reason.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from homeassistant.config_entries import ConfigEntry
@@ -17,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
 
 from .const import (
+    CATALOG_TYPES,
     DOMAIN,
     LLM_TOOL_MODE_FULL,
     LLM_TOOL_MODE_OFF,
@@ -27,6 +29,8 @@ from .llm_tools_common import PROMPT
 from .llm_tools_control import build_control_tools
 from .llm_tools_read import build_account_overview_tools, build_read_tools
 from .models import ControlDManagerRuntime
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ControlDManagerAPI(llm.API):
@@ -84,6 +88,16 @@ class ControlDManagerAPI(llm.API):
                     include_destructive=self._mode == LLM_TOOL_MODE_FULL,
                 )
             )
+        # Logged once per build so the running process reports the surface it
+        # actually registered, including the catalog types it will accept. A
+        # client can only offer what this list contains, so this is the
+        # authoritative answer to "why was a value rejected".
+        LOGGER.debug(
+            "Built Control D LLM tools: mode=%s count=%d catalog_types=%s",
+            self._mode,
+            len(tools),
+            CATALOG_TYPES,
+        )
         return tools
 
 
