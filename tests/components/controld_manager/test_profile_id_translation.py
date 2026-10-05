@@ -19,6 +19,7 @@ from homeassistant.core import Context
 from homeassistant.helpers import llm
 
 from custom_components.controld_manager.llm_tools_control import (
+    CreateEndpointTool,
     CreateRuleTool,
     DisableProfileTool,
     SetFilterStateTool,
@@ -86,7 +87,9 @@ async def test_a_control_tool_sends_the_device_id_not_the_profile_pk() -> None:
     )
 
     sent = service_call.await_args.args[2]
-    assert sent["profile_id"] == [_PROFILE_DEVICE_ID]
+    # Scalar in, scalar out. The caller's shape is preserved so a service that
+    # requires exactly one profile (create_endpoint) is not handed a list.
+    assert sent["profile_id"] == _PROFILE_DEVICE_ID
 
 
 async def test_a_control_tool_translates_a_list_of_profile_ids() -> None:
@@ -120,7 +123,34 @@ async def test_an_unmapped_profile_pk_is_passed_through_unchanged() -> None:
     )
 
     sent = service_call.await_args.args[2]
-    assert sent["profile_id"] == [_PROFILE_PK]
+    assert sent["profile_id"] == _PROFILE_PK
+
+
+async def test_creating_an_endpoint_sends_a_single_profile_not_a_list() -> None:
+    """create_endpoint takes one profile as a string, so translation must not wrap.
+
+    The composed tool-to-service path is what failed here: the translation helper
+    returned a list while the create schema required a string, so every create
+    call was rejected with "value should be a string at 'profile_id'".
+    """
+    service_call = AsyncMock()
+    tool = CreateEndpointTool(entry_id="e-1")
+
+    await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={
+                "endpoint_name": "Kitchen Tablet",
+                "profile_id": _PROFILE_PK,
+            },
+        ),
+        _llm_context(),
+    )
+
+    sent = service_call.await_args.args[2]
+    assert sent["profile_id"] == _PROFILE_DEVICE_ID
+    assert isinstance(sent["profile_id"], str)
 
 
 async def test_the_precheck_still_reads_the_registry_by_profile_pk() -> None:

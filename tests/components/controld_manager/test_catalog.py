@@ -23,12 +23,27 @@ from custom_components.controld_manager.models import (
 _CONFIG_ENTRY_ID = "entry-1"
 
 
-class _Runtime:
-    """Minimal runtime stand-in carrying one registry."""
+class _FakeClient:
+    """Minimal client stand-in that answers the redirect-location read."""
 
-    def __init__(self, registry: ControlDRegistry) -> None:
-        """Store the registry the manager reads."""
+    def __init__(self, locations: list[dict[str, Any]]) -> None:
+        """Store the locations this client reports."""
+        self._locations = locations
+
+    async def async_get_redirect_locations(self) -> tuple[dict[str, Any], ...]:
+        """Return the stored locations."""
+        return tuple(self._locations)
+
+
+class _Runtime:
+    """Minimal runtime stand-in carrying one registry and an optional client."""
+
+    def __init__(
+        self, registry: ControlDRegistry, *, client: Any | None = None
+    ) -> None:
+        """Store the registry the manager reads, and the client it fetches with."""
         self.registry = registry
+        self.client = client
 
 
 def _manager(registry: ControlDRegistry) -> IntegrationManager:
@@ -128,3 +143,55 @@ async def test_catalog_response_is_json_serializable() -> None:
         limit=50,
     )
     json.dumps(response)
+
+
+def test_redirect_locations_is_an_exposed_catalog_type() -> None:
+    """Redirect destinations come from the catalog rather than being guessed."""
+    assert "redirect_locations" in CATALOG_TYPES
+
+
+async def test_redirect_location_catalog_names_each_usable_destination() -> None:
+    """Each row pairs the code a redirect takes with a human-readable label.
+
+    The code alone is unusable to a caller choosing a destination, and a name
+    alone is unusable as an argument, so both are reported.
+    """
+    manager = IntegrationManager.__new__(IntegrationManager)
+    manager.attach_runtime(  # type: ignore[arg-type]
+        _Runtime(
+            _registry(),
+            client=_FakeClient(
+                [
+                    {
+                        "PK": "TIA",
+                        "city": "Tirana",
+                        "country": "AL",
+                        "country_name": "Albania",
+                    },
+                    {
+                        "PK": "WFR",
+                        "city": "Troll",
+                        "country": "AQ",
+                        "country_name": "Antarctica",
+                    },
+                    # No code means nothing to redirect to, so it is skipped.
+                    {"city": "Nowhere", "country_name": "Atlantis"},
+                ]
+            ),
+        )
+    )
+
+    response = await manager.async_build_catalog_response(
+        config_entry_id=_CONFIG_ENTRY_ID,
+        catalog_type="redirect_locations",
+        profile_pks=_PROFILES,
+        limit=50,
+    )
+
+    items: Any = response["items"]
+    assert response["item_count"] == 2
+    assert [row["location_code"] for row in items] == ["TIA", "WFR"]
+    assert items[0]["label"] == "Tirana, Albania"
+    assert items[0]["country_name"] == "Albania"
+    # The text block is what a model can copy a code from.
+    assert "TIA, Tirana, Albania" in response["text"]

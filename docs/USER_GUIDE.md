@@ -540,7 +540,10 @@ The integration registers these Home Assistant services:
 - `controld_manager.enable_profile`
 - `controld_manager.get_account_overview`
 - `controld_manager.get_activity_log`
-- `controld_manager.get_catalog`
+- `controld_manager.get_catalog` (its `catalog_type` accepts `filters`,
+`services`, `rules`, `profile_options`, `default_rule`, and
+`redirect_locations`; the last is account-wide and lists the redirect
+destinations a redirect rule or service may target)
 - `controld_manager.get_inventory`
 - `controld_manager.set_client_alias`
 - `controld_manager.clear_client_alias`

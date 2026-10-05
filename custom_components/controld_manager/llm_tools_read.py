@@ -527,6 +527,11 @@ class GetCatalogTool(_ControlDReadTool):
         "- `profile_options` — options such as AI Malware, Safe Search, and "
         "Restricted YouTube, with their current value.\n"
         "- `default_rule` — each profile's catch-all action.\n"
+        "- `redirect_locations` — the account's usable redirect destinations, "
+        "each with the 3-letter code a redirect's `redirect_target` takes plus "
+        "its city and country. This one is account-wide and ignores "
+        "`profile_id`, because the location set is the same for every profile; "
+        "it is what makes a redirect choosable instead of guessed.\n"
         "\n"
         "Scope it with `profile_id`; without one it returns every managed "
         "profile, which is usually more than you need. The service catalog alone "
@@ -539,7 +544,7 @@ class GetCatalogTool(_ControlDReadTool):
                 SERVICE_FIELD_CATALOG_TYPE,
                 description=(
                     "Required. One of 'filters', 'services', 'rules', "
-                    "'profile_options', or 'default_rule'."
+                    "'profile_options', 'default_rule', or 'redirect_locations'."
                 ),
             ): vol.In(CATALOG_TYPES),
             vol.Optional(

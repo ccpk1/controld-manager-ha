@@ -312,6 +312,8 @@ class IntegrationManager(BaseManager):
             items, text = await self._async_build_rule_catalog(profile_pks)
         elif catalog_type == "default_rule":
             items, text = self._build_default_rule_catalog(profile_pks)
+        elif catalog_type == "redirect_locations":
+            items, text = await self._async_build_redirect_location_catalog()
         else:
             items, text = self._build_profile_option_catalog(profile_pks)
 
@@ -811,6 +813,42 @@ class IntegrationManager(BaseManager):
             )
             for profile_pk, detail in zip(profile_pks, details, strict=True)
         }
+
+    async def _async_build_redirect_location_catalog(
+        self,
+    ) -> tuple[list[JsonValueType], str]:
+        """Build the redirect-location catalog items and copyable text.
+
+        Account-wide rather than profile-scoped: the usable location set is the
+        same whichever profile is being edited, so this is the one catalog that
+        ignores `profile_pks`.
+        """
+        locations = await self.runtime.client.async_get_redirect_locations()
+        items: list[JsonValueType] = []
+        lines: list[str] = []
+        for row in locations:
+            code = row.get("PK")
+            if not isinstance(code, str) or not code:
+                continue
+            city = row.get("city")
+            country_name = row.get("country_name")
+            label = (
+                ", ".join(
+                    part for part in (city, country_name) if isinstance(part, str)
+                )
+                or code
+            )
+            items.append(
+                {
+                    "location_code": code,
+                    "city": city,
+                    "country": row.get("country"),
+                    "country_name": country_name,
+                    "label": label,
+                }
+            )
+            lines.append(f"{code}, {label}")
+        return items, "\n".join(lines)
 
     async def _async_build_service_catalog(
         self, profile_pks: frozenset[str]

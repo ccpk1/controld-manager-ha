@@ -545,6 +545,31 @@ account, so they are optional rather than guaranteed: `desc`, `restricted`,
 `profile2` (11 of 19), `parent_device` (11 of 19), `clients` (7 of 19), `ddns`,
 `ddns_ext`, `legacy_ipv4`.
 
+### Redirect destinations come from `GET /proxies`
+
+A redirect rule, service, or default rule takes a `via`/`redirect_target` that must
+be a location the account can actually use. The list is `GET /proxies`, and it is
+account-wide rather than profile-scoped.
+
+Observed on 2026-10-05:
+
+- `proxies`: **107** entries, each with a unique 3-letter `PK` (the value a
+  redirect takes), plus `city`, `country`, `country_name`, `gps_lat`, `gps_long`,
+  and a `uid` such as `Albania:Tirana`
+- `countries`: **247** entries pairing `country` and `country_name`, which is a
+  lookup helper rather than the list itself
+- the `PK` is unique across all 107, so it is a safe argument, but it is opaque:
+  `TIA` and `WFR` are not choosable without their city and country
+
+Implementation consequence:
+
+- expose both halves, because neither is sufficient alone: the `PK` is the
+  argument and the city/country is what makes it choosable
+- this closes D43. It is reachable as `get_catalog` with
+  `catalog_type: 'redirect_locations'`, which reuses the existing catalog
+  contract (limit, truncation, copyable text) rather than adding a tool
+- the response is not profile-scoped, so `profile_id` is ignored for this type
+
 ### Duplicate endpoint names are a real problem
 
 Display names are not safe identifiers.

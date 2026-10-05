@@ -484,6 +484,11 @@ strictly better than exposing a surface that cannot be drilled into.
 `current_value`. There is deliberately **no separate policy tool**, because it
 would be a re-skin of this one.
 
+`catalog_type: 'redirect_locations'` is the one type that is **not**
+profile-scoped: it returns the account's 107 usable redirect destinations, each
+with the 3-letter code a redirect takes (`PK`) plus its city and country. Use it
+to choose a `redirect_target` instead of guessing a region code.
+
 ### Group 6 — Control
 
 Reversible or additive actions, registered in the **Read and control** and **Full**

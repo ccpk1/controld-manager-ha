@@ -336,13 +336,15 @@ class _ControlDControlTool(llm.Tool):
         if device_manager is None:
             return args
         mapping = device_manager.profile_device_ids
-        return {
-            **args,
-            SERVICE_FIELD_PROFILE_ID: [
-                mapping.get(profile_pk, profile_pk)
-                for profile_pk in as_list(raw_profile_ids)
-            ],
-        }
+        # The caller's shape is preserved. A profile-scoped service accepts a
+        # list, but `create_endpoint` takes exactly one profile as a string, so
+        # wrapping a scalar in a list would fail its schema.
+        translated: Any = (
+            [mapping.get(profile_pk, profile_pk) for profile_pk in raw_profile_ids]
+            if isinstance(raw_profile_ids, list)
+            else mapping.get(raw_profile_ids, raw_profile_ids)
+        )
+        return {**args, SERVICE_FIELD_PROFILE_ID: translated}
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the resolved target to report, from the caller's own input."""

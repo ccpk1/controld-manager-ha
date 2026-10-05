@@ -231,6 +231,7 @@ CATALOG_TYPES: tuple[str, ...] = (
     "rules",
     "profile_options",
     "default_rule",
+    "redirect_locations",
 )
 
 VERDICT_SOURCE_LABELS: dict[str, str] = {

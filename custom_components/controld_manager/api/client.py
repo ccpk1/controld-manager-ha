@@ -394,6 +394,23 @@ class ControlDAPIClient:
             client_ids=client_ids,
         )
 
+    async def async_get_redirect_locations(self) -> tuple[dict[str, Any], ...]:
+        """Return the redirect locations this account may target.
+
+        Each entry carries the 3-letter `PK` that a redirect's `via` takes, plus
+        the city and country names that make it choosable. This is the list
+        behind the dashboard's location picker, and it is account-wide rather
+        than profile-scoped.
+        """
+        payload = await self._async_get_json("/proxies")
+        body = self._extract_body_mapping(payload)
+        proxies = body.get("proxies")
+        if not isinstance(proxies, list):
+            raise ControlDApiResponseError(
+                "Control D proxies response is missing the expected 'proxies' list"
+            )
+        return tuple(row for row in proxies if isinstance(row, dict))
+
     async def async_rename_endpoint(
         self,
         device_id: str,
