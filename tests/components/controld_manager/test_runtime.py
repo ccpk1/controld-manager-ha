@@ -42,6 +42,7 @@ from custom_components.controld_manager.managers import (
 from custom_components.controld_manager.models import (
     ControlDAccountAnalytics,
     ControlDClientAliasTarget,
+    ControlDEndpointSummary,
     ControlDInventoryPayload,
     ControlDOptions,
     ControlDProfileDetailPayload,
@@ -2124,3 +2125,113 @@ async def test_endpoint_manager_keeps_history_when_asked_to() -> None:
     runtime.client.async_delete_analytics_clients.assert_awaited_once()
     runtime.client.async_delete_analytics_client_history.assert_not_awaited()
     assert runtime.registry.client_alias_targets == {}
+
+
+def _profile_write_runtime(
+    endpoint: ControlDEndpointSummary,
+) -> SimpleNamespace:
+    """Return a runtime stub whose registry holds one endpoint."""
+    return SimpleNamespace(
+        client=SimpleNamespace(
+            async_set_endpoint_profile=AsyncMock(return_value=None),
+            async_clear_endpoint_secondary_profile=AsyncMock(return_value=None),
+        ),
+        registry=SimpleNamespace(
+            user=SimpleNamespace(stats_endpoint="america"),
+            endpoints={endpoint.device_id: endpoint},
+        ),
+        active_coordinator=SimpleNamespace(schedule_write_verification=lambda: None),
+    )
+
+
+async def test_a_profile_write_updates_the_registry_immediately() -> None:
+    """A following call must read the value this one just wrote.
+
+    The pre-check, the no-op check, and the undo all read the runtime registry,
+    so leaving it stale until the next refresh makes a back-to-back write report
+    state that is no longer true -- and derive an undo from it.
+    """
+    endpoint = ControlDEndpointSummary(
+        device_id="ep-1",
+        endpoint_pk="ep-1",
+        name="Endpoint-Test",
+        owning_profile_pk="primary-a",
+        secondary_profile_pk=None,
+    )
+    runtime = _profile_write_runtime(endpoint)
+    manager = EndpointManager()
+    manager.attach_runtime(cast(Any, runtime))
+
+    # Attach a secondary.
+    await manager.async_set_endpoint_profiles(
+        (endpoint,), profile_pk=None, profile2_pk="secondary-b", clear_profile2=False
+    )
+    assert runtime.registry.endpoints["ep-1"].secondary_profile_pk == "secondary-b"
+
+    # Replace it, reading the registry as the next tool call would. The value
+    # must be the one just written, not the one from before the first write.
+    current = runtime.registry.endpoints["ep-1"]
+    assert current.secondary_profile_pk == "secondary-b"
+    await manager.async_set_endpoint_profiles(
+        (current,), profile_pk=None, profile2_pk="secondary-c", clear_profile2=False
+    )
+    assert runtime.registry.endpoints["ep-1"].secondary_profile_pk == "secondary-c"
+
+    # Clearing removes it, and the primary is untouched throughout.
+    await manager.async_set_endpoint_profiles(
+        (runtime.registry.endpoints["ep-1"],),
+        profile_pk=None,
+        profile2_pk=None,
+        clear_profile2=True,
+    )
+    cleared = runtime.registry.endpoints["ep-1"]
+    assert cleared.secondary_profile_pk is None
+    assert cleared.owning_profile_pk == "primary-a"
+
+
+async def test_a_primary_profile_write_updates_the_registry_immediately() -> None:
+    """A primary change is reflected without waiting for the refresh."""
+    endpoint = ControlDEndpointSummary(
+        device_id="ep-2",
+        endpoint_pk="ep-2",
+        name="Endpoint-Test",
+        owning_profile_pk="primary-a",
+    )
+    runtime = _profile_write_runtime(endpoint)
+    manager = EndpointManager()
+    manager.attach_runtime(cast(Any, runtime))
+
+    await manager.async_set_endpoint_profiles(
+        (endpoint,), profile_pk="primary-b", profile2_pk=None, clear_profile2=False
+    )
+
+    assert runtime.registry.endpoints["ep-2"].owning_profile_pk == "primary-b"
+
+
+async def test_a_description_write_updates_the_registry_immediately() -> None:
+    """The new note is readable by the next call rather than after a refresh."""
+    endpoint = ControlDEndpointSummary(
+        device_id="ep-3",
+        endpoint_pk="ep-3",
+        name="Endpoint-Test",
+        owning_profile_pk="primary-a",
+        description="before",
+    )
+    runtime = SimpleNamespace(
+        client=SimpleNamespace(
+            async_set_endpoint_description=AsyncMock(return_value=None)
+        ),
+        registry=SimpleNamespace(endpoints={endpoint.device_id: endpoint}),
+        active_coordinator=SimpleNamespace(schedule_write_verification=lambda: None),
+    )
+    manager = EndpointManager()
+    manager.attach_runtime(cast(Any, runtime))
+
+    await manager.async_set_endpoint_descriptions((endpoint,), "after")
+    assert runtime.registry.endpoints["ep-3"].description == "after"
+
+    # An empty note clears it, matching what the API stores.
+    await manager.async_set_endpoint_descriptions(
+        (runtime.registry.endpoints["ep-3"],), ""
+    )
+    assert runtime.registry.endpoints["ep-3"].description is None

@@ -81,16 +81,24 @@ class EndpointManager(BaseManager):
                     profile_pk=profile_pk,
                     secondary=False,
                 )
+                endpoint = replace(endpoint, owning_profile_pk=profile_pk)
             if profile2_pk is not None:
                 await self.runtime.client.async_set_endpoint_profile(
                     endpoint.device_id,
                     profile_pk=profile2_pk,
                     secondary=True,
                 )
+                endpoint = replace(endpoint, secondary_profile_pk=profile2_pk)
             elif clear_profile2:
                 await self.runtime.client.async_clear_endpoint_secondary_profile(
                     endpoint.device_id
                 )
+                endpoint = replace(endpoint, secondary_profile_pk=None)
+            # Written back after the API accepts it, like the rename and alias
+            # writes. Without this the registry keeps the old value until the
+            # next refresh, so a following call's `before` and `undo` would
+            # report state that is no longer true.
+            self.runtime.registry.endpoints[endpoint.device_id] = endpoint
         self.runtime.active_coordinator.schedule_write_verification()
 
     async def async_set_endpoint_descriptions(
@@ -107,6 +115,9 @@ class EndpointManager(BaseManager):
             await self.runtime.client.async_set_endpoint_description(
                 endpoint.device_id,
                 description=description,
+            )
+            self.runtime.registry.endpoints[endpoint.device_id] = replace(
+                endpoint, description=description or None
             )
         self.runtime.active_coordinator.schedule_write_verification()
 
