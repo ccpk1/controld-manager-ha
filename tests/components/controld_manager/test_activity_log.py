@@ -20,6 +20,7 @@ from custom_components.controld_manager.managers.integration_manager import (
 from custom_components.controld_manager.models import (
     ControlDActivityLogPage,
     ControlDDnsVerdict,
+    ControlDEndpointSummary,
     ControlDRegistry,
     ControlDUser,
 )
@@ -232,3 +233,85 @@ def test_responses_are_json_serializable() -> None:
 
     assert json.dumps({"has_more": True, "records": [{"a": 1}]})
     assert cast(Any, {"is_blocked": True})["is_blocked"] is True
+
+
+@pytest.mark.parametrize(
+    ("action", "expected"),
+    [
+        pytest.param(-1, "failed", id="failed"),
+        pytest.param(0, "blocked", id="blocked"),
+        pytest.param(1, "bypassed", id="bypassed"),
+        pytest.param(3, "redirected", id="redirected"),
+    ],
+)
+async def test_every_action_code_is_named_on_the_record(
+    action: int, expected: str
+) -> None:
+    """The raw codes are not contiguous and one is negative, so each is named.
+
+    A caller reading `action` alone cannot tell blocked from bypassed, and the
+    codes skip 2, so the label is what makes a record interpretable.
+    """
+    client = AsyncMock()
+    client.async_get_activity_log = AsyncMock(
+        return_value=ControlDActivityLogPage(
+            records=({"action": action, "question": "example.com"},),
+            page=0,
+            page_size=50,
+        )
+    )
+    manager = _manager(client=client)
+
+    response = await manager.async_build_activity_log_response(
+        config_entry_id=_CONFIG_ENTRY_ID,
+        window="1h",
+        page=0,
+        page_size=50,
+        sort_order="desc",
+    )
+
+    record = cast(dict[str, Any], response["records"][0])
+    assert record["action_label"] == expected
+    # The raw code is left untouched so nothing is lost to the relabelling.
+    assert record["action"] == action
+
+
+async def test_an_empty_endpoint_name_is_resolved_from_the_inventory() -> None:
+    """The vendor sends `endpointName` empty, so the name we hold is filled in.
+
+    Without this the record identifies its device only by an opaque id, and an
+    empty string reads as "this endpoint has no name" rather than "unpopulated".
+    """
+    client = AsyncMock()
+    client.async_get_activity_log = AsyncMock(
+        return_value=ControlDActivityLogPage(
+            records=(
+                {"action": 0, "endpointId": "ep-1", "endpointName": ""},
+                {"action": 0, "endpointId": "ep-2", "endpointName": ""},
+            ),
+            page=0,
+            page_size=50,
+        )
+    )
+    manager = _manager(client=client)
+    registry = manager.runtime.registry
+    registry.endpoints["ep-1"] = ControlDEndpointSummary(
+        device_id="ep-1",
+        endpoint_pk="pk-1",
+        name="kadens-phone",
+        owning_profile_pk="profile-1",
+    )
+
+    response = await manager.async_build_activity_log_response(
+        config_entry_id=_CONFIG_ENTRY_ID,
+        window="1h",
+        page=0,
+        page_size=50,
+        sort_order="desc",
+    )
+
+    resolved, unknown = cast(list[dict[str, Any]], response["records"])
+    assert resolved["endpointName"] == "kadens-phone"
+    # An endpoint we no longer hold keeps the id the caller can still act on.
+    assert unknown["endpointId"] == "ep-2"
+    assert unknown["endpointName"] == ""

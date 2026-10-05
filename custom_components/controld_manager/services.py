@@ -466,6 +466,7 @@ GET_CATALOG_SERVICE_SCHEMA = vol.Schema(
         vol.Optional(SERVICE_FIELD_LIMIT, default=50): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=500)
         ),
+        vol.Optional(SERVICE_FIELD_SEARCH): cv.string,
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
@@ -1090,6 +1091,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             catalog_type=resolved_target.catalog_type,
             profile_pks=resolved_target.profile_pks,
             limit=call.data[SERVICE_FIELD_LIMIT],
+            search=call.data.get(SERVICE_FIELD_SEARCH),
         )
 
     async def async_handle_get_account_overview(call: ServiceCall) -> ServiceResponse:

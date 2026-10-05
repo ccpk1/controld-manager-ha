@@ -504,6 +504,21 @@ so a `redirect_target` is chosen rather than guessed. Codes look like `LHR`
 end-to-end: a rule created with `redirect_target: 'LHR'` resolved to `action:
 3` with a London-range answer.
 
+`search` filters a catalog down to the rows whose own names and ids contain the
+string, case-insensitively. It exists because the service catalog carries over a
+thousand rows while `limit` caps at 500 and there is no paging, so a named entry
+would otherwise be unreachable: `search='apple'` finds the Apple service in one
+call where listing never would. `item_count` reports the filtered total, and the
+profile columns are deliberately excluded from matching so that searching for a
+service cannot select every row through a profile name.
+
+**Diagnosing a block.** The activity record names its own cause, so the path is:
+widen the window (traffic is often older than the default hour), set
+`query_action` to `blocked`, read `trigger` and `triggerValue`, then resolve what
+they name with `get_catalog` (`filters`, `services`, or `rules`) and change it
+with the matching tool. `profileId` on the record says which profile produced the
+verdict, which is what matters when one endpoint enforces two profiles.
+
 **Client note:** a new enumerated value will be rejected by an editor client
 until its cached tool schema refreshes, and only a **window reload** does that
 — reloading the integration or the MCP server does not. If a value the server
@@ -604,12 +619,23 @@ Every tool documented below uses this exact shape, in this order:
 
 - `statusCode`, **not** `rcode` (`rcode` is silently ignored).
 - `clientId` requires a co-present `endpointId`.
-- Activity Log `pageSize` max is 500; deep pages return older records.
+- Activity Log `pageSize` max is 500; deep pages return older records, and a page
+  is **not** the whole window — check `has_more`.
 - Activity Log retains ~33 days; statistics up to ~1 year; both are user-settable.
-- `endpointName` comes back empty on activity records — resolve names from the
-  inventory.
-- Destination filters (`dstCountry`, `dstIsp`, `dstAsn`) exist on the Activity Log
-  only.
+- `endpointName` arrives **empty** from the vendor on activity records and is
+  filled in from the inventory we already hold, so it is populated for an endpoint
+  we currently know and empty for one we no longer hold. `endpointId` is always
+  present and is the field to act on.
+- Activity record `action` codes are **not contiguous and one is negative**:
+  `-1` failed, `0` blocked, `1` bypassed, `3` redirected. Read `action_label`
+  instead of comparing `action` to a number.
+- A record's `triggerValue` is **absent** whenever there is no list or object to
+  name, which is the normal case for a `default` trigger. Its absence is the
+  answer, not missing data. `trigger` itself is absent only on a failed lookup.
+- `get_catalog` has **no paging** — only `limit`, capped at 500 — while the
+  service catalog runs past a thousand rows, so `search` is what makes a named
+  entry reachable. `search` matches a row's own names and ids, never its profile
+  columns.
 - Never sum ranked rows for a total; never round-trip a display label back as a
   query input.
 - DNS verdict: HTTP 200 with `RCODE 5` means **blocked**; empty `verdict` means

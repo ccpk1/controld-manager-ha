@@ -198,6 +198,15 @@ ACTIVITY_ACTION_CODES: dict[str, int] = {
     "redirected": 3,
 }
 
+# The reverse of ACTIVITY_ACTION_CODES, for naming the verdict on records we
+# return. The codes are not contiguous and `failed` is negative, so a record
+# read on its own cannot be interpreted without this map. Code 2 belongs to the
+# analytics count surface only and never appears on the activity log, so it
+# deliberately has no label here.
+ACTIVITY_ACTION_LABELS: dict[int, str] = {
+    code: label for label, code in ACTIVITY_ACTION_CODES.items()
+}
+
 # Trigger classes accepted by the per-record activity log. The ranked breakdown
 # endpoint supports only filter and service, but the activity log additionally
 # supports custom rules, the default rule, global rules, and rebind protection.

@@ -1158,6 +1158,8 @@ copyable catalog for one of these Control D data families:
 - `services`
 - `rules`
 - `profile_options`
+- `default_rule`
+- `redirect_locations`
 
 Targeting rules:
 
@@ -1168,11 +1170,19 @@ Targeting rules:
 	selected config entry scope
 - `config_entry_id` and `config_entry_name` remain optional multi-entry
 	disambiguators, with `config_entry_id` taking precedence
+- `search` is optional and filters the catalog to rows whose own name or id
+	contains the text, ignoring case. Use it to find one named entry: the service
+	catalog holds over a thousand rows while `limit` caps at 500, so without a
+	search a named service cannot be located. Put the name in the search box, for
+	example `apple`, rather than trying to page through the list
+- `redirect_locations` is account-wide and ignores the profile selectors, because
+the location list is the same for every profile
 
 The service response includes:
 
 - `profiles` for the selected scope
 - typed `items` for the requested catalog family
+- `item_count`, which reports how many rows matched after any `search`
 - a plain-text `text` block that is easy to copy into service calls or notes
 
 Manual example:
@@ -1180,6 +1190,10 @@ Manual example:
 - return the available service catalog for one managed profile:
 	`catalog_type: services`
 	`profile_name: ["Primary"]`
+
+- find one named service in a catalog too large to list:
+	`catalog_type: services`
+	`search: apple`
 
 ### Account overview service
 

@@ -12,6 +12,7 @@ from homeassistant.util.json import JsonValueType
 
 from ..const import (
     ACTIVITY_ACTION_CODES,
+    ACTIVITY_ACTION_LABELS,
     DETAIL_FULL,
     VERDICT_SOURCE_LABELS,
 )
@@ -41,6 +42,29 @@ from .entity_manager import EntityManager
 from .profile_manager import ProfileManager
 
 LOGGER = logging.getLogger(__name__)
+
+# Catalog rows match on their own names and ids. The profile columns are
+# excluded so that searching for a service cannot match through a profile name
+# and return every row on that profile.
+_CATALOG_SEARCH_EXCLUDED_KEYS = frozenset({"profile_id", "profile_name"})
+
+
+def _filter_catalog_items(
+    items: list[JsonValueType], search: str
+) -> list[JsonValueType]:
+    """Return the catalog rows whose own values contain `search`."""
+    needle = search.casefold()
+    matched: list[JsonValueType] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if any(
+            needle in str(value).casefold()
+            for key, value in item.items()
+            if key not in _CATALOG_SEARCH_EXCLUDED_KEYS
+        ):
+            matched.append(item)
+    return matched
 
 
 class ControlDIntegrationError(Exception):
@@ -293,8 +317,14 @@ class IntegrationManager(BaseManager):
         catalog_type: str,
         profile_pks: frozenset[str],
         limit: int,
+        search: str | None = None,
     ) -> dict[str, JsonValueType]:
-        """Build one service response payload for a catalog request."""
+        """Build one service response payload for a catalog request.
+
+        `search` exists because a catalog can be far larger than any one page:
+        the service catalog alone runs past a thousand rows while `limit` caps
+        at 500, so without a filter a named service is simply unreachable.
+        """
         profile_rows: list[JsonValueType] = [
             {
                 "profile_id": profile_pk,
@@ -316,6 +346,9 @@ class IntegrationManager(BaseManager):
             items, text = await self._async_build_redirect_location_catalog()
         else:
             items, text = self._build_profile_option_catalog(profile_pks)
+
+        if search:
+            items = _filter_catalog_items(items, search)
 
         return {
             "catalog_type": catalog_type,
@@ -609,6 +642,35 @@ class IntegrationManager(BaseManager):
         """Serialize an optional datetime without leaking a datetime object."""
         return value.isoformat() if hasattr(value, "isoformat") else None
 
+    def _enrich_activity_record(
+        self, record: dict[str, Any]
+    ) -> dict[str, JsonValueType]:
+        """Return one activity record with the verdict and the device named.
+
+        The raw `action` codes are not contiguous and one is negative, so a
+        record read on its own cannot be interpreted without a label. The
+        vendor sends `endpointName` empty, so it is filled from the inventory
+        already held; a name the vendor did send is left alone, and the endpoint
+        id is never touched because it is always authoritative.
+        """
+        action = record.get("action")
+        endpoint_id = record.get("endpointId")
+        endpoint = (
+            self.runtime.registry.endpoints.get(endpoint_id)
+            if isinstance(endpoint_id, str)
+            else None
+        )
+        vendor_name = record.get("endpointName")
+        return {
+            **record,
+            "action_label": (
+                ACTIVITY_ACTION_LABELS.get(action) if isinstance(action, int) else None
+            ),
+            "endpointName": vendor_name
+            or (endpoint.name if endpoint is not None else "")
+            or "",
+        }
+
     async def async_build_activity_log_response(
         self,
         *,
@@ -680,7 +742,9 @@ class IntegrationManager(BaseManager):
             "window_start": start_time.isoformat(),
             "window_end": end_time.isoformat(),
             **build_page_meta(page, page_size, len(result.records)),
-            "records": [dict(record) for record in result.records],
+            "records": [
+                self._enrich_activity_record(record) for record in result.records
+            ],
         }
 
     async def async_build_domain_test_response(

@@ -285,32 +285,51 @@ class GetActivityLogTool(_ControlDReadTool):
     title = "Get activity log"
     description = (
         "Report individual DNS queries and what Control D did with each one. "
-        "Every record carries the domain, the action taken (blocked, bypassed, "
-        "redirected, or failed), the endpoint and client, the protocol and "
-        "record type, the source and destination geography, and — most "
-        "importantly — the `trigger` and `triggerValue` that caused the action "
-        "(a filter, a service, one of your own custom rules, the default rule, "
-        "a global rule, or rebind protection).\n"
-        "\n"
         'This is the tool for "why was this blocked?" and "what has this '
-        'device been doing?" Use it when you need the specific cause on a '
-        "specific query. For aggregate counts (how much was blocked in total) "
-        "use `get_account_overview`, and to ask about one domain on one endpoint "
-        "in a single call use `test_domain`.\n"
+        'device been doing?"\n'
+        "\n"
+        "A record names its own cause in `trigger` and `triggerValue`, which are "
+        "the fields to read first: `filter` for a blocklist such as "
+        "`x-hagezi-light`, `service` for one such as `apple` or `instagram`, "
+        "`custom` for one of your own rules, `default` for the profile's "
+        "catch-all, `grule` for a global rule, or `rebind`. `triggerValue` is "
+        "present only when there is a list or object to name, so its **absence "
+        "is itself the answer** — a `default` trigger carries none, because the "
+        "catch-all rule is not a list. Never read a missing `triggerValue` as "
+        "missing data.\n"
+        "\n"
+        "Read `action_label` for the verdict. The raw `action` codes are not "
+        "contiguous and one is negative, so do not compare `action` to a "
+        "number: -1 failed, 0 blocked, 1 bypassed, 3 redirected.\n"
+        "\n"
+        "`profileId` says which profile produced the verdict, which matters "
+        "when an endpoint enforces more than one. `endpointName` is resolved "
+        "from the current inventory, so it is empty for an endpoint we no "
+        "longer hold; `endpointId` is always present.\n"
+        "\n"
+        "To diagnose a block: widen the window, since traffic is often older "
+        "than the default hour; set `query_action` to `blocked`; then read "
+        "`trigger` and `triggerValue` and resolve what they name with "
+        "`get_catalog` (`filters`, `services`, or `rules`). Change it with the "
+        "matching tool. For aggregate counts use `get_account_overview`, and "
+        "to ask about one domain on one endpoint in a single call use "
+        "`test_domain`.\n"
         "\n"
         "Defaults to the last hour across the whole account. Narrow the window "
         "and the scope rather than paging through everything: the activity log "
         "is a recent-detail surface and a page can be large. Filter by "
         "`profile_id`, `endpoint_id`, or `client_id` (which requires an "
         "endpoint), by `query_action` to see only blocks or only passes, or by "
-        "`search` to match a domain substring.\n"
+        "`search` to match a domain substring. **One page is not the whole "
+        "window** — check `has_more` and page on rather than concluding you "
+        "have seen everything.\n"
         "\n"
         "Retention is limited (roughly 33 days, and a user can shorten it or "
         "turn logging off), so an empty result may mean no matching traffic, a "
         "window that has expired, or logging being disabled — say which you "
-        "cannot distinguish rather than reporting that nothing happened. A full "
-        "page sets `has_more`; there is no total, so never imply one. `status_code` "
-        "is the DNS response code, and `rcode` is not an accepted parameter."
+        "cannot distinguish rather than reporting that nothing happened. There "
+        "is no total, so never imply one. `status_code` is the DNS response "
+        "code, and `rcode` is not an accepted parameter."
     )
     parameters = probatio.Schema(
         {
@@ -545,9 +564,15 @@ class GetCatalogTool(_ControlDReadTool):
         "it is what makes a redirect choosable instead of guessed.\n"
         "\n"
         "Scope it with `profile_id`; without one it returns every managed "
-        "profile, which is usually more than you need. The service catalog alone "
-        "has over a thousand entries, so set `limit` and treat `truncated` as a "
-        "signal to narrow the scope rather than assuming you have everything."
+        "profile, which is usually more than you need.\n"
+        "\n"
+        "The service catalog alone runs past a thousand entries while `limit` "
+        "caps at 500, and this tool has no paging, so a large catalog cannot "
+        "be listed exhaustively. Use `search` to find a named row instead of "
+        "`limit` to page through one: `search='apple'` finds the Apple service "
+        "in a single call where listing never would. `search` matches "
+        "case-insensitively against a row's own name and ids, not its profile "
+        "columns, and `item_count` reports how many rows actually matched."
     )
     parameters = probatio.Schema(
         {
@@ -566,6 +591,16 @@ class GetCatalogTool(_ControlDReadTool):
                     "recommended; without it the result covers every profile."
                 ),
             ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_SEARCH,
+                description=(
+                    "Optional. A substring matched case-insensitively against "
+                    "each row's own name and ids, for example 'apple' or "
+                    "'hagezi'. Use this to find one named entry in a catalog "
+                    "too large to list; it is the reliable way to locate a "
+                    "service, filter, or option by name."
+                ),
+            ): str,
             probatio.Optional(
                 SERVICE_FIELD_LIMIT,
                 default=50,

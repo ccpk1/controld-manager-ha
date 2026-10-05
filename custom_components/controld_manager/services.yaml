@@ -904,7 +904,7 @@ set_default_rule_state:
 
 get_catalog:
   name: Get catalog
-  description: Return a copyable catalog of filters, services, rules, or profile options for the selected Control D scope.
+  description: Return a copyable catalog of filters, services, rules, profile options, the default rule, or redirect locations for the selected Control D scope.
   fields:
     catalog_type:
       required: true
@@ -915,6 +915,13 @@ get_catalog:
             - services
             - rules
             - profile_options
+            - default_rule
+            - redirect_locations
+    search:
+      required: false
+      example: apple
+      selector:
+        text:
     limit:
       required: false
       default: 50

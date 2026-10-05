@@ -6,7 +6,7 @@ these tests pin the default-rule surface and the truncation contract.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -16,6 +16,7 @@ from custom_components.controld_manager.managers.integration_manager import (
 )
 from custom_components.controld_manager.models import (
     ControlDDefaultRule,
+    ControlDFilter,
     ControlDProfileSummary,
     ControlDRegistry,
 )
@@ -195,3 +196,110 @@ async def test_redirect_location_catalog_names_each_usable_destination() -> None
     assert items[0]["country_name"] == "Albania"
     # The text block is what a model can copy a code from.
     assert "TIA, Tirana, Albania" in response["text"]
+
+
+def _filter_registry() -> ControlDRegistry:
+    """Return a registry carrying two named filters on one profile."""
+    return ControlDRegistry(
+        profiles={"p-1": ControlDProfileSummary(profile_pk="p-1", name="Default")},
+        filters_by_profile={
+            "p-1": {
+                "f-1": ControlDFilter(
+                    filter_pk="f-1", name="Hagezi Light", enabled=True, action_do=0
+                ),
+                "f-2": ControlDFilter(
+                    filter_pk="f-2", name="Apple", enabled=True, action_do=0
+                ),
+            }
+        },
+    )
+
+
+async def test_search_finds_one_named_row_in_a_catalog_too_large_to_list() -> None:
+    """`search` is what makes a named entry reachable at all.
+
+    The service catalog runs past a thousand rows while `limit` caps at 500 and
+    there is no paging, so without a filter a named entry cannot be located.
+    """
+    manager = _manager(_filter_registry())
+    profiles = frozenset({"p-1"})
+
+    listed = await manager.async_build_catalog_response(
+        config_entry_id=_CONFIG_ENTRY_ID,
+        catalog_type="filters",
+        profile_pks=profiles,
+        limit=50,
+    )
+    assert len(cast(list[Any], listed["items"])) == 2
+
+    filtered = await manager.async_build_catalog_response(
+        config_entry_id=_CONFIG_ENTRY_ID,
+        catalog_type="filters",
+        profile_pks=profiles,
+        limit=50,
+        search="apple",
+    )
+
+    matches = cast(list[Any], filtered["items"])
+    assert [row["name"] for row in matches] == ["Apple"]
+    # `item_count` reports the filtered total, not the pre-filter one.
+    assert filtered["item_count"] == 1
+
+
+async def test_search_is_case_insensitive() -> None:
+    """A caller should not have to match the vendor's casing."""
+    manager = _manager(_filter_registry())
+    profiles = frozenset({"p-1"})
+
+    lower = await manager.async_build_catalog_response(
+        config_entry_id=_CONFIG_ENTRY_ID,
+        catalog_type="filters",
+        profile_pks=profiles,
+        limit=50,
+        search="hagezi",
+    )
+    upper = await manager.async_build_catalog_response(
+        config_entry_id=_CONFIG_ENTRY_ID,
+        catalog_type="filters",
+        profile_pks=profiles,
+        limit=50,
+        search="HAGEZI",
+    )
+
+    assert lower["item_count"] == upper["item_count"] == 1
+
+
+async def test_search_does_not_match_through_the_profile_columns() -> None:
+    """Searching must not select every row via a profile it belongs to.
+
+    Each row carries its profile's id and name. If those were searched too, a
+    query for a profile name would return the whole catalog and look like a
+    successful match.
+    """
+    manager = _manager(_filter_registry())
+
+    response = await manager.async_build_catalog_response(
+        config_entry_id=_CONFIG_ENTRY_ID,
+        catalog_type="filters",
+        profile_pks=frozenset({"p-1"}),
+        limit=50,
+        search="Default",
+    )
+
+    assert response["item_count"] == 0
+
+
+async def test_search_that_matches_nothing_is_an_empty_leaf() -> None:
+    """No match is an empty result carrying its count, not an error."""
+    manager = _manager(_filter_registry())
+
+    response = await manager.async_build_catalog_response(
+        config_entry_id=_CONFIG_ENTRY_ID,
+        catalog_type="filters",
+        profile_pks=frozenset({"p-1"}),
+        limit=50,
+        search="zzz-no-such-entry-zzz",
+    )
+
+    assert response["items"] == []
+    assert response["item_count"] == 0
