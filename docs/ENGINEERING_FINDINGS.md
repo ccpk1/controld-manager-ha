@@ -570,6 +570,41 @@ Implementation consequence:
   contract (limit, truncation, copyable text) rather than adding a tool
 - the response is not profile-scoped, so `profile_id` is ignored for this type
 
+### Home Assistant's LLM tool contract: confirmed platform facts
+
+Verified against Core 2026.10 source and the developer blog on 2026-10-05.
+
+**Probatio replaced voluptuous as the validation engine.** `llm.Tool.parameters` is
+declared `probatio.Schema`, and `homeassistant/__init__.py` aliases voluptuous to
+probatio in `sys.modules` at startup. The release blog is explicit that this is a
+supported path for integrations, not a migration burden: *"Custom integrations need
+no changes"* and *"Your integration can keep the old import for as long as you
+like."* HA bans `import voluptuous` in **core** by lint rule only. HA's own
+documented tool example therefore uses `probatio.Schema`, which is why this
+integration's tool modules import probatio rather than relying on the alias.
+
+**`llm.py` is a reserved platform filename.** The `llm` integration discovers an
+`<integration>/llm.py` platform and calls `async_get_tools` on it, resolving the
+module as `{domain}.{platform_name}` — so `llm` specifically. A file *or a package*
+named `llm` is therefore claimed by Core and must not be used for anything else.
+This integration owns a full API through `llm.async_register_api` instead, which is
+the other supported pattern, and its module is named `llm_api.py` to stay clear of
+the platform name.
+
+**`ToolResult`, `annotations`, and `integration` are all required now.** A tool
+returns `llm.ToolResult(data=..., error=...)`; returning a plain dict is deprecated
+and stops working in 2027.11. Every tool must set `integration`, or a custom
+integration logs a warning until 2027.10 and then stops working. Annotations matter
+because **the defaults describe the least safe case** — `read_only=False`,
+`destructive=True`, `idempotent=False`, `open_world=True` — so a tool that declares
+nothing is treated as writing, destructive, and reaching outside Home Assistant.
+All 24 tools here declare all four explicitly.
+
+**Tool names must be prefixed with the integration domain.** Core checks
+`tool.name.startswith(f"{domain}__")` and reports violations, breaking in 2027.3.
+Our `controld_manager__<verb>` naming complies, and the debug log added in `fccd0a2`
+records the registered surface at build time.
+
 ### Duplicate endpoint names are a real problem
 
 Display names are not safe identifiers.
