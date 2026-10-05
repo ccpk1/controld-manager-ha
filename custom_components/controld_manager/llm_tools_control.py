@@ -18,34 +18,46 @@ from typing import Any, Final, cast, override
 import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import llm
 
 from .const import (
     DOMAIN,
     SERVICE_CLEAR_CLIENT_ALIAS,
+    SERVICE_CREATE_ENDPOINT,
     SERVICE_CREATE_RULE,
+    SERVICE_DELETE_CLIENT,
+    SERVICE_DELETE_ENDPOINT,
     SERVICE_DELETE_RULE,
     SERVICE_DELETE_SERVICE,
     SERVICE_DISABLE_PROFILE,
     SERVICE_ENABLE_PROFILE,
     SERVICE_FIELD_ALIAS,
     SERVICE_FIELD_CANCEL_EXPIRATION,
+    SERVICE_FIELD_CLEAR_PROFILE2,
+    SERVICE_FIELD_CLIENT_ID,
     SERVICE_FIELD_COMMENT,
     SERVICE_FIELD_CONFIG_ENTRY_ID,
+    SERVICE_FIELD_DELETE_HISTORY,
+    SERVICE_FIELD_DESCRIPTION,
     SERVICE_FIELD_ENABLED,
+    SERVICE_FIELD_ENDPOINT_HOSTNAME,
     SERVICE_FIELD_ENDPOINT_ID,
     SERVICE_FIELD_ENDPOINT_MAC,
+    SERVICE_FIELD_ENDPOINT_NAME,
     SERVICE_FIELD_EXPIRATION_DURATION,
     SERVICE_FIELD_EXPIRE_AT,
     SERVICE_FIELD_FILTER_ID,
     SERVICE_FIELD_FILTER_NAME,
     SERVICE_FIELD_HOSTNAME,
+    SERVICE_FIELD_ICON,
     SERVICE_FIELD_MINUTES,
     SERVICE_FIELD_MODE,
     SERVICE_FIELD_NEW_NAME,
     SERVICE_FIELD_OPTION_ID,
     SERVICE_FIELD_OPTION_NAME,
     SERVICE_FIELD_PARENT_ENDPOINT_NAME,
+    SERVICE_FIELD_PROFILE2_ID,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
     SERVICE_FIELD_REDIRECT_TARGET,
@@ -60,6 +72,8 @@ from .const import (
     SERVICE_SET_CLIENT_ALIAS,
     SERVICE_SET_DEFAULT_RULE_STATE,
     SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING,
+    SERVICE_SET_ENDPOINT_DESCRIPTION,
+    SERVICE_SET_ENDPOINT_PROFILE,
     SERVICE_SET_FILTER_STATE,
     SERVICE_SET_OPTION_STATE,
     SERVICE_SET_RULE_STATE,
@@ -159,6 +173,79 @@ def _resolve_profile_pks(registry: Any, args: dict[str, Any]) -> tuple[str, ...]
             if profile.name.casefold() in wanted
         )
     return tuple(registry.profiles)
+
+
+def _match_client_targets(
+    registry: Any | None, args: dict[str, Any]
+) -> tuple[Any, ...]:
+    """Return the client alias targets a call addresses.
+
+    A `client_id` is tried first because it is the identifier the alias API keys
+    on and the only selector that is guaranteed to match a single client. A MAC
+    is accepted as a convenience but commonly matches several clients under one
+    endpoint that share a MAC and IP but differ by `client_id`.
+    """
+    if registry is None:
+        return ()
+    client_ids = set(as_list(args.get(SERVICE_FIELD_CLIENT_ID)))
+    if client_ids:
+        return tuple(
+            target
+            for target in registry.client_alias_targets.values()
+            if target.client_id in client_ids
+        )
+    macs = {mac.casefold() for mac in as_list(args.get(SERVICE_FIELD_ENDPOINT_MAC))}
+    if macs:
+        return tuple(
+            target
+            for target in registry.client_alias_targets.values()
+            if (target.client_mac_address or "").casefold() in macs
+        )
+    hostnames = {
+        host.casefold() for host in as_list(args.get(SERVICE_FIELD_ENDPOINT_HOSTNAME))
+    }
+    if hostnames:
+        return tuple(
+            target
+            for target in registry.client_alias_targets.values()
+            if (target.client_hostname or "").casefold() in hostnames
+        )
+    return ()
+
+
+def _client_target(args: dict[str, Any]) -> dict[str, Any]:
+    """Return a reportable client target built from the caller's own input."""
+    if client_ids := args.get(SERVICE_FIELD_CLIENT_ID):
+        return {"kind": "client", "client_id": client_ids}
+    if macs := args.get(SERVICE_FIELD_ENDPOINT_MAC):
+        return {"kind": "client", "mac": macs}
+    return {"kind": "client", "hostname": args.get(SERVICE_FIELD_ENDPOINT_HOSTNAME)}
+
+
+def _client_selector_args(target: Any) -> str:
+    """Return the selector arguments that address one resolved client target.
+
+    The client id is emitted rather than the MAC, because a MAC may match more
+    than one client and would make the call ambiguous.
+    """
+    if getattr(target, "client_id", None):
+        return f"client_id={target.client_id!r}"
+    return f"endpoint_mac={target.client_mac_address!r}"
+
+
+def _client_selector_args_from_args(args: dict[str, Any]) -> str | None:
+    """Return a selector reproducing the caller's own target, if there is one.
+
+    Used when the registry holds no matching client, so the undo can still name
+    the same target the caller addressed instead of guessing at one.
+    """
+    if client_ids := as_list(args.get(SERVICE_FIELD_CLIENT_ID)):
+        return f"client_id={client_ids[0]!r}"
+    if macs := as_list(args.get(SERVICE_FIELD_ENDPOINT_MAC)):
+        return f"endpoint_mac={macs[0]!r}"
+    if hostnames := as_list(args.get(SERVICE_FIELD_ENDPOINT_HOSTNAME)):
+        return f"endpoint_hostname={hostnames[0]!r}"
+    return None
 
 
 def _resolve_row_pks(
@@ -1734,6 +1821,379 @@ class SetEndpointAnalyticsLoggingTool(_ControlDControlTool):
         return {"mode": args[SERVICE_FIELD_MODE]}
 
 
+class SetEndpointProfileTool(_ControlDControlTool):
+    """Attach a primary or secondary profile to one or more endpoints."""
+
+    name = format_tool_name(SERVICE_SET_ENDPOINT_PROFILE)
+    title = "Set endpoint profile"
+    description = (
+        "Attach the profile an endpoint enforces, and optionally a second one. "
+        "The profile decides what that endpoint blocks, so this is how a device "
+        "moves between policies. It changes configuration, not traffic "
+        "history.\n"
+        "\n"
+        "An endpoint always enforces one profile, so the primary slot can be "
+        "changed but never emptied. The secondary is optional and can be "
+        "cleared with `clear_profile2: true`. Both slots take a `profile_id` "
+        "from `get_account_overview`; a profile name is also accepted."
+        "\n"
+        "\n"
+        "When two profiles are enforced, the rule engine merges them before "
+        "matching rather than applying them in order, so a custom rule in the "
+        "second can override a filter in the first. That is what makes a shared "
+        "baseline plus a device-specific policy work.\n"
+        "\n"
+        "This is reversible: set the previous value back, or clear the "
+        "secondary, and the `undo` field names the call."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Required(
+                SERVICE_FIELD_ENDPOINT_ID,
+                description=(
+                    "Required. The endpoint device_id or list of device_ids "
+                    "(from get_inventory). Ids are unique, so prefer this over a "
+                    "name."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_PROFILE_ID,
+                description=(
+                    "Optional. The profile PK (from get_account_overview) to "
+                    "enforce as the primary. A profile name is also accepted. "
+                    "Omit to leave the primary unchanged."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_PROFILE2_ID,
+                description=(
+                    "Optional. The profile PK to enforce as the secondary. "
+                    "Omit to leave the secondary unchanged."
+                ),
+            ): str,
+            vol.Optional(
+                SERVICE_FIELD_CLEAR_PROFILE2,
+                default=False,
+                description=(
+                    "Optional, defaults to false. Set true to detach the "
+                    "secondary profile, leaving only the primary."
+                ),
+            ): cv.boolean,
+        }
+    )
+    _service = SERVICE_SET_ENDPOINT_PROFILE
+
+    def _target(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return the addressed endpoints and the profile change."""
+        return {
+            "kind": "endpoint",
+            "id": args[SERVICE_FIELD_ENDPOINT_ID],
+            "primary": args.get(SERVICE_FIELD_PROFILE_ID),
+            "secondary": args.get(SERVICE_FIELD_PROFILE2_ID),
+            "clear_secondary": args.get(SERVICE_FIELD_CLEAR_PROFILE2, False),
+        }
+
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return the profiles each addressed endpoint enforces now."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        endpoints = registry.endpoints
+        requested = as_list(args[SERVICE_FIELD_ENDPOINT_ID])
+        rows = [
+            {
+                "device_id": device_id,
+                "profile_id": endpoint.owning_profile_pk,
+                "profile2_id": endpoint.secondary_profile_pk,
+            }
+            for device_id in requested
+            if (endpoint := endpoints.get(device_id)) is not None
+        ]
+        return {"endpoints": rows} if rows else None
+
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
+        """Return the calls that put each endpoint's own profiles back."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        calls: list[str] = []
+        for device_id in as_list(args[SERVICE_FIELD_ENDPOINT_ID]):
+            endpoint = registry.endpoints.get(device_id)
+            if endpoint is None or endpoint.owning_profile_pk is None:
+                continue
+            if args.get(SERVICE_FIELD_PROFILE_ID) is not None:
+                calls.append(
+                    f"{format_tool_name(SERVICE_SET_ENDPOINT_PROFILE)}("
+                    f"endpoint_id={device_id!r}, "
+                    f"profile_id={endpoint.owning_profile_pk!r})"
+                )
+            args_as_list = as_list(args.get(SERVICE_FIELD_PROFILE2_ID))
+            clearing = bool(args.get(SERVICE_FIELD_CLEAR_PROFILE2))
+            if args_as_list or clearing:
+                # The registry models both slots, so the reverse names the
+                # secondary that was actually attached rather than assuming none.
+                previous = endpoint.secondary_profile_pk
+                calls.append(
+                    f"{format_tool_name(SERVICE_SET_ENDPOINT_PROFILE)}("
+                    f"endpoint_id={device_id!r}, profile2_id={previous!r})"
+                    if previous
+                    else f"{format_tool_name(SERVICE_SET_ENDPOINT_PROFILE)}("
+                    f"endpoint_id={device_id!r}, clear_profile2=True)"
+                )
+        return calls or None
+
+    def _after(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return the requested profile change."""
+        return {
+            "primary": args.get(SERVICE_FIELD_PROFILE_ID),
+            "secondary": args.get(SERVICE_FIELD_PROFILE2_ID),
+            "clear_secondary": args.get(SERVICE_FIELD_CLEAR_PROFILE2, False),
+        }
+
+
+class CreateEndpointTool(_ControlDControlTool):
+    """Create one endpoint that enforces a selected profile."""
+
+    name = format_tool_name(SERVICE_CREATE_ENDPOINT)
+    title = "Create endpoint"
+    description = (
+        "Create one endpoint, which is a DNS resolver that enforces a profile. "
+        "This is how a new device or router segment is added to Control D.\n"
+        "\n"
+        "A profile is **required**, because an endpoint always enforces exactly "
+        "one and the platform has no endpoint without one. The name must be "
+        "unique across the account; the API rejects a duplicate.\n"
+        "\n"
+        "The endpoint is created **Pending**: it reports `status: 0` and no "
+        "activity until it first sends queries, which is the dashboard's own "
+        "label for that state and is not a disabled endpoint. "
+        "The new `device_id` is assigned by Control D and only exists after the "
+        "call, so `undo` names the reverse by **name**, which is unique and "
+        "therefore unambiguous.\n"
+        "\n"
+        "Optionally set `description`, an `icon` slug such as `desktop-linux`, "
+        "and the initial analytics logging `mode`. Logging stays off unless "
+        "asked for, so choose it deliberately: `Full` records the queries "
+        "themselves."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Required(
+                SERVICE_FIELD_ENDPOINT_NAME,
+                description=(
+                    "Required. The display name for the new endpoint, unique "
+                    "across the account."
+                ),
+            ): cv.string,
+            vol.Required(
+                SERVICE_FIELD_PROFILE_ID,
+                description=(
+                    "Required. The profile PK (from get_account_overview) the "
+                    "endpoint enforces. A profile name is also accepted."
+                ),
+            ): cv.string,
+            vol.Optional(
+                SERVICE_FIELD_DESCRIPTION,
+                description="Optional. A free-text note stored on the endpoint.",
+            ): cv.string,
+            vol.Optional(
+                SERVICE_FIELD_ICON,
+                description=(
+                    "Optional. An icon slug, for example 'desktop-linux' or 'router'."
+                ),
+            ): cv.string,
+            vol.Optional(
+                SERVICE_FIELD_MODE,
+                description=(
+                    "Optional. The initial analytics logging level: 'None', "
+                    "'Some' (counts only), or 'Full' (records the queries). "
+                    "Stays off when omitted."
+                ),
+            ): vol.In(endpoint_analytics_logging_mode_labels()),
+        }
+    )
+    _service = SERVICE_CREATE_ENDPOINT
+    # Creation is additive, so there is no prior state to compare and the
+    # "state could not be read" note would give the wrong reason.
+    _has_precheck = False
+
+    def _target(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return the endpoint about to be created."""
+        return {
+            "kind": "endpoint",
+            "name": args[SERVICE_FIELD_ENDPOINT_NAME],
+            "profile_id": args[SERVICE_FIELD_PROFILE_ID],
+        }
+
+    def _after(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return what was requested, since Control D assigns the id."""
+        return {
+            "name": args[SERVICE_FIELD_ENDPOINT_NAME],
+            "profile_id": args[SERVICE_FIELD_PROFILE_ID],
+            "description": args.get(SERVICE_FIELD_DESCRIPTION),
+            "icon": args.get(SERVICE_FIELD_ICON),
+            "mode": args.get(SERVICE_FIELD_MODE),
+        }
+
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str]:
+        """Return the delete that reverses this create.
+
+        The new `device_id` does not exist until the call returns, so the reverse
+        is named by the endpoint's own name, which the API keeps unique.
+        """
+        return [
+            f"{format_tool_name(SERVICE_DELETE_ENDPOINT)}("
+            f"endpoint_name={args[SERVICE_FIELD_ENDPOINT_NAME]!r})"
+        ]
+
+
+class DeleteEndpointTool(_ControlDControlTool):
+    """Permanently delete one or more endpoints."""
+
+    name = format_tool_name(SERVICE_DELETE_ENDPOINT)
+    title = "Delete endpoint"
+    description = (
+        "PERMANENTLY DELETE one or more endpoints. There is no undo, and a new "
+        "endpoint created afterwards is a new identity rather than a restored "
+        "one.\n"
+        "\n"
+        "The blast radius is wide, so state it before running it. Deleting an "
+        "endpoint removes the resolver itself, so whatever resolves through it "
+        "stops being filtered and loses its resolver identity, and the records "
+        "kept against it go too. Deleting a router endpoint is the extreme "
+        "case: it enforces a profile for a whole network segment, so every "
+        "device behind it loses that policy at once.\n"
+        "\n"
+        "Confirm the target by `endpoint_id` from `get_inventory`. A name works "
+        "too, but endpoint names are not guaranteed unique, so an id is the safe "
+        "selector. Consider what the caller actually wants: to stop filtering "
+        "for now, `set_endpoint_profile` to a permissive profile leaves the "
+        "endpoint intact and its history readable, which is usually preferable "
+        "to destroying it."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Required(
+                SERVICE_FIELD_ENDPOINT_ID,
+                description=(
+                    "Required. The endpoint device_id or list of device_ids "
+                    "(from get_inventory). This is permanent."
+                ),
+            ): vol.Any(str, [str]),
+        }
+    )
+    _service = SERVICE_DELETE_ENDPOINT
+    annotations = _DESTRUCTIVE_ANNOTATIONS
+    # Deletion has no prior state to compare and no undo by design, so the
+    # "state could not be read" note would give the wrong reason for both.
+    _has_precheck = False
+
+    def _target(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return the deleted endpoints."""
+        return {"kind": "endpoint", "id": args[SERVICE_FIELD_ENDPOINT_ID]}
+
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> None:
+        """Deletion is irreversible, so no undo is claimed."""
+        return None
+
+
+class SetEndpointDescriptionTool(_ControlDControlTool):
+    """Set the free-text note stored on one or more endpoints."""
+
+    name = format_tool_name(SERVICE_SET_ENDPOINT_DESCRIPTION)
+    title = "Set endpoint description"
+    description = (
+        "Set the free-text note an endpoint carries, or clear it with an empty "
+        "string. This is the *description* shown on the endpoint, useful for "
+        "recording what a device is or why it is configured a certain way; it "
+        "changes no behaviour.\n"
+        "\n"
+        "Read the current value from `get_inventory`, which reports it under "
+        "`advanced.description`. The value is stored as given and an empty "
+        "string removes it, because the API drops the field rather than keeping "
+        "a blank one.\n"
+        "\n"
+        "This is reversible: set the previous value back, which `undo` names. "
+        "It does not touch the endpoint's name, its profiles, or its clients."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Required(
+                SERVICE_FIELD_ENDPOINT_ID,
+                description=(
+                    "Required. The endpoint device_id or list of device_ids "
+                    "(from get_inventory). Ids are unique, so prefer this over a "
+                    "name."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Required(
+                SERVICE_FIELD_DESCRIPTION,
+                description=(
+                    "Required. The note to store. An empty string clears the "
+                    "description."
+                ),
+            ): cv.string,
+        }
+    )
+    _service = SERVICE_SET_ENDPOINT_DESCRIPTION
+
+    def _target(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return the addressed endpoints."""
+        return {"kind": "endpoint", "id": args[SERVICE_FIELD_ENDPOINT_ID]}
+
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return the descriptions currently stored, read before the write."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        rows = [
+            {
+                "device_id": device_id,
+                "description": endpoint.description,
+            }
+            for device_id in as_list(args[SERVICE_FIELD_ENDPOINT_ID])
+            if (endpoint := registry.endpoints.get(device_id)) is not None
+        ]
+        return {"endpoints": rows} if rows else None
+
+    def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
+        """Return whether every addressed endpoint already carries this note."""
+        registry = self._registry(hass)
+        if registry is None:
+            return False
+        wanted = args[SERVICE_FIELD_DESCRIPTION] or None
+        requested = as_list(args[SERVICE_FIELD_ENDPOINT_ID])
+        endpoints = [registry.endpoints.get(device_id) for device_id in requested]
+        if any(endpoint is None for endpoint in endpoints):
+            return False
+        return all(endpoint.description == wanted for endpoint in endpoints if endpoint)
+
+    def _after(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return the requested description."""
+        return {"description": args[SERVICE_FIELD_DESCRIPTION] or None}
+
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
+        """Return one call per endpoint, restoring its own previous note."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        calls: list[str] = []
+        for device_id in as_list(args[SERVICE_FIELD_ENDPOINT_ID]):
+            endpoint = registry.endpoints.get(device_id)
+            if endpoint is None:
+                continue
+            calls.append(
+                f"{format_tool_name(SERVICE_SET_ENDPOINT_DESCRIPTION)}("
+                f"endpoint_id={device_id!r}, "
+                f"description={endpoint.description or ''!r})"
+            )
+        return calls or None
+
+
 class SetClientAliasTool(_ControlDControlTool):
     """Set a display alias for one client under an endpoint."""
 
@@ -1743,28 +2203,54 @@ class SetClientAliasTool(_ControlDControlTool):
         "Give one client a friendly display alias. This is cosmetic and "
         "client-scoped: it labels one device seen under an endpoint.\n"
         "\n"
-        "A *client* is something seen under an endpoint, identified by its MAC, "
-        "hostname, or LAN IP. This is NOT the same as renaming an endpoint — an "
-        "endpoint is the protected row itself, a client is a device behind it. "
-        "Use `rename_endpoint` for the endpoint and this tool for a single "
-        "device.\n"
+        "A *client* is something seen under an endpoint. This is NOT the same as "
+        "renaming an endpoint — an endpoint is the protected row itself, a client "
+        "is a device behind it. Use `rename_endpoint` for the endpoint and this "
+        "tool for a single device. A device can be both: a client that has been "
+        "assigned its own profile becomes an endpoint too, and its alias still "
+        "belongs to the client side.\n"
         "\n"
-        "Resolve the client first with get_inventory using `detail: 'full'`, "
-        "which lists each client with its mac_address, hostname, ip_address, and "
-        "parent_endpoint_id. Pass the client's `mac_address` (recommended, since "
-        "it is stable) or its hostname. Aliases are only available for endpoints "
-        "that relay client data, which requires DNS-over-HTTPS.\n"
+        "Resolve the client with get_inventory using `detail: 'full'`. **Pass its "
+        "`client_id`**, which is the identifier the alias API itself uses and the "
+        "only one that is guaranteed to address a single client.\n"
+        "\n"
+        "A MAC is accepted as a convenience but is **not** reliable: a client "
+        "commonly appears more than once under one endpoint with the same MAC and "
+        "IP but a different `client_id`, and the call then fails as ambiguous. "
+        "The same applies to a hostname. When a call reports ambiguity, re-read "
+        "the clients and use `client_id`. Note that `endpoint_mac` names the "
+        "*client's* MAC, not the endpoint's — endpoints have no MAC at all.\n"
+        "\n"
+        "Aliases are only available for endpoints that relay client data, which "
+        "requires DNS-over-HTTPS.\n"
         "\n"
         "This is reversible: `clear_client_alias` removes it, and the `undo` "
         "field names that call."
     )
     parameters = vol.Schema(
         {
-            vol.Required(
+            vol.Optional(
+                SERVICE_FIELD_CLIENT_ID,
+                description=(
+                    "Optional. The client's `client_id` from get_inventory with "
+                    "detail 'full'. Recommended: it addresses exactly one client "
+                    "and takes precedence over any other selector."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
                 SERVICE_FIELD_ENDPOINT_MAC,
                 description=(
-                    "Required. The client's MAC address, from get_inventory with "
-                    "detail 'full'. This is the stable identifier for a client."
+                    "Optional. The client's MAC address, from get_inventory with "
+                    "detail 'full'. Convenient but not unique: the same MAC can "
+                    "appear on several clients under one endpoint. Prefer "
+                    "client_id."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_ENDPOINT_HOSTNAME,
+                description=(
+                    "Optional. The client's hostname, from get_inventory with "
+                    "detail 'full'. Not guaranteed unique. Prefer client_id."
                 ),
             ): vol.Any(str, [str]),
             vol.Required(
@@ -1778,7 +2264,8 @@ class SetClientAliasTool(_ControlDControlTool):
                 SERVICE_FIELD_PARENT_ENDPOINT_NAME,
                 description=(
                     "Optional. The parent endpoint's name, to disambiguate when "
-                    "the same MAC is seen under more than one endpoint."
+                    "the same selector matches clients under more than one "
+                    "endpoint."
                 ),
             ): str,
         }
@@ -1787,21 +2274,13 @@ class SetClientAliasTool(_ControlDControlTool):
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the addressed client."""
-        return {"kind": "client", "mac": args[SERVICE_FIELD_ENDPOINT_MAC]}
+        return _client_target(args)
 
     def _matching_targets(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> tuple[Any, ...]:
-        """Return the alias targets this call addresses, by MAC."""
-        registry = self._registry(hass)
-        if registry is None:
-            return ()
-        macs = {mac.casefold() for mac in as_list(args[SERVICE_FIELD_ENDPOINT_MAC])}
-        return tuple(
-            target
-            for target in registry.client_alias_targets.values()
-            if (target.client_mac_address or "").casefold() in macs
-        )
+        """Return the alias targets this call addresses."""
+        return _match_client_targets(self._registry(hass), args)
 
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
@@ -1825,11 +2304,17 @@ class SetClientAliasTool(_ControlDControlTool):
         return {"alias": args[SERVICE_FIELD_ALIAS]}
 
     def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str]:
-        """Return the call that clears the alias."""
-        return [
-            f"{format_tool_name('clear_client_alias')}("
-            f"endpoint_mac={args[SERVICE_FIELD_ENDPOINT_MAC]!r})"
+        """Return the calls that clear the aliases addressed."""
+        calls = [
+            f"{format_tool_name('clear_client_alias')}({_client_selector_args(target)})"
+            for target in self._matching_targets(hass, args)
         ]
+        if calls:
+            return calls
+        selector = _client_selector_args_from_args(args)
+        if selector is None:
+            return []
+        return [f"{format_tool_name('clear_client_alias')}({selector})"]
 
 
 class ClearClientAliasTool(_ControlDControlTool):
@@ -1842,26 +2327,49 @@ class ClearClientAliasTool(_ControlDControlTool):
         "hostname or MAC again. Use it to undo a `set_client_alias`.\n"
         "\n"
         "This is client-scoped and cosmetic: it changes no policy and does not "
-        "touch the endpoint the client sits under. Resolve the client first with "
-        "get_inventory using `detail: 'full'` and pass its `mac_address`.\n"
+        "touch the endpoint the client sits under.\n"
+        "\n"
+        "Resolve the client with get_inventory using `detail: 'full'`. **Pass its "
+        "`client_id`**, which is the identifier the alias API uses and the only "
+        "one guaranteed to address a single client. A MAC is accepted as a "
+        "convenience but is not reliable — a client commonly appears more than "
+        "once under one endpoint with the same MAC and IP but a different "
+        "`client_id`, which fails as ambiguous. Note that `endpoint_mac` names "
+        "the *client's* MAC; endpoints have no MAC at all.\n"
         "\n"
         "Only the alias is removed; the client's traffic and rules are "
         "unaffected."
     )
     parameters = vol.Schema(
         {
-            vol.Required(
+            vol.Optional(
+                SERVICE_FIELD_CLIENT_ID,
+                description=(
+                    "Optional. The client's `client_id` from get_inventory with "
+                    "detail 'full'. Recommended: it addresses exactly one client "
+                    "and takes precedence over any other selector."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
                 SERVICE_FIELD_ENDPOINT_MAC,
                 description=(
-                    "Required. The client's MAC address, from get_inventory with "
-                    "detail 'full'."
+                    "Optional. The client's MAC address, from get_inventory with "
+                    "detail 'full'. Convenient but not unique. Prefer client_id."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_ENDPOINT_HOSTNAME,
+                description=(
+                    "Optional. The client's hostname, from get_inventory with "
+                    "detail 'full'. Not guaranteed unique. Prefer client_id."
                 ),
             ): vol.Any(str, [str]),
             vol.Optional(
                 SERVICE_FIELD_PARENT_ENDPOINT_NAME,
                 description=(
                     "Optional. The parent endpoint's name, to disambiguate when "
-                    "the same MAC is seen under more than one endpoint."
+                    "the same selector matches clients under more than one "
+                    "endpoint."
                 ),
             ): str,
         }
@@ -1870,21 +2378,13 @@ class ClearClientAliasTool(_ControlDControlTool):
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the addressed client."""
-        return {"kind": "client", "mac": args[SERVICE_FIELD_ENDPOINT_MAC]}
+        return _client_target(args)
 
     def _matching_targets(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> tuple[Any, ...]:
-        """Return the alias targets this call addresses, by MAC."""
-        registry = self._registry(hass)
-        if registry is None:
-            return ()
-        macs = {mac.casefold() for mac in as_list(args[SERVICE_FIELD_ENDPOINT_MAC])}
-        return tuple(
-            target
-            for target in registry.client_alias_targets.values()
-            if (target.client_mac_address or "").casefold() in macs
-        )
+        """Return the alias targets this call addresses."""
+        return _match_client_targets(self._registry(hass), args)
 
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
@@ -1910,12 +2410,137 @@ class ClearClientAliasTool(_ControlDControlTool):
         """Return one call per client, restoring the alias that was removed."""
         calls = [
             f"{format_tool_name('set_client_alias')}("
-            f"endpoint_mac={target.client_mac_address!r}, "
-            f"alias={target.client_alias!r})"
+            f"{_client_selector_args(target)}, alias={target.client_alias!r})"
             for target in self._matching_targets(hass, args)
-            if target.client_mac_address and target.client_alias
+            if target.client_alias is not None
         ]
         return calls or None
+
+
+class DeleteClientTool(_ControlDControlTool):
+    """Permanently delete client rows and, by default, their query history."""
+
+    name = format_tool_name("delete_client")
+    title = "Delete client"
+    description = (
+        "PERMANENTLY DELETE client rows from one or more endpoints, and by "
+        "default their stored query history with them. There is no undo: the "
+        "rows and the history cannot be restored.\n"
+        "\n"
+        "Read this before running it, because the effect is usually not what a "
+        "caller expects. A client row exists because Control D *observed* that "
+        "client's traffic — it is derived, not configured. Deleting it clears "
+        "what is recorded and nothing more: an ordinary client reappears the "
+        "next time it is online, so the removal is **not** durable. Only two "
+        "things about a client outlive its traffic, an `alias` and a policy "
+        "assignment, and this tool changes neither. Where deletion *is* "
+        "durable is a client that will never recur, and the everyday case is a "
+        "rotating private MAC: each rotation arrives under a new MAC and so "
+        "creates its own row that can never be seen again.\n"
+        "\n"
+        "That makes this a history-hygiene tool, not a device-retirement tool. "
+        "If asked to remove clients by age or by a blank MAC, say what it "
+        "actually does: on an ordinary client the row comes back, and on a "
+        "network that rotates private MACs a sweep clears what exists now while "
+        "the next connection adds a fresh row — a recurring chore, not a fix.\n"
+        "\n"
+        "Select targets exactly as for `set_client_alias`, preferring "
+        "`client_id`. A MAC may match several clients, and a hostname such as "
+        "`watch` can match a long list produced by repeated rotations, so a "
+        "convenience selector can delete far more than intended. Confirm the "
+        "resolved list first with get_inventory using `detail: 'full'` and "
+        "narrow by `profile_id` or `endpoint_id`.\n"
+        "\n"
+        "This is not `clear_client_alias`: that removes an alias and leaves the "
+        "client in place.\n"
+        "\n"
+        "Set `delete_history: false` to remove only the rows and keep their "
+        "history. The result reports the number of rows the API confirmed it "
+        "removed, which can be fewer than the number requested."
+    )
+    parameters = vol.Schema(
+        {
+            vol.Optional(
+                SERVICE_FIELD_CLIENT_ID,
+                description=(
+                    "Optional. The client's `client_id` from get_inventory with "
+                    "detail 'full'. Recommended: it addresses exactly one "
+                    "client and takes precedence over any other selector."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_ENDPOINT_MAC,
+                description=(
+                    "Optional. The client's MAC address, from get_inventory with "
+                    "detail 'full'. Not unique: the same MAC can appear on "
+                    "several clients, and every match is deleted. Prefer "
+                    "client_id."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_ENDPOINT_HOSTNAME,
+                description=(
+                    "Optional. The client's hostname, from get_inventory with "
+                    "detail 'full'. A rotating private MAC yields many rows "
+                    "under one hostname, so this can match a long list. Prefer "
+                    "client_id."
+                ),
+            ): vol.Any(str, [str]),
+            vol.Optional(
+                SERVICE_FIELD_PARENT_ENDPOINT_NAME,
+                description=(
+                    "Optional. The parent endpoint's name, to disambiguate when "
+                    "the same selector matches clients under more than one "
+                    "endpoint."
+                ),
+            ): str,
+            vol.Optional(
+                SERVICE_FIELD_DELETE_HISTORY,
+                default=True,
+                description=(
+                    "Optional, defaults to true. When true the clients' stored "
+                    "DNS query history is purged as well. Set false to remove "
+                    "only the rows."
+                ),
+            ): cv.boolean,
+        }
+    )
+    _service = SERVICE_DELETE_CLIENT
+    annotations = _DESTRUCTIVE_ANNOTATIONS
+    # Deletion has no prior state to compare and no undo by design, so the
+    # "state could not be read" note would give the wrong reason for both.
+    _has_precheck = False
+
+    def _target(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return the clients this call addresses."""
+        return _client_target(args)
+
+    def _matching_targets(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> tuple[Any, ...]:
+        """Return the alias targets this call addresses."""
+        return _match_client_targets(self._registry(hass), args)
+
+    def _before(self, hass: HomeAssistant, args: dict[str, Any]) -> dict[str, Any]:
+        """Return what is being destroyed, read before the write."""
+        targets = self._matching_targets(hass, args)
+        return {
+            "client_count": len(targets),
+            "clients": [
+                {
+                    "client_id": target.client_id,
+                    "alias": target.client_alias,
+                    "hostname": target.client_hostname,
+                    "mac_address": target.client_mac_address,
+                }
+                for target in targets
+            ],
+            "delete_history": args.get(SERVICE_FIELD_DELETE_HISTORY, True),
+        }
+
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> None:
+        """Deletion is irreversible, so no undo is claimed."""
+        return None
 
 
 def build_control_tools(*, entry_id: str, include_destructive: bool) -> list[llm.Tool]:
@@ -1934,11 +2559,16 @@ def build_control_tools(*, entry_id: str, include_destructive: bool) -> list[llm
         EnableProfileTool(entry_id=entry_id),
         DisableProfileTool(entry_id=entry_id),
         RenameEndpointTool(entry_id=entry_id),
+        CreateEndpointTool(entry_id=entry_id),
+        SetEndpointProfileTool(entry_id=entry_id),
+        SetEndpointDescriptionTool(entry_id=entry_id),
         SetEndpointAnalyticsLoggingTool(entry_id=entry_id),
         SetClientAliasTool(entry_id=entry_id),
         ClearClientAliasTool(entry_id=entry_id),
         CreateRuleTool(entry_id=entry_id),
     ]
     if include_destructive:
+        tools.append(DeleteClientTool(entry_id=entry_id))
+        tools.append(DeleteEndpointTool(entry_id=entry_id))
         tools.append(DeleteRuleTool(entry_id=entry_id))
     return tools

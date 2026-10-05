@@ -131,8 +131,12 @@ def _hass(service_call: AsyncMock) -> MagicMock:
     return fake
 
 
-def _tool_with_registry(tool: llm.Tool, registry: _Registry) -> llm.Tool:
-    """Point a tool's registry read at a fixed registry."""
+def _tool_with_registry[ToolT: llm.Tool](tool: ToolT, registry: _Registry) -> ToolT:
+    """Point a tool's registry read at a fixed registry.
+
+    Generic in the tool type so the concrete class survives the call: the tests
+    below exercise protected hooks that only exist on the subclasses.
+    """
     tool._registry = lambda hass: registry  # type: ignore[method-assign]
     return tool
 
@@ -469,6 +473,9 @@ async def test_deleting_an_unconfigured_service_carries_no_undo() -> None:
     assert result.data["before"] is None
     assert result.data["undo"] is None
     assert len(result.data["warnings"]) == 1
+
+
+async def test_enabling_a_profile_that_is_not_paused_reports_no_change() -> None:
     """Enabling a profile that is not paused reports already_in_state."""
     service_call = AsyncMock()
     tool = _tool_with_registry(EnableProfileTool(entry_id="e-1"), _registry())

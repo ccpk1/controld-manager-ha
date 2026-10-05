@@ -530,7 +530,10 @@ last activity time.
 
 The integration registers these Home Assistant services:
 
+- `controld_manager.create_endpoint`
 - `controld_manager.create_rule`
+- `controld_manager.delete_client`
+- `controld_manager.delete_endpoint`
 - `controld_manager.delete_rule`
 - `controld_manager.delete_service`
 - `controld_manager.disable_profile`
@@ -543,6 +546,8 @@ The integration registers these Home Assistant services:
 - `controld_manager.clear_client_alias`
 - `controld_manager.rename_endpoint`
 - `controld_manager.set_endpoint_analytics_logging`
+- `controld_manager.set_endpoint_description`
+- `controld_manager.set_endpoint_profile`
 - `controld_manager.set_default_rule_state`
 - `controld_manager.set_filter_state`
 - `controld_manager.set_option_state`
@@ -646,6 +651,103 @@ Manual examples:
 	`config_entry_id: "a1b2c3d4e5f6g7h8i9j0"`
 	`endpoint_name: ["Cabin Tablet"]`
 	`mode: "Some"`
+
+### Endpoint profile service
+
+`controld_manager.set_endpoint_profile` attaches the profile an endpoint enforces,
+and optionally a second one. This is what moves a device between policies.
+
+- select targets with `endpoint_id` (preferred; ids are unique) or
+    `endpoint_name`
+- `profile_id` sets the **primary** profile, and accepts a profile id or name
+- `profile_id2` sets the **secondary** profile
+- `clear_profile2: true` detaches the secondary, leaving only the primary
+- the primary **cannot be cleared**: every endpoint always enforces exactly one
+    profile, and Control D rejects an attempt to empty the primary. To make an
+    endpoint permissive, assign a permissive profile instead
+- when two profiles are attached the rule engine **merges** them before matching
+    rather than applying them in order, so a custom rule in the secondary can
+    override a filter in the primary. That is how a shared baseline plus a
+    device-specific policy is built
+- changing a profile changes what the endpoint blocks, so confirm the target
+
+Manual examples:
+
+- move one endpoint onto a different policy:
+        `endpoint_id: ["461wtt4eyr"]`
+        `profile_id: "962691chipwa5"`
+- enforce a shared baseline as well, without changing the primary:
+        `endpoint_id: ["461wtt4eyr"]`
+        `profile_id2: "886818chik7jg"`
+- detach the secondary again:
+        `endpoint_id: ["461wtt4eyr"]`
+        `clear_profile2: true`
+
+### Endpoint description service
+
+`controld_manager.set_endpoint_description` sets the free-text note an endpoint
+carries, and an **empty string clears it**.
+
+- select targets with `endpoint_id` (preferred) or `endpoint_name`
+- the note changes no behaviour; it is for recording what a device is or why it
+    is configured a certain way
+- the current value is reported by `get_inventory` under `advanced.description`
+
+### Create endpoint service
+
+`controld_manager.create_endpoint` adds one endpoint, which is a DNS resolver that
+enforces a profile.
+
+- `endpoint_name` is required and must be **unique**; Control D rejects a
+    duplicate
+- `profile_id` is required, because an endpoint always enforces exactly one
+    profile
+- `description` and `icon` are optional, as is `mode` for the initial analytics
+    logging level
+- the new endpoint's id is assigned by Control D and is only known after the call
+- a new endpoint reports **Pending** until it first sends queries, which is
+    normal and clears on its own
+
+### Delete endpoint service
+
+`controld_manager.delete_endpoint` permanently removes one or more endpoints.
+
+**This is destructive and cannot be undone.** Deleting an endpoint removes the
+resolver itself and the records kept against it, so anything resolving through it
+stops being filtered. Deleting a router endpoint is the widest case: it enforces a
+profile for a whole network segment, so every device behind it loses that policy
+at once.
+
+- select targets with `endpoint_id` (preferred) or `endpoint_name`
+- if you only want to stop filtering for a while, assign a permissive profile
+    with `set_endpoint_profile` instead — the endpoint and its history stay intact
+- requires an **administrator**
+
+### Delete client service
+
+`controld_manager.delete_client` permanently removes client rows, and by default
+their stored query history with them.
+
+Read this before using it, because the effect is usually not what it sounds like:
+
+- a client row exists because Control D **observed** that client's traffic, so it
+    is derived rather than configured. For an ordinary client the row **comes
+    back** the next time the device is online, so the removal is not durable
+- the only things about a client that outlive its traffic are its **alias** and a
+    **policy assignment**, and this service changes neither
+- where deletion does stick is a client that will never recur. A device using a
+    **rotating private MAC** is the everyday case: each rotation arrives under a
+    new address and creates its own row that can never be seen again
+- it is therefore a **history-hygiene** tool, not a device-retirement tool, and
+    on a network with rotating private MACs it is a recurring chore rather than a
+    one-off fix
+
+- select targets with `client_id` (preferred; it is the only selector guaranteed
+    to match one client), or by MAC, hostname, name, or IP
+- a MAC or a hostname such as `watch` can match a long list, so confirm the set
+    with `get_inventory` first
+- `delete_history: false` removes only the rows and keeps their history
+- requires an **administrator**
 
 ### Delete service
 

@@ -1,16 +1,16 @@
 # Control D Manager — MCP Tool Reference
 
 The authoritative reference for the tools this integration exposes to LLMs and MCP
-clients (via Home Assistant's `mcp_server`). It is also the **spec** the tool
-surface is built and tested against.
+clients (via Home Assistant's `mcp_server`).
 
 - **Audience:** LLM/MCP tool authors, agent developers, and anyone wiring a client
   to this integration. Users of the Home Assistant UI or service calls should read
   [`USER_GUIDE.md`](USER_GUIDE.md) instead.
-- **Scope:** every available and planned tool. Tools marked *(planned)* do not
-  exist yet; this document is the target they are built to.
-- **Status:** the spec exists, the API foundation is complete, and `get_account_overview`
-  is implemented. The remaining tools are added in Phase 2 of
+- **Scope:** every tool, as shipped — **24 in total**: 5 read, 16 control, and 3
+  destructive. Nothing here is aspirational; if a tool is listed, it is registered
+  and tested.
+- **Status:** complete for the current initiative. The decision history behind each
+  contract, including the ones that were corrected, is in
   `plans/in-process/CONTROLD_MANAGER_LLM_TOOLS_IN-PROCESS.md`.
 - **How to read it:** [Conventions](#conventions) apply to every tool; each tool
   below follows one fixed template. Read Conventions first.
@@ -60,8 +60,216 @@ Scope rules:
 - A client that is **explicitly assigned** a profile **is its own endpoint**.
   There is no "individually protected" flag on a sub-client; assignment is what
   makes it an endpoint.
+- A device can therefore be **both**. A client that became its own endpoint is
+  listed as an endpoint with its own `device_id` and as a client under its
+  original parent, where `is_standalone_endpoint: true` and `own_endpoint_id`
+  mark it, and `parent_client_id` records the client identity it had. Its
+  `client_id` is still what aliases it.
 - Never call an endpoint a device or a client, and never call a client an
   endpoint.
+
+### Client identity
+
+Endpoints have **no MAC address**; clients do. A client is identified by its
+`client_id`, and that is the identifier the alias API keys on. Two clients under
+one endpoint routinely share a MAC address *and* an IP while differing by
+`client_id` — a phone and a tablet behind one router segment, for example — so a
+MAC selector can be ambiguous where a client id never is.
+
+`endpoint_mac` is therefore a convenience selector naming the *client's* MAC,
+not the endpoint's, and is the wrong name for what it does. Prefer `client_id` on
+`set_client_alias` and `clear_client_alias`, and check the `client_id` a control
+result reports when the account has duplicates.
+
+### Choosing a client row
+
+Client rows are never cleaned up, so a parent endpoint with a long history
+carries rows for devices that no longer exist. Two fields say whether a row is
+attributable to a real device, and they are **independent** of each other:
+
+- `last_active` — when Control D last saw that client. Recent means live.
+- `mac_address` — blank or `00:00:00:00:00:00` on some rows.
+
+A blank MAC is expected rather than broken, and it does **not** indicate a stale
+row. Measured on this account, 58 of 397 client rows carry a blank or all-zeros
+MAC, and their median age (40 days) is the same as the rows with a valid MAC (41
+days) — 10 of the 58 were active within the previous week. The rows behind those
+blank MACs are identifiable devices with hostnames and IPs, not leftovers:
+`nvidia-shield`, `echo-payton`, `metaquest3`, `metaquest2`, `echo-basement`,
+`echo-bonusroom`, `fire-tablet-hd10-office`, and the router itself appear this
+way. When ctrld runs on the router, some relayed traffic reaches Control D
+without a MAC to record, which is what produces them.
+
+Recency and MAC validity are independent, so neither one implies the other.
+Prefer a row that satisfies both, but do not discard a recency-bearing row just
+because its MAC is blank.
+
+This affects which row to pick, not whether a write can succeed — the alias API
+keys on `client_id` and never needs a MAC. A blank-MAC client is still aliasable;
+the MAC only helps a human recognise which device the row belongs to.
+
+### A client row is an observation, not configuration
+
+This is the single most important thing to know before proposing to tidy client
+rows, and it decides whether cleanup is worth doing at all.
+
+A client row exists because Control D has *seen* that client's traffic. It is not
+something an account configures, so deleting one is **not durable**: if the same
+client identity is seen again, the row is re-created. Only two things about a
+client outlive its traffic:
+
+- an **alias**, which is stored and survives until cleared, and
+- a **policy assignment**, which promotes the client to an endpoint.
+
+Everything else — the row itself, its hostname, its IP, its MAC, and its recorded
+history — is derived from traffic. So for an ordinary client, deleting the row
+only clears history and the row returns the next time the device is online. A
+delete is effectively permanent only for an identity that will not be seen again.
+
+That carve-out is real, though, and it has a common cause on this account.
+
+### Private MAC rotation manufactures client rows
+
+A device using a rotating private MAC arrives under a **new** MAC each time it
+connects, so it cannot be recognised as a repeat client and each connection
+creates its own row. Apple Watches here do exactly this: 29 rows under one parent
+endpoint share the hostname `watch` and have **29 distinct MACs** — one row per
+rotation, median age 69 days, 6 active within the last 30 days. This is routine
+churn rather than corruption, and it is the main reason a parent endpoint
+accumulates a long tail of rows.
+
+Because the rotated MAC is never reused, deleting those rows *is* durable —
+unlike deleting an ordinary client. But it does not stop the churn: the next
+connection simply adds a fresh row. Cleanup is therefore a recurring chore rather
+than a fix, and it is worth saying so rather than presenting a one-off sweep as a
+solution.
+
+### A device can be a client and an endpoint at once
+
+The two views are not in conflict, and it helps to be explicit about why, because
+seeing one device in both places invites the conclusion that one of them is
+wrong.
+
+Take `chads-phone`. It is listed as an endpoint with its own `device_id`, and it
+is simultaneously a client under `Firewalla-VLAN60`:
+
+```
+device_id      = 22pad6pj5t        (the endpoint row)
+profile        = Chads Phone
+profile2       = 7580 Default Profile
+parent_device  = {device_id: 461wtt4eyr, client_id: 65a84a0daca5}
+```
+
+Both are correct, because they answer different questions about the same physical
+device. The **client** view comes from observed traffic and is where aliases live.
+The **endpoint** view is the stored configuration — the profile assignment that
+grants it its own policy — and is where policy is set. Assigning a profile does
+not remove the client row, which is why a device with a profile still appears
+under its parent and still shows as a client with a profile assigned.
+
+In tool terms: alias it through the client identity, and change its policy
+through the endpoint. `is_standalone_endpoint`, `own_endpoint_id`, and
+`parent_client_id` are what connect the two.
+
+### Deleting clients
+
+`delete_client` removes client rows, individually or in bulk, through
+`DELETE /v2/client` on the analytics host, taking the parent endpoint id and a
+list of client ids. It is registered **only in the Full tier**, because there is
+no undo.
+
+Keep the families apart, because the neighbouring names invite a mistake:
+`clear_client_alias` removes a client's alias and leaves the client in place, and
+`delete_service` and `delete_rule` remove profile configuration rather than
+anything about a device. Only `delete_client` removes the observed client row
+itself, and it purges that client's stored query history by default.
+
+It is a **history-hygiene tool, not a device-retirement one**, and saying so is
+part of using it honestly. For an ordinary client the deletion is **not durable**:
+the row reappears the next time that client is seen. Only an alias or a policy
+assignment outlives the traffic, and this tool changes neither. An identity that
+will never recur — a rotated private MAC — is the case where the removal actually
+sticks. So an age-based or blank-MAC-based sweep clears history rather than
+retiring devices, and on a network with rotating private MACs the churn continues
+afterwards.
+
+Because a convenience selector can match more than intended, resolve the set with
+`get_inventory` first and prefer `client_id`. A MAC may match several clients, and
+a hostname such as `watch` can match a long list produced by repeated private-MAC
+rotations. The result reports the number of rows the API confirmed it removed,
+which can be fewer than the number requested. Set `delete_history: false` to
+remove only the rows and keep their history.
+
+### Endpoint write limitations
+
+Endpoint creation and deletion are now exposed as `create_endpoint` and
+`delete_endpoint`.
+
+Every endpoint row also reports the dashboard's **Advanced Settings** as
+`advanced`, with the labels the dashboard uses: `description`, `icon`,
+`authorize_by_secure_dns`, `require_authorized_ips`, and `legacy_dns`,
+`authorize_by_dynamic_dns`, `expose_ip_via_dns` and `prevent_deactivation` as
+`{enabled, ...}` objects. None of these is enabled on this account, so the block
+reads as all-false.
+
+**These are reported, not controlled**, with one exception: `set_endpoint_description`
+sets and clears `description`, because a note on an endpoint is genuinely useful.
+The remaining Advanced Settings writes are deliberately not exposed — the write
+keys are captured and recorded in `docs/ENGINEERING_FINDINGS.md` if they are ever
+needed.
+
+Two details a reader should know:
+
+- An absent field in the API means the feature is off, not unknown: Control D
+  omits `legacy_ipv4`, `ddns`, and `ddns_ext` entirely when unset, so the rows
+  derive enablement from whether the field is there at all.
+- `prevent_deactivation.enabled` reports only **whether** a PIN is set. The PIN
+  itself is a credential and is never read back.
+
+### Creating and deleting endpoints
+
+`create_endpoint` requires a profile, because an endpoint always enforces exactly
+one. The name must be unique across the account, and Control D assigns the
+`device_id`, so it only exists after the call — which is why the tool's `undo`
+names the reverse by endpoint **name** rather than by id. This is the one place a
+name is a safe selector here.
+
+`delete_endpoint` is irreversible and belongs to the destructive tier. Deleting an
+endpoint removes the resolver itself along with the records kept against it, so
+whatever resolved through it stops being filtered. Deleting a router endpoint is
+the extreme case: it enforces a profile for a whole network segment, so every
+device behind it loses that policy at once. A newly created endpoint is **Pending**
+— `status: 0`, no activity — until it first sends queries; that is the dashboard's
+own label for the state, and it is not a disabled endpoint.
+
+### Only two things here were ever "unavailable", and neither was a real limit
+
+Worth recording because both were mistakes of mine, and the same one twice:
+
+- **Primary and secondary profile assignment works.** The write keys are
+  **`profile_id` and `profile_id2`** — note the suffix — while the *read* keys are
+  `profile` and `profile2`. Setting `profile_id2` to a profile PK attaches the
+  secondary profile, and setting it to the integer `-1` clears it. I had probed
+  `profile2` as a write key, which is the read name, and concluded the write was
+  unsupported.
+- Why the mistake was possible: **`PUT /devices/{device_id}` returns `200 ok` for
+  keys it does not act on.** A wrong key name is indistinguishable from a
+  successful write by status code alone. The fields it does honour — `name`,
+  `stats`, `desc`, `status`, `learn_ip`, `restricted` — each reject a bad value,
+  so a validated field gives a real error and an unknown one gives silence.
+
+The lesson, and the rule this documentation now follows: **a `200` with no
+observed change is not evidence that a capability is missing — it is evidence that
+the request was wrong.** Everything the Control D web client does is done through
+its backend API; some of it is simply not in the published reference. Capture the
+real request from the browser rather than inferring a limit, and never write
+"not possible through the API" on the strength of a failed guess.
+
+Also note `status` is **not** a disabled flag. Two endpoints here report `status:
+0`, and both are simply unseen — one is a new endpoint that was just created,
+neither has a `last_activity` field, both have `ip_count: 0` and no clients. A
+`0` therefore means "no activity observed yet" and clears on its own once traffic
+flows; it needs no re-enabling.
 
 ### Naming
 
@@ -240,18 +448,18 @@ come before controls.
 - **Annotations** — `read_only=True`, `destructive=False`, `idempotent=True`,
   `open_world=False`.
 
-### Group 2 — Inventory and topology *(planned: Phase 2)*
+### Group 2 — Inventory and topology
 
 | Tool | Answers |
 | --- | --- |
-| `get_inventory` *(planned)* | "What are my profiles, endpoints, and clients, and what is assigned to what?" |
+| `get_inventory` | "What are my profiles, endpoints, and clients, and what is assigned to what?" |
 
-### Group 3 — Troubleshooting and activity *(planned: Phase 2)*
+### Group 3 — Troubleshooting and activity
 
 | Tool | Answers |
 | --- | --- |
-| `get_activity_log` *(planned)* | "What happened, and why was this blocked?" |
-| `test_domain` *(planned)* | "Would this endpoint block this domain, and by what?" |
+| `get_activity_log` | "What happened, and why was this blocked?" |
+| `test_domain` | "Would this endpoint block this domain, and by what?" |
 
 ### Group 4 — Block analytics
 
@@ -264,11 +472,11 @@ narrowed further or paged, so it returns a slice rather than a complete answer.
 Forcing everything through `get_activity_log`, which has the full filter set, is
 strictly better than exposing a surface that cannot be drilled into.
 
-### Group 5 — Configuration reads *(planned: Phase 2)*
+### Group 5 — Configuration reads
 
 | Tool | Answers |
 | --- | --- |
-| `get_catalog` *(planned)* | "What filters, services, options, rules, and default rules exist, and what state are they in?" |
+| `get_catalog` | "What filters, services, options, rules, and default rules exist, and what state are they in?" |
 
 `get_catalog` returns **state**, not just availability: filters carry `enabled`,
 `supports_modes`, and `current_mode`; services carry `current_mode`; rules carry
@@ -291,9 +499,12 @@ tiers:
 | `set_default_rule_state` | Set a profile's catch-all action |
 | `enable_profile` / `disable_profile` | Control D's own pause, reversible (disable can be timed) |
 | `rename_endpoint` | Rename an endpoint (cosmetic, endpoint-scoped) |
+| `set_endpoint_description` | Set or clear the note an endpoint carries |
+| `set_endpoint_profile` | Attach the primary profile an endpoint enforces, and optionally a second |
+| `create_endpoint` | Create an endpoint enforcing a profile. Name must be unique; undo deletes it by name |
 | `set_endpoint_analytics_logging` | Set an endpoint's logging to None, Some, or Full |
-| `set_client_alias` | Label one client under an endpoint (cosmetic, client-scoped) |
-| `clear_client_alias` | Remove a client's alias |
+| `set_client_alias` | Label one client under an endpoint (cosmetic, client-scoped; select by `client_id`) |
+| `clear_client_alias` | Remove a client's alias (select by `client_id`) |
 | `create_rule` | Create a custom rule — **not idempotent**; undo is `delete_rule` |
 
 ### Destructive *(Full tier only)*
@@ -301,6 +512,8 @@ tiers:
 | Tool | Effect |
 | --- | --- |
 | `delete_rule` | Permanently delete a custom rule. No undo; prefer `set_rule_state` with `enabled: false` |
+| `delete_client` | Permanently delete client rows and, by default, their query history. No undo; not durable for an ordinary client |
+| `delete_endpoint` | Permanently delete an endpoint, its resolver, and its records. No undo |
 
 ## Endpoint identity
 
@@ -309,11 +522,42 @@ Endpoint-scoped services accept **`endpoint_id`** (from `get_inventory`) and
 endpoint names are not guaranteed to be unique. Prefer the id for any write; use
 the name only when a human is choosing interactively.
 
+`create_endpoint` is the one exception in the other direction: the new endpoint's
+id does not exist until the call returns, so the undo that reverses a create must
+address it by name. That is safe precisely because the API enforces name
+uniqueness.
+
+### What an endpoint row carries
+
+`get_inventory` endpoint rows report:
+
+| Field | Meaning |
+| --- | --- |
+| `device_id`, `name`, `role`, `is_endpoint` | Identity and that this row is an endpoint |
+| `owning_profile_id`, `owning_profile_name` | The **primary** enforced profile |
+| `secondary_profile_id`, `secondary_profile_name` | The **second** enforced profile, when one is attached |
+| `attached_profiles` | Every attached profile, with names |
+| `associated_client_count` | Clients attributed to this endpoint |
+| `parent_device_id`, `parent_client_id` | Set when the device is also a client under another endpoint |
+| `last_active` | When the endpoint was last seen. **Absent** when it has never been seen |
+| `advanced` | The dashboard's Advanced Settings; see above |
+
+Two profiles are common here: 11 of 20 endpoints on the account that motivated
+this integration enforce a primary *and* a secondary, so a caller reading only
+`owning_profile_id` sees half the picture.
+
 ## Not yet exposed
 
-Endpoint-to-profile assignment is deferred: changing which policy governs a whole
-segment has the widest blast radius of anything in this integration, and it needs
-firm multi-profile precedence handling before a model may call it.
+Captured and documented, deliberately not built:
+
+- **The remaining Advanced Settings writes** — Legacy DNS, Authorize by Dynamic
+  DNS, Expose IP via DNS, Require Authorized IPs, and Prevent Deactivation. The
+  read side is reported; the write keys and clear sentinels are recorded in
+  `docs/ENGINEERING_FINDINGS.md` if they are ever wanted.
+- **Endpoint `status`** (`1` Active, `2` Soft disabled, `3` Hard disabled,
+  `0` Pending). Forceable, but not exposed.
+- **`get_account_overview`-adjacent redirect locations** — `GET /proxies` lists the
+  locations a redirect may target. Without it a caller must know a region code.
 
 ---
 

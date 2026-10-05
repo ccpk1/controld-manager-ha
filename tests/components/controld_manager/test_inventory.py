@@ -15,6 +15,9 @@ from custom_components.controld_manager.const import (
     DETAIL_FULL,
     DETAIL_SUMMARY,
 )
+from custom_components.controld_manager.managers.endpoint_manager import (
+    EndpointManager,
+)
 from custom_components.controld_manager.managers.integration_manager import (
     IntegrationManager,
 )
@@ -67,6 +70,7 @@ def _registry() -> ControlDRegistry:
                 attached_profiles=(ControlDAttachedProfile(profile_pk="p-2"),),
                 associated_client_count=0,
                 parent_device_id="vlan60",
+                parent_client_id="aabbcc",
             ),
         },
         client_alias_targets={
@@ -84,6 +88,7 @@ def _registry() -> ControlDRegistry:
                 client_hostname="ipad",
                 client_ip_address="192.168.60.5",
                 client_mac_address="aa:bb:cc:dd:ee:ff",
+                client_last_active=datetime(2026, 10, 3, 9, 30, tzinfo=UTC),
             ),
             "client|vlan60|ddeeff": ControlDClientAliasTarget(
                 target_key="client|vlan60|ddeeff",
@@ -176,6 +181,17 @@ def test_endpoint_rows_expose_attachment_and_role() -> None:
     assert ipad["last_active"] is None
 
 
+def test_standalone_endpoint_row_exposes_the_client_identity_it_came_from() -> None:
+    """A client promoted to its own endpoint is aliased by its client id, so the
+    endpoint row carries it: an endpoint itself has no MAC to fall back on.
+    """
+    response = _build(_registry())
+    rows = {row["device_id"]: row for row in response["endpoints"]}
+
+    assert rows["ipad"]["parent_client_id"] == "aabbcc"
+    assert rows["vlan60"]["parent_client_id"] is None
+
+
 def test_clients_distinguish_standalone_from_sub_client() -> None:
     """A client that became its own device is flagged; one that did not is not."""
     response = _build(_registry(), detail=DETAIL_FULL)
@@ -193,6 +209,17 @@ def test_clients_distinguish_standalone_from_sub_client() -> None:
     assert sub_client["is_standalone_endpoint"] is False
     assert sub_client["own_endpoint_id"] is None
     assert sub_client["parent_endpoint_id"] == "vlan60"
+    assert sub_client["last_active"] is None
+
+
+def test_client_rows_report_recency_so_stale_rows_can_be_told_apart() -> None:
+    """Control D keeps rows for decommissioned addresses, so recency is the
+    signal that separates a live device from leftover history.
+    """
+    response = _build(_registry(), detail=DETAIL_FULL)
+    rows = {row["client_id"]: row for row in response["clients"]}
+
+    assert rows["aabbcc"]["last_active"] == "2026-10-03T09:30:00+00:00"
 
 
 def test_detail_full_reports_client_truncation_honestly() -> None:
@@ -243,3 +270,108 @@ def test_inventory_handles_an_empty_registry() -> None:
     assert response["endpoints"] == []
     assert response["clients"] == []
     assert response["clients_truncated"] is False
+
+
+def _endpoint_rows(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return normalized endpoint rows for one synthetic device payload."""
+    return EndpointManager().normalize_endpoints((payload,))
+
+
+def test_advanced_settings_map_to_the_dashboard_labels() -> None:
+    """Each Advanced Settings row reads from its own API field.
+
+    Control D omits the field entirely when the feature is off, so the tests
+    cover both the present and absent shapes: absence is what "off" looks like,
+    not a null.
+    """
+    rows = _endpoint_rows(
+        {
+            "device_id": "ep-1",
+            "PK": "ep-1",
+            "name": "Endpoint-Test",
+            "desc": "kitchen tablet",
+            "icon": "desktop-linux",
+            "learn_ip": 1,
+            "restricted": 1,
+            "legacy_ipv4": {"resolver": "76.76.2.11", "status": 1},
+            "ddns": {
+                "status": 1,
+                "subdomain": "my-sub",
+                "hostname": "my-sub.controld.xyz",
+                "record": "2607:f0c8::1",
+            },
+            "ddns_ext": {"status": 1, "host": "home.example.com"},
+            "deactivation_pin": 1234,
+        }
+    )
+    endpoint = rows["ep-1"]
+
+    assert endpoint.description == "kitchen tablet"
+    assert endpoint.icon == "desktop-linux"
+    # Authorize by Secure DNS.
+    assert endpoint.authorize_by_secure_dns is True
+    # Require Authorized IPs.
+    assert endpoint.require_authorized_ips is True
+    # Legacy DNS, publishing plain resolver IPs.
+    assert endpoint.legacy_dns_enabled is True
+    assert endpoint.legacy_dns_resolver == "76.76.2.11"
+    # Authorize by Dynamic DNS.
+    assert endpoint.dynamic_dns_enabled is True
+    assert endpoint.dynamic_dns_hostname == "my-sub.controld.xyz"
+    # Expose IP via DNS.
+    assert endpoint.expose_ip_enabled is True
+    assert endpoint.expose_ip_host == "home.example.com"
+    # Prevent Deactivation: presence of a PIN is all that is reported.
+    assert endpoint.prevent_deactivation_enabled is True
+
+
+def test_advanced_settings_default_off_when_the_api_omits_them() -> None:
+    """An omitted field means the feature is off, and must not read as enabled."""
+    endpoint = _endpoint_rows(
+        {"device_id": "ep-2", "PK": "ep-2", "name": "Bare", "learn_ip": 0}
+    )["ep-2"]
+
+    assert endpoint.authorize_by_secure_dns is False
+    assert endpoint.require_authorized_ips is False
+    assert endpoint.legacy_dns_enabled is False
+    assert endpoint.dynamic_dns_enabled is False
+    assert endpoint.expose_ip_enabled is False
+    assert endpoint.legacy_dns_resolver is None
+    assert endpoint.dynamic_dns_hostname is None
+    assert endpoint.expose_ip_host is None
+    assert endpoint.prevent_deactivation_enabled is False
+
+
+def test_secondary_profile_is_captured_by_its_own_key() -> None:
+    """An endpoint may enforce two profiles, and the second must be visible.
+
+    Without it a caller cannot tell what a profile change would overwrite, and a
+    reverse of that change would clear the secondary instead of restoring it.
+    """
+    endpoint = _endpoint_rows(
+        {
+            "device_id": "ep-1",
+            "PK": "ep-1",
+            "name": "chads-phone",
+            "profile": {"PK": "primary-pk", "name": "Chads Phone"},
+            "profile2": {"PK": "secondary-pk", "name": "Default"},
+        }
+    )["ep-1"]
+
+    assert endpoint.owning_profile_pk == "primary-pk"
+    assert endpoint.secondary_profile_pk == "secondary-pk"
+
+
+def test_secondary_profile_is_absent_when_only_one_is_enforced() -> None:
+    """A single-profile endpoint reports no secondary rather than a blank one."""
+    endpoint = _endpoint_rows(
+        {
+            "device_id": "ep-2",
+            "PK": "ep-2",
+            "name": "Bare",
+            "profile": {"PK": "primary-pk", "name": "Default"},
+        }
+    )["ep-2"]
+
+    assert endpoint.owning_profile_pk == "primary-pk"
+    assert endpoint.secondary_profile_pk is None

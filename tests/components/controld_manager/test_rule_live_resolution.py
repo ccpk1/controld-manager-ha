@@ -10,6 +10,7 @@ which reads like data rather than a failure.
 
 from __future__ import annotations
 
+import types
 from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -53,7 +54,9 @@ def _manager_with_registry(hass: HomeAssistant, registry: _Registry) -> MagicMoc
     manager = MagicMock(spec=ProfileManager)
     manager.runtime = MagicMock(registry=registry)
     # Bind the real lookup so the override logic under test is exercised.
-    manager._rule_row = ProfileManager._rule_row.__get__(manager)
+    manager._rule_row = types.MethodType(  # type: ignore[method-assign]
+        ProfileManager._rule_row, manager
+    )
     return manager
 
 

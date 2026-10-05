@@ -19,6 +19,7 @@ from homeassistant.helpers import llm
 from custom_components.controld_manager.llm_tools_control import (
     ClearClientAliasTool,
     RenameEndpointTool,
+    SetClientAliasTool,
     SetFilterStateTool,
     SetOptionStateTool,
     SetServiceStateTool,
@@ -38,6 +39,8 @@ class _AliasTarget:
 
     client_mac_address: str | None
     client_alias: str | None
+    client_id: str | None = None
+    client_hostname: str | None = None
 
 
 @dataclass
@@ -92,15 +95,33 @@ def _registry() -> _Registry:
         },
         client_alias_targets={
             "aa:bb": _AliasTarget(
-                client_mac_address="AA:BB", client_alias="Kadens iPad"
+                client_mac_address="AA:BB",
+                client_alias="Kadens iPad",
+                client_id="04070f91bf7d",
+                client_hostname="KadensSpyPhone",
             ),
-            "cc:dd": _AliasTarget(client_mac_address="CC:DD", client_alias=None),
+            "cc:dd": _AliasTarget(
+                client_mac_address="CC:DD",
+                client_alias=None,
+                client_id="d18cc9582f25",
+                client_hostname="LivingRoomTV",
+            ),
+            "ee:ff": _AliasTarget(
+                client_mac_address="AA:BB",
+                client_alias=None,
+                client_id="112233445566",
+                client_hostname="KadensSpyPhone",
+            ),
         },
     )
 
 
-def _tool_with_registry(tool: llm.Tool, registry: _Registry) -> llm.Tool:
-    """Point a tool's registry read at a fixed registry."""
+def _tool_with_registry[ToolT: llm.Tool](tool: ToolT, registry: _Registry) -> ToolT:
+    """Point a tool's registry read at a fixed registry.
+
+    Generic in the tool type so the concrete class survives the call: the tests
+    below exercise protected hooks that only exist on the subclasses.
+    """
     tool._registry = lambda hass: registry  # type: ignore[method-assign]
     return tool
 
@@ -200,11 +221,59 @@ async def test_clear_alias_undo_restores_only_clients_that_had_an_alias() -> Non
     hass: HomeAssistant = MagicMock()
     tool = _tool_with_registry(ClearClientAliasTool(entry_id="e-1"), _registry())
 
-    undo = tool._undo(hass, {"endpoint_mac": ["AA:BB", "CC:DD"]})
+    undo = tool._undo(hass, {"client_id": ["04070f91bf7d", "d18cc9582f25"]})
 
     assert undo == [
-        "controld_manager__set_client_alias(endpoint_mac='AA:BB', alias='Kadens iPad')"
+        "controld_manager__set_client_alias(client_id='04070f91bf7d', "
+        "alias='Kadens iPad')"
     ]
+
+
+async def test_clear_alias_undo_names_the_client_id_not_the_shared_mac() -> None:
+    """Two clients share a MAC, so an undo naming the MAC could hit the wrong one."""
+    hass: HomeAssistant = MagicMock()
+    tool = _tool_with_registry(ClearClientAliasTool(entry_id="e-1"), _registry())
+
+    undo = tool._undo(hass, {"client_id": "04070f91bf7d"})
+
+    assert undo == [
+        "controld_manager__set_client_alias(client_id='04070f91bf7d', "
+        "alias='Kadens iPad')"
+    ]
+
+
+async def test_set_alias_undo_clears_by_client_id() -> None:
+    """The undo of a set addresses the client the set addressed."""
+    hass: HomeAssistant = MagicMock()
+    tool = _tool_with_registry(SetClientAliasTool(entry_id="e-1"), _registry())
+
+    undo = tool._undo(hass, {"client_id": "d18cc9582f25", "alias": "Tablet"})
+
+    assert undo == ["controld_manager__clear_client_alias(client_id='d18cc9582f25')"]
+
+
+async def test_client_id_beats_a_mac_that_matches_several_clients() -> None:
+    """A MAC shared by two clients must not be used when a client id is given."""
+    hass: HomeAssistant = MagicMock()
+    tool = _tool_with_registry(SetClientAliasTool(entry_id="e-1"), _registry())
+
+    targets = tool._matching_targets(
+        hass, {"client_id": "112233445566", "endpoint_mac": "AA:BB"}
+    )
+
+    assert [target.client_id for target in targets] == ["112233445566"]
+
+
+async def test_alias_matching_falls_back_to_hostname_then_reports_nothing() -> None:
+    """Only an explicit selector matches, and an unknown one matches nothing."""
+    hass: HomeAssistant = MagicMock()
+    tool = _tool_with_registry(SetClientAliasTool(entry_id="e-1"), _registry())
+
+    by_host = tool._matching_targets(hass, {"endpoint_hostname": "LivingRoomTV"})
+    unknown = tool._matching_targets(hass, {"client_id": "nope"})
+
+    assert [target.client_id for target in by_host] == ["d18cc9582f25"]
+    assert unknown == ()
 
 
 async def test_a_no_op_write_reports_no_undo() -> None:

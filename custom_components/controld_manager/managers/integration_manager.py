@@ -510,7 +510,41 @@ class IntegrationManager(BaseManager):
                     ],
                     "associated_client_count": endpoint.associated_client_count,
                     "parent_device_id": endpoint.parent_device_id,
+                    # Set when this device is also a client under another
+                    # endpoint. Aliasing uses the client identity, and the parent
+                    # endpoint alone is not enough to address it.
+                    "parent_client_id": endpoint.parent_client_id,
+                    "secondary_profile_id": endpoint.secondary_profile_pk,
+                    "secondary_profile_name": self._profile_name(
+                        endpoint.secondary_profile_pk
+                    ),
                     "last_active": self._serialize_datetime(endpoint.last_active),
+                    # The endpoint's Advanced Settings, named as the dashboard
+                    # names them. Each is false when Control D omits the field,
+                    # which is how it reports a feature that is switched off.
+                    "advanced": {
+                        "description": endpoint.description,
+                        "icon": endpoint.icon,
+                        "authorize_by_secure_dns": endpoint.authorize_by_secure_dns,
+                        "require_authorized_ips": endpoint.require_authorized_ips,
+                        "legacy_dns": {
+                            "enabled": endpoint.legacy_dns_enabled,
+                            "resolver": endpoint.legacy_dns_resolver,
+                        },
+                        "authorize_by_dynamic_dns": {
+                            "enabled": endpoint.dynamic_dns_enabled,
+                            "hostname": endpoint.dynamic_dns_hostname,
+                        },
+                        "expose_ip_via_dns": {
+                            "enabled": endpoint.expose_ip_enabled,
+                            "host": endpoint.expose_ip_host,
+                        },
+                        # Only whether a PIN is set is reported; the PIN is a
+                        # credential and is never read back.
+                        "prevent_deactivation": {
+                            "enabled": endpoint.prevent_deactivation_enabled,
+                        },
+                    },
                 }
             )
         return rows
@@ -548,6 +582,9 @@ class IntegrationManager(BaseManager):
                     "hostname": target.client_hostname,
                     "mac_address": target.client_mac_address,
                     "ip_address": target.client_ip_address,
+                    # Recency is how a caller picks a live device out of the
+                    # stale rows Control D keeps for decommissioned addresses.
+                    "last_active": self._serialize_datetime(target.client_last_active),
                     # A client that became its own standalone Device is an
                     # endpoint too; one that did not follows its parent's profile.
                     "is_standalone_endpoint": target.endpoint_device_id is not None,

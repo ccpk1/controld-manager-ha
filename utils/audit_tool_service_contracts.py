@@ -6,6 +6,15 @@ mechanically ties the two together, which is how a mismatch like passing a
 Control D profile PK to a device selector survived review. This script makes the
 two layers checkable against each other.
 
+Matching is by field name only, so it catches a tool that forgets an argument
+or invents one, not a mismatch in meaning. Two things it cannot see: a tool that
+declares an optional selector the service also accepts but forwards under a
+different key, and selector precedence, where both layers accept several
+identifiers and disagree about which one wins. The client-alias tools went wrong
+in exactly that blind spot — they accepted a MAC while the account keyed clients
+by `client_id` — so treat a clean run as "the names line up", not as proof that
+the arguments mean the same thing.
+
 Run from the repository root:
     python utils/audit_tool_service_contracts.py
 """

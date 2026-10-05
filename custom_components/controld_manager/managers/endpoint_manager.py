@@ -60,6 +60,101 @@ class EndpointManager(BaseManager):
             self._update_cached_endpoint_name(endpoint, name=name)
         self.runtime.active_coordinator.schedule_write_verification()
 
+    async def async_set_endpoint_profiles(
+        self,
+        endpoints: tuple[ControlDEndpointSummary, ...],
+        *,
+        profile_pk: str | None,
+        profile2_pk: str | None,
+        clear_profile2: bool,
+    ) -> None:
+        """Attach a primary and secondary profile, or clear the secondary.
+
+        Each requested change is its own call because the verb takes one field at
+        a time, and the primary cannot be cleared: an endpoint must always
+        enforce one profile.
+        """
+        for endpoint in endpoints:
+            if profile_pk is not None:
+                await self.runtime.client.async_set_endpoint_profile(
+                    endpoint.device_id,
+                    profile_pk=profile_pk,
+                    secondary=False,
+                )
+            if profile2_pk is not None:
+                await self.runtime.client.async_set_endpoint_profile(
+                    endpoint.device_id,
+                    profile_pk=profile2_pk,
+                    secondary=True,
+                )
+            elif clear_profile2:
+                await self.runtime.client.async_clear_endpoint_secondary_profile(
+                    endpoint.device_id
+                )
+        self.runtime.active_coordinator.schedule_write_verification()
+
+    async def async_set_endpoint_descriptions(
+        self,
+        endpoints: tuple[ControlDEndpointSummary, ...],
+        description: str,
+    ) -> None:
+        """Set one description across one or more resolved endpoints.
+
+        An empty string clears the description, because the API drops the field
+        when it is empty rather than storing a blank value.
+        """
+        for endpoint in endpoints:
+            await self.runtime.client.async_set_endpoint_description(
+                endpoint.device_id,
+                description=description,
+            )
+        self.runtime.active_coordinator.schedule_write_verification()
+
+    async def async_create_endpoint(
+        self,
+        *,
+        name: str,
+        profile_pk: str,
+        icon: str | None,
+        desc: str | None,
+        stats: int | None,
+    ) -> str | None:
+        """Create one endpoint and return the device id the API assigned.
+
+        The id only exists after the call, so it is returned rather than
+        predicted; an undo built before the write cannot name it.
+        """
+        body = await self.runtime.client.async_create_endpoint(
+            name=name,
+            profile_pk=profile_pk,
+            icon=icon,
+            desc=desc,
+            stats=stats,
+        )
+        self.runtime.active_coordinator.schedule_write_verification()
+        if not isinstance(body, dict):
+            return None
+        device_id = body.get("device_id")
+        return device_id if isinstance(device_id, str) and device_id else None
+
+    async def async_delete_endpoints(
+        self,
+        endpoints: tuple[ControlDEndpointSummary, ...],
+    ) -> int:
+        """Delete one or more endpoints, returning how many the API removed.
+
+        Destructive and irreversible: the endpoint, its resolver configuration,
+        and the records kept against it go together, and a new endpoint is a new
+        identity rather than a restored one.
+        """
+        deleted = 0
+        for endpoint in endpoints:
+            await self.runtime.client.async_delete_endpoint(endpoint.device_id)
+            self.runtime.registry.endpoints.pop(endpoint.device_id, None)
+            deleted += 1
+        self.runtime.active_coordinator.schedule_write_verification()
+        return deleted
+
     async def async_set_client_aliases(
         self,
         targets: tuple[ControlDClientAliasTarget, ...],
@@ -101,6 +196,50 @@ class EndpointManager(BaseManager):
         for target in targets:
             self._update_cached_client_alias_target(target, alias=None)
         self.runtime.active_coordinator.schedule_write_verification()
+
+    async def async_delete_clients(
+        self,
+        targets: tuple[ControlDClientAliasTarget, ...],
+        *,
+        delete_history: bool,
+    ) -> int:
+        """Delete client rows and, when asked, their stored query history.
+
+        Deletion is destructive and there is no undo, so the API's own count of
+        what it removed is returned rather than assuming every requested client
+        was found. Clients are grouped by parent endpoint because the verb takes
+        one parent with many client ids.
+        """
+        stats_endpoint = self._require_stats_endpoint()
+        client_ids_by_parent: dict[str, list[str]] = {}
+        for target in targets:
+            client_ids_by_parent.setdefault(
+                target.parent_endpoint_device_id, []
+            ).append(target.client_id)
+
+        deleted_count = 0
+        for parent_device_id, client_ids in client_ids_by_parent.items():
+            body = await self.runtime.client.async_delete_analytics_clients(
+                stats_endpoint,
+                parent_endpoint_ids=[parent_device_id],
+                client_ids=client_ids,
+            )
+            if isinstance(body, dict):
+                deleted_count += int(body.get("deletedCount") or 0)
+
+            if delete_history:
+                # Sent for the same ids that were just deleted: the history is
+                # keyed by client, so it has to be named rather than inherited.
+                await self.runtime.client.async_delete_analytics_client_history(
+                    stats_endpoint,
+                    parent_endpoint_ids=[parent_device_id],
+                    client_ids=client_ids,
+                )
+
+        for target in targets:
+            self.runtime.registry.client_alias_targets.pop(target.target_key, None)
+        self.runtime.active_coordinator.schedule_write_verification()
+        return deleted_count
 
     def normalize_client_alias_targets(
         self,
@@ -154,6 +293,9 @@ class EndpointManager(BaseManager):
                 client_mac_address=self._optional_string(
                     analytics_client_payload.get("mac")
                 ),
+                client_last_active=self._normalize_datetime_value(
+                    analytics_client_payload.get("lastActivityTime")
+                ),
             )
 
         for (
@@ -195,6 +337,9 @@ class EndpointManager(BaseManager):
                 client_mac_address=self._optional_string(
                     analytics_client_payload.get("mac")
                 ),
+                client_last_active=self._normalize_datetime_value(
+                    analytics_client_payload.get("lastActivityTime")
+                ),
             )
 
         return targets
@@ -228,6 +373,7 @@ class EndpointManager(BaseManager):
         endpoint_hostname: str | None = None,
         endpoint_ip: str | None = None,
         parent_endpoint_name: str | None = None,
+        client_id: str | None = None,
     ) -> ControlDClientAliasTarget:
         """Resolve exactly one client alias target from runtime data."""
         targets = tuple(self.runtime.registry.client_alias_targets.values())
@@ -242,6 +388,8 @@ class EndpointManager(BaseManager):
             )
 
         selectors: tuple[tuple[str | None, str], ...] = (
+            # An id is exact, so it is tried before any human-readable selector.
+            (client_id, "client_id"),
             (endpoint_mac, "mac"),
             (endpoint_name, "name"),
             (endpoint_hostname, "hostname"),
@@ -361,6 +509,7 @@ class EndpointManager(BaseManager):
             owning_profile_pk = (
                 attached_profiles[0].profile_pk if attached_profiles else None
             )
+            relationship = self._extract_client_relationship(device_payload)
             endpoints[device_id] = ControlDEndpointSummary(
                 device_id=device_id,
                 endpoint_pk=self._optional_string(device_payload.get("PK")),
@@ -375,6 +524,26 @@ class EndpointManager(BaseManager):
                     device_id, 0
                 ),
                 parent_device_id=self._extract_parent_device_id(device_payload),
+                # Present only when this device is also a client under another
+                # endpoint, which is how a standalone endpoint is aliased.
+                parent_client_id=relationship[2] if relationship else None,
+                secondary_profile_pk=self._extract_secondary_profile_pk(device_payload),
+                description=self._optional_string(device_payload.get("desc")),
+                icon=self._optional_string(device_payload.get("icon")),
+                authorize_by_secure_dns=bool(device_payload.get("learn_ip")),
+                require_authorized_ips=bool(device_payload.get("restricted")),
+                legacy_dns_resolver=self._nested_string(
+                    device_payload.get("legacy_ipv4"), "resolver"
+                ),
+                dynamic_dns_hostname=self._nested_string(
+                    device_payload.get("ddns"), "hostname"
+                ),
+                expose_ip_host=self._nested_string(
+                    device_payload.get("ddns_ext"), "host"
+                ),
+                prevent_deactivation_enabled=(
+                    device_payload.get("deactivation_pin") is not None
+                ),
             )
         return endpoints
 
@@ -457,8 +626,21 @@ class EndpointManager(BaseManager):
             )
         return attached_profiles
 
+    @staticmethod
+    def _extract_secondary_profile_pk(device_payload: dict[str, Any]) -> str | None:
+        """Return the second enforced profile, read by its own key.
+
+        An endpoint may enforce two profiles. The primary is `profile`, and is
+        what `owning_profile_pk` holds; `profile2` is the optional second. Reading
+        it by key rather than by position avoids depending on payload key order.
+        """
+        secondary = device_payload.get("profile2")
+        if not isinstance(secondary, dict):
+            return None
+        pk = secondary.get("PK")
+        return pk if isinstance(pk, str) and pk else None
+
     def _extract_parent_device_id(self, device_payload: dict[str, Any]) -> str | None:
-        """Extract an optional parent device identifier from the payload."""
         parent_device = device_payload.get("parent_device")
         if isinstance(parent_device, dict):
             return self._optional_string(parent_device.get("device_id"))
@@ -525,6 +707,11 @@ class EndpointManager(BaseManager):
         selector_value: str,
     ) -> bool:
         """Return whether one client target matches one selector family."""
+        if selector_kind == "client_id":
+            # The precise selector: it is what the alias API actually keys on,
+            # and unlike a MAC it addresses exactly one client.
+            return target.client_id == selector_value
+
         if selector_kind == "mac":
             if target.client_mac_address is None:
                 return False
@@ -631,3 +818,15 @@ class EndpointManager(BaseManager):
     def _optional_string(value: Any) -> str | None:
         """Return an optional string value."""
         return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def _nested_string(value: Any, key: str) -> str | None:
+        """Return one optional string from a nested payload.
+
+        Control D omits an advanced-settings object entirely when the feature is
+        off, so the object's presence with a value is what marks it enabled.
+        """
+        if not isinstance(value, dict):
+            return None
+        nested = value.get(key)
+        return nested if isinstance(nested, str) and nested else None

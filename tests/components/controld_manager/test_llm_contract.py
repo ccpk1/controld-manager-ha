@@ -60,6 +60,9 @@ _CONTROL_TOOLS: Final = frozenset(
         "enable_profile",
         "disable_profile",
         "rename_endpoint",
+        "create_endpoint",
+        "set_endpoint_profile",
+        "set_endpoint_description",
         "set_endpoint_analytics_logging",
         "set_client_alias",
         "clear_client_alias",
@@ -68,7 +71,9 @@ _CONTROL_TOOLS: Final = frozenset(
 )
 
 # Irreversible and bulk actions, registered only in the Full tier.
-_DESTRUCTIVE_TOOLS: Final = frozenset({"delete_rule"})
+_DESTRUCTIVE_TOOLS: Final = frozenset(
+    {"delete_rule", "delete_client", "delete_endpoint"}
+)
 
 
 def _enum_field_descriptions(schema: object) -> dict[str, tuple[str, tuple[str, ...]]]:
@@ -235,8 +240,9 @@ async def test_control_tool_annotations_are_accurate(hass: HomeAssistant) -> Non
 
     # A repeat of create_rule has an effect, so it must not claim idempotency.
     assert by_name[f"{DOMAIN}__create_rule"].annotations.idempotent is False
-    # Only the irreversible delete declares itself destructive.
-    assert by_name[f"{DOMAIN}__delete_rule"].annotations.destructive is True
+    # Every irreversible delete declares itself destructive, and nothing else does.
+    for name in _DESTRUCTIVE_TOOLS:
+        assert by_name[f"{DOMAIN}__{name}"].annotations.destructive is True, name
     for name in _CONTROL_TOOLS:
         assert by_name[f"{DOMAIN}__{name}"].annotations.destructive is False, name
 
@@ -264,8 +270,14 @@ async def test_irreversible_tools_never_claim_an_undo(
     tools = await _tools(hass, LLM_TOOL_MODE_FULL)
     by_name = {tool.name: tool for tool in tools}
     # Deletion destroys the rule's identity; the endpoint summary carries no
-    # current logging level to restore.
+    # current logging level to restore; a deleted client row and its history
+    # cannot be recovered.
     assert by_name[f"{DOMAIN}__delete_rule"]._undo(hass, {}) is None
+    assert by_name[f"{DOMAIN}__delete_client"]._undo(hass, {"client_id": "c-1"}) is None
+    assert (
+        by_name[f"{DOMAIN}__delete_endpoint"]._undo(hass, {"endpoint_id": "ep-1"})
+        is None
+    )
     assert (
         by_name[f"{DOMAIN}__set_endpoint_analytics_logging"]._undo(
             hass, {"endpoint_id": "ep-1", "mode": "Full"}

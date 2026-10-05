@@ -171,6 +171,41 @@ class ControlDEndpointSummary:
     attached_profiles: tuple[ControlDAttachedProfile, ...] = ()
     associated_client_count: int = 0
     parent_device_id: str | None = None
+    # A device that is also a client under another endpoint carries the parent's
+    # `client_id`. Aliasing uses the client identity, so without this the parent
+    # client of a standalone endpoint could not be addressed at all.
+    parent_client_id: str | None = None
+    # The second enforced profile, when one is attached. Endpoints may enforce
+    # two, and only the primary is `owning_profile_pk`; without this the
+    # secondary is invisible to a caller that needs to restore it.
+    secondary_profile_pk: str | None = None
+    # Advanced endpoint settings. Control D omits a field entirely when the
+    # feature is off, so absence means "not enabled" rather than "unknown".
+    description: str | None = None
+    icon: str | None = None
+    authorize_by_secure_dns: bool = False
+    require_authorized_ips: bool = False
+    legacy_dns_resolver: str | None = None
+    dynamic_dns_hostname: str | None = None
+    expose_ip_host: str | None = None
+    # The PIN itself is deliberately not stored: it is a credential, and only
+    # whether one is set is ever reported.
+    prevent_deactivation_enabled: bool = False
+
+    @property
+    def legacy_dns_enabled(self) -> bool:
+        """Return whether this endpoint issues plain-DNS resolver IPs."""
+        return self.legacy_dns_resolver is not None
+
+    @property
+    def dynamic_dns_enabled(self) -> bool:
+        """Return whether this endpoint authorizes by a dynamic-DNS hostname."""
+        return self.dynamic_dns_hostname is not None
+
+    @property
+    def expose_ip_enabled(self) -> bool:
+        """Return whether this endpoint publishes its source IP as a hostname."""
+        return self.expose_ip_host is not None
 
 
 def build_client_alias_target_key(
@@ -197,6 +232,7 @@ class ControlDClientAliasTarget:
     client_hostname: str | None = None
     client_ip_address: str | None = None
     client_mac_address: str | None = None
+    client_last_active: datetime | None = None
 
     @property
     def display_name(self) -> str:

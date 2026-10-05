@@ -339,6 +339,61 @@ class ControlDAPIClient:
             )
         )
 
+    async def _async_delete_analytics_clients(
+        self,
+        stats_endpoint: str,
+        path: str,
+        *,
+        parent_endpoint_ids: Sequence[str],
+        client_ids: Sequence[str],
+    ) -> dict[str, Any] | None:
+        """Delete client rows or their query history on the analytics host.
+
+        Both verbs take the same body: the parent endpoints and the client ids
+        to remove. The row delete reports what it removed, while the history
+        delete reports only success.
+        """
+        return self._optional_body_mapping(
+            await self._async_request_url(
+                "DELETE",
+                f"{self._analytics_base_url(stats_endpoint)}{path}",
+                payload={
+                    "endpointIds": list(parent_endpoint_ids),
+                    "clientIds": list(client_ids),
+                },
+            )
+        )
+
+    async def async_delete_analytics_clients(
+        self,
+        stats_endpoint: str,
+        *,
+        parent_endpoint_ids: Sequence[str],
+        client_ids: Sequence[str],
+    ) -> dict[str, Any] | None:
+        """Delete analytics client rows, returning what the API removed."""
+        return await self._async_delete_analytics_clients(
+            stats_endpoint,
+            "/v2/client",
+            parent_endpoint_ids=parent_endpoint_ids,
+            client_ids=client_ids,
+        )
+
+    async def async_delete_analytics_client_history(
+        self,
+        stats_endpoint: str,
+        *,
+        parent_endpoint_ids: Sequence[str],
+        client_ids: Sequence[str],
+    ) -> dict[str, Any] | None:
+        """Delete the stored query history of analytics client rows."""
+        return await self._async_delete_analytics_clients(
+            stats_endpoint,
+            "/v2/activity-log",
+            parent_endpoint_ids=parent_endpoint_ids,
+            client_ids=client_ids,
+        )
+
     async def async_rename_endpoint(
         self,
         device_id: str,
@@ -359,6 +414,92 @@ class ControlDAPIClient:
         """Update one endpoint analytics logging level using the devices contract."""
         return self._optional_body_mapping(
             await self._async_request("PUT", f"/devices/{device_id}", {"stats": stats})
+        )
+
+    async def async_set_endpoint_profile(
+        self,
+        device_id: str,
+        *,
+        profile_pk: str,
+        secondary: bool,
+    ) -> dict[str, Any] | None:
+        """Attach a primary or secondary profile to one endpoint.
+
+        The write keys are `profile_id` and `profile_id2` — suffixed — while the
+        read keys on the same row are `profile` and `profile2`. A key the verb
+        does not act on returns 200 and changes nothing, so the suffixed names
+        matter.
+        """
+        field = "profile_id2" if secondary else "profile_id"
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT", f"/devices/{device_id}", {field: profile_pk}
+            )
+        )
+
+    async def async_clear_endpoint_secondary_profile(
+        self,
+        device_id: str,
+    ) -> dict[str, Any] | None:
+        """Detach the secondary profile from one endpoint.
+
+        The integer `-1` is the API's clear sentinel for the secondary slot. The
+        primary profile cannot be cleared this way: it rejects `-1` with a 400,
+        because an endpoint must always enforce one profile.
+        """
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT", f"/devices/{device_id}", {"profile_id2": -1}
+            )
+        )
+
+    async def async_create_endpoint(
+        self,
+        *,
+        name: str,
+        profile_pk: str,
+        icon: str | None = None,
+        desc: str | None = None,
+        stats: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Create one endpoint, returning the row the API created.
+
+        `profile_id` is required rather than optional: every endpoint must
+        enforce one profile, so the API rejects a create that omits it. The name
+        must be unique across the account.
+        """
+        payload: dict[str, Any] = {"name": name, "profile_id": profile_pk}
+        if icon is not None:
+            payload["icon"] = icon
+        if desc is not None:
+            payload["desc"] = desc
+        if stats is not None:
+            payload["stats"] = stats
+        return self._optional_body_mapping(
+            await self._async_request("POST", "/devices", payload)
+        )
+
+    async def async_delete_endpoint(self, device_id: str) -> dict[str, Any] | None:
+        """Delete one endpoint and everything recorded against it."""
+        return self._optional_body_mapping(
+            await self._async_request("DELETE", f"/devices/{device_id}")
+        )
+
+    async def async_set_endpoint_description(
+        self,
+        device_id: str,
+        *,
+        description: str,
+    ) -> dict[str, Any] | None:
+        """Set the free-text note stored on one endpoint.
+
+        An empty string clears it: the API drops the field from the row rather
+        than keeping an empty value.
+        """
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT", f"/devices/{device_id}", {"desc": description}
+            )
         )
 
     @classmethod

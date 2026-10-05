@@ -290,6 +290,261 @@ Implementation consequence:
 - if the integration exposes endpoint analytics settings later, the user-facing
   values should map to the proven UI semantics `None`, `Some`, and `Full`
 
+### Client rows can be deleted, and deletion also purges their query history
+
+This corrects an earlier assumption that client rows were read-only observations
+with no upstream delete. They can be removed, individually or in bulk, through a
+bulk verb on the analytics host. The contract came from captured web-UI traffic
+and was then confirmed directly against the live API.
+
+Observed UI requests (the UI fires both, then re-reads the client list):
+
+- `DELETE https://<stats>.analytics.controld.com/v2/client`
+  - body: `{"endpointIds":["<parent endpoint device_id>"],"clientIds":["<client id>", ...]}`
+  - addressed by the same two identifiers the alias write uses: the parent
+    endpoint's `device_id` and the client's `clientId`
+  - `clientIds` is an array, so this is a bulk operation
+- `DELETE https://<stats>.analytics.controld.com/v2/activity-log`
+  - same body shape
+  - removes the clients' stored query history, which is why the UI sends it
+    alongside the row delete
+- `GET /v2/client?endpointId=<parent endpoint>` follows, to refresh the list
+
+Verified live on 2026-10-05 against the development account:
+
+- `DELETE /v2/client` with a non-existent `clientId` returned HTTP 200 and
+  `{"success":true,"body":{"deletedCount":0,"deletedClients":[]}}`
+- `DELETE /v2/activity-log` with the same body returned HTTP 200 and
+  `{"success":true}`
+- the client count for the parent endpoint was unchanged afterwards, so the
+  probe deleted nothing
+- corroboration that real deletions take effect and that this integration reads
+  the result: the account's aliasable client total fell from 397 to 393 across
+  four clients deleted through the UI, and our own read path reported the new
+  total exactly
+
+Implementation consequence:
+
+- deletion is **destructive and not reversible**: re-creating the row is not
+  possible, and a stale row for a device that will not return does not come back
+  on its own
+- deleting the row without also calling `/v2/activity-log` leaves the stored
+  query history behind, which is why a faithful implementation has to do both or
+  say which one it did
+- the response carries `deletedCount` and `deletedClients`, so a caller can be
+  told exactly what was removed rather than being told a request succeeded
+- this is a distinct fourth delete family alongside rules, services, and client
+  aliases, and it is the only one that destroys traffic history, so it must not
+  be conflated with `clear_client_alias`
+- **deletion is not durable for an ordinary client.** A client row exists
+  because Control D observed that client's traffic; it is derived state, not
+  configuration. If the same client identity is seen again the row is
+  re-created, so deleting it clears history and nothing more — the row returns
+  the next time the device is online. Only an alias, or a policy assignment that
+  promotes the client to an endpoint, outlives the traffic. This is the
+  difference between "removes this row" and "stops this client from existing",
+  and the UI delete does the former
+- the exception is an identity that will not be seen again, and rotating private
+  MACs are the everyday example on this account. Because a rotated MAC is never
+  reused, deleting those rows does persist — but it does not stop the churn,
+  since the next connection adds a fresh row
+- **implemented** as the `delete_client` service and the `delete_client` LLM tool,
+  registered only in the Full tier because there is no undo. It reuses the client
+  selectors already used for aliases and prefers `client_id`; groups the requested
+  clients by parent endpoint so one verb call covers a parent and many clients;
+  and purges the history unless `delete_history` is false. The API's own
+  `deletedCount` is what the action result reports, so a caller is told how many
+  rows were actually removed rather than merely that the request succeeded
+
+### Endpoint write surface: what the API accepts, and what it ignores
+
+The documented `GET /devices` row shape advertises far more than the write verb
+honours, and the write verb reports success either way. Probed against a live
+endpoint on 2026-10-05, reverting each change.
+
+**Write keys differ from read keys, and unknown keys are silently ignored.** This
+is the most expensive thing to get wrong on this surface, and it produced a false
+conclusion.
+
+`PUT /devices/{device_id}` returns `200 ok` for keys it does not act on, so a
+wrong key name is indistinguishable from a successful write by status code alone.
+The fields it honours each reject a bad value, which is what makes them
+identifiable:
+
+- `name` — rejected on a duplicate
+- `stats` — rejected outside `0|1|2` (`"stats must be one of Array([0]=>0...)"`)
+- `desc`
+- `status` — `0` disables, `1` enables
+- `learn_ip`
+- `restricted`
+- **`profile_id`** and **`profile_id2`** — the profile write keys
+
+Note the suffix: the **write** keys are `profile_id` and `profile_id2`, while the
+**read** keys on the same row are `profile` and `profile2`. Setting `profile_id2`
+to a profile PK attaches the secondary profile; setting it to the integer `-1`
+clears it. Verified live on 2026-10-05: `{"profile_id2": "<PK>"}` made `profile2`
+appear as `7580 Default Profile`, `{"profile_id2": -1}` cleared it back to
+`null`, and `profile` was untouched throughout.
+
+**The false conclusion this produced, recorded so it is not repeated.** Probing
+`profile2` as a *write* key returned `200 ok` and changed nothing, across four
+payload shapes. From that I concluded profile assignment was unavailable through
+the API. It is available; the key name was wrong, and the silent-ignore behaviour
+made a wrong name look like an absent feature. **A `200` with no observed change
+is not evidence of a missing capability — it is evidence of a malformed request.**
+Every mutation the Control D web client performs goes through this API, and the
+undocumented parts are capturable from a browser session; the correct response to
+a silent no-op is to capture the real request, never to infer a limit.
+
+### Endpoint creation and deletion
+
+Both exist, are captured from the web client, and are implemented as the
+`create_endpoint` (control tier) and `delete_endpoint` (destructive tier)
+services and tools.
+
+- **Create**: `POST /devices` with `{"name", "profile_id", "icon", "desc",
+  "stats"}` — `icon` is a slug such as `desktop-linux`, and `profile_id` is the
+  primary profile to attach
+- **Delete**: `DELETE /devices/{device_id}` — a fake id returns
+  `404 40401 "No such device"`, a real handler's business response
+
+Create semantics, verified live on 2026-10-05 against a throwaway endpoint that
+was deleted afterwards:
+
+- `profile_id` is **required**, not optional: omitting it returns `400
+  "profile_id is required"` — the same invariant as the primary slot below
+- the name must be unique: a duplicate returns `400 "A device with this name
+  already exists"`
+- the response body carries the new `device_id`, which is the only way to learn
+  it, because Control D assigns it
+- a newly created endpoint reports `status: 0` with no `last_activity`, which is
+  how the `status` meaning below was settled
+
+Implementation consequence:
+
+- the create tool cannot name its own undo by id, because the id does not exist
+  before the write. The undo is therefore `delete_endpoint` addressed by
+  **name**, which the uniqueness rule makes unambiguous. This is the one place a
+  name is a safe selector on endpoints
+- delete takes `device_id` and removes the endpoint, its resolver identity, and
+  the records kept against it, so it is registered only in the destructive tier
+  with no undo
+
+### An endpoint must always enforce exactly one primary profile
+
+This is a **platform invariant**, not merely a validation rule on one verb, and
+it was confirmed in two places:
+
+- the web portal will not let the primary profile be removed from an endpoint,
+  because there is no "no profile" state to save it into
+- `PUT /devices/{device_id}` with `{"profile_id": -1}` returns **`400`**, while
+  the same `-1` sent as `{"profile_id2": -1}` succeeds and detaches the secondary
+
+So the primary slot can be changed but never emptied: every endpoint always
+enforces at least one profile, and an endpoint with no primary is not a state the
+platform has. The secondary is genuinely optional, which is why it has a clear
+sentinel and the primary does not.
+
+Implementation consequence:
+
+- a primary-profile service must require a profile rather than offering a clear,
+  and the distinguishing case is the secondary
+- "remove all profiles from this endpoint" is not a satisfiable request; the
+  closest real operation is to assign a permissive profile, which is a policy
+  decision rather than a detach
+
+### Endpoint Advanced Settings: read fields and write keys
+
+The dashboard's **Advanced Settings** panel on an endpoint maps to these fields.
+**The write keys are flattened and differ from the read fields**, which is the
+single most important thing to know here.
+
+| Dashboard label | Read field | Write key(s) | Clear |
+| --- | --- | --- | --- |
+| Legacy DNS | `legacy_ipv4` `{resolver, status}` | `legacy_ipv4_status` | `0` |
+| Authorize by Secure DNS | `learn_ip` `0`/`1` | `learn_ip` | `0` |
+| Authorize by Dynamic DNS | `ddns` `{status, subdomain, hostname, record}` | `ddns_status`, `ddns_subdomain` | `ddns_status: 0` |
+| Expose IP via DNS | `ddns_ext` `{status, host}` | `ddns_ext_status`, `ddns_ext_host` | — |
+| Require Authorized IPs | `restricted` `0`/`1` | `restricted` | `0` |
+| Prevent Deactivation | `deactivation_pin` | `deactivation_pin` | `-1` |
+| (description) | `desc` | `desc` | `""` |
+
+Two shapes explain why earlier probes failed: the read side is **nested**
+(`legacy_ipv4.resolver`) while the write side is **flat**
+(`legacy_ipv4_status`), and the write key is not merely a flattened read key
+(`legacy_ipv4_status`, not `legacy_ipv4`). Sending the nested object as a write
+returns `200 ok` and changes nothing.
+
+Verified live on 2026-10-05, each reverted afterwards:
+
+- `legacy_ipv4_status: 1` assigned a real resolver and the row gained
+  `legacy_ipv4: {resolver: 76.76.2.144, status: 1}`; `legacy_ipv4_status: 0`
+  removed the field
+- `ddns_status: 1` + `ddns_subdomain: "cd-probe-sub"` created the record and the
+  row gained `ddns: {status: 1, subdomain: cd-probe-sub, hostname:
+  cd-probe-sub.controld.xyz, ...}`; `ddns_status: 0` removed it
+- `learn_ip: 1` → `0` toggled cleanly
+- `deactivation_pin: 1234` set the field; **`deactivation_pin: -1` cleared it**,
+  and an empty string is rejected. Only whether a PIN is set is ever reported —
+  the PIN itself is a credential and must not be read back or stored
+- `desc` set and cleared: an empty string removes the field
+
+### `PUT /devices/{device_id}` is atomic: one bad field discards the batch
+
+A batch that mixed six advanced settings was rejected wholesale with
+`400 40003 "This DDNS hostname is invalid"`, and **nothing was applied** — not
+even the four fields that were individually valid. Re-tested with the exact
+payload: still `400`, and every one of the six settings remained unset.
+
+So a multi-field write is all-or-nothing. The likely cause in that case is
+`ddns_ext_host`, which has to be a hostname Control D can validate because it
+publishes a DNS record; a placeholder is rejected.
+
+Implementation consequence:
+
+- a caller must not assume that grouping settings into one request makes them
+  atomic *successes*. A single invalid value silently discards the rest, which
+  looks from the dashboard like "the settings did not persist"
+- this is why a write that reports `200` must still be verified by reading the
+  value back, and why one rejected field needs reporting per-field rather than as
+  a single failure
+- `400 40003` is the validation code; it is distinct from the silent-ignore
+  behaviour on unknown keys, and the two together mean a `200` proves nothing and
+  a non-`200` may have discarded unrelated fields
+
+### `status` is a four-state field, and `0` is not "disabled"
+
+The dashboard labels the states, and the write verb accepts all four and persists
+them, all read back exactly:
+
+| `status` | Dashboard | Meaning |
+| --- | --- | --- |
+| `1` | Active | Enforcing |
+| `2` | Soft disabled | Paused, but still resolvable |
+| `3` | Hard disabled | Fully disabled |
+| `0` | Pending | Not yet seen, or no activity recorded |
+
+`0` appears on an endpoint that has never sent traffic — including a freshly
+created one — so it reads as **Pending**: the endpoint exists but has not been
+seen yet. The user-facing disable states are `2` and `3`, and **`status` is
+forceable, not merely activity-derived**: it accepts `1|2|3` and keeps them. This
+is a control this integration does not expose yet.
+
+Use the dashboard's word for it. Reporting `0` as "disabled" would be wrong — a
+pending endpoint is not disabled, it is new — and reporting it as "unknown"
+loses the distinction from `2` and `3`.
+
+A Pending endpoint accumulates under `status: 0` (`Pending` in the dashboard)
+while it has no activity: `ccpk-gaming-pc-wifi` and a freshly created endpoint
+both show `0` with
+no `last_activity`, `ip_count: 0`, and no clients. That is the state a new
+endpoint starts in.
+
+Fields in the documented row shape that are absent from every row on this
+account, so they are optional rather than guaranteed: `desc`, `restricted`,
+`profile2` (11 of 19), `parent_device` (11 of 19), `clients` (7 of 19), `ddns`,
+`ddns_ext`, `legacy_ipv4`.
+
 ### Duplicate endpoint names are a real problem
 
 Display names are not safe identifiers.
