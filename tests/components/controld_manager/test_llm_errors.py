@@ -247,3 +247,42 @@ def test_prompt_does_not_describe_removed_tools() -> None:
         "get_policy",
     ):
         assert removed not in PROMPT
+
+
+def test_prompt_does_not_claim_a_shipped_capability_is_impossible() -> None:
+    """The prompt must describe the surface as it is, including its deletes.
+
+    It once asserted that no tool could delete an endpoint while `delete_endpoint`
+    was registered and described in the same prompt, so the model was told both
+    that the action was available and that it was impossible. The destructive
+    tools are named here so adding or renaming one has to update this test.
+    """
+    for destructive in ("delete_client", "delete_endpoint", "delete_rule"):
+        assert destructive in PROMPT, f"prompt does not name {destructive}"
+
+    # No blanket "cannot delete an endpoint" claim may return.
+    assert "No tool in this set can delete an endpoint" not in PROMPT
+    assert "delete_endpoint` removes the endpoint" in PROMPT
+
+
+def test_prompt_states_each_cross_cutting_rule_once() -> None:
+    """A rule repeated in two places is a rule that can be updated in one.
+
+    The client/endpoint duality and the identifier provenance rule were each
+    stated twice, in wordings that had drifted apart.
+    """
+    paragraphs = [p for p in PROMPT.split("\n\n") if p.strip()]
+
+    duality = [
+        p
+        for p in paragraphs
+        if "both" in p.lower() and "endpoint" in p.lower() and "client" in p.lower()
+    ]
+    assert len(duality) == 1, f"duality stated in {len(duality)} paragraphs"
+
+    identifiers = [
+        p
+        for p in paragraphs
+        if "never from Home Assistant" in p or "not a Home Assistant device id" in p
+    ]
+    assert len(identifiers) == 1, f"identifiers stated in {len(identifiers)} paragraphs"
