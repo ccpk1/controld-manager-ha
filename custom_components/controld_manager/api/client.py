@@ -697,6 +697,30 @@ class ControlDAPIClient:
             )
         )
 
+    async def async_set_profile_rule_enabled(
+        self,
+        profile_pk: str,
+        rule_pk: str,
+        *,
+        enabled: bool,
+    ) -> dict[str, Any] | None:
+        """Toggle one profile rule without restating its action.
+
+        Control D preserves the rule's existing configuration for a status-only
+        update, which is what makes this the correct way to toggle. Restating the
+        action instead is rejected for a redirect rule, because a redirect action
+        carries a target that a bare action value does not: sending
+        `{"do": 2, "status": 0}` returns `400 40003 Invalid rule action was
+        provided`, while `{"status": 0}` succeeds and leaves the redirect intact.
+        """
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT",
+                f"/profiles/{profile_pk}/rules/{rule_pk}",
+                {"status": int(enabled)},
+            )
+        )
+
     async def async_update_profile_rule_rich(
         self,
         profile_pk: str,

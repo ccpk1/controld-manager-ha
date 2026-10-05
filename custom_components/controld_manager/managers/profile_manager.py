@@ -854,18 +854,65 @@ class ProfileManager(BaseManager):
         )
         self._schedule_runtime_refresh()
 
+    async def _async_write_rule(
+        self,
+        *,
+        profile_pk: str,
+        rule_row: ControlDRule,
+        next_enabled: bool,
+        next_action_do: int,
+        next_comment: str,
+        payload_ttl: int | None,
+        uses_rich_update: bool,
+        via: str | None,
+        via_v6: str | None,
+    ) -> None:
+        """Write one rule's requested state using the narrowest correct contract.
+
+        A status-only update is used whenever the action is not changing, because
+        Control D preserves the rest of the rule for a status-only write and
+        rejects a restated redirect action that carries no target.
+        """
+        if not uses_rich_update and next_action_do == rule_row.action_do:
+            await self.runtime.client.async_set_profile_rule_enabled(
+                profile_pk, rule_row.rule_pk, enabled=next_enabled
+            )
+            return
+        if uses_rich_update:
+            await self.runtime.client.async_update_profile_rule_rich(
+                profile_pk,
+                rule_row.rule_pk,
+                enabled=next_enabled,
+                action_do=next_action_do,
+                group_pk=rule_row.group_pk,
+                comment=next_comment,
+                ttl=payload_ttl,
+                via=via,
+                via_v6=via_v6,
+            )
+            return
+        await self.runtime.client.async_set_profile_rule(
+            profile_pk,
+            rule_row.rule_pk,
+            enabled=next_enabled,
+            action_do=next_action_do,
+            group_pk=rule_row.group_pk,
+            ttl=payload_ttl,
+            comment=next_comment,
+        )
+
     async def async_set_rule_enabled(
         self, profile_pk: str, rule_identity: str, enabled: bool
     ) -> None:
         """Enable or disable one selected rule."""
         rule_row = self._rule_row(profile_pk, rule_identity)
-        await self.runtime.client.async_set_profile_rule(
+        # A pure toggle sends no action, so Control D preserves the rule's
+        # existing configuration. Restating the action breaks a redirect rule,
+        # whose action carries a target that a bare action value does not.
+        await self.runtime.client.async_set_profile_rule_enabled(
             profile_pk,
             rule_row.rule_pk,
             enabled=enabled,
-            action_do=rule_row.action_do,
-            group_pk=rule_row.group_pk,
-            ttl=rule_row.ttl,
         )
         self._update_cached_rule(
             profile_pk,
@@ -893,13 +940,10 @@ class ProfileManager(BaseManager):
 
         await asyncio.gather(
             *(
-                self.runtime.client.async_set_profile_rule(
+                self.runtime.client.async_set_profile_rule_enabled(
                     profile_pk,
                     rule_row.rule_pk,
                     enabled=enabled,
-                    action_do=rule_row.action_do,
-                    group_pk=rule_row.group_pk,
-                    ttl=rule_row.ttl,
                 )
                 for profile_pk, _, rule_row in updated_rules
             )
@@ -992,28 +1036,16 @@ class ProfileManager(BaseManager):
 
         await asyncio.gather(
             *(
-                (
-                    self.runtime.client.async_update_profile_rule_rich(
-                        profile_pk,
-                        rule_row.rule_pk,
-                        enabled=next_enabled,
-                        action_do=next_action_do,
-                        group_pk=rule_row.group_pk,
-                        comment=next_comment,
-                        ttl=payload_ttl,
-                        via=via,
-                        via_v6=via_v6,
-                    )
-                    if uses_rich_update
-                    else self.runtime.client.async_set_profile_rule(
-                        profile_pk,
-                        rule_row.rule_pk,
-                        enabled=next_enabled,
-                        action_do=next_action_do,
-                        group_pk=rule_row.group_pk,
-                        ttl=payload_ttl,
-                        comment=next_comment,
-                    )
+                self._async_write_rule(
+                    profile_pk=profile_pk,
+                    rule_row=rule_row,
+                    next_enabled=next_enabled,
+                    next_action_do=next_action_do,
+                    next_comment=next_comment,
+                    payload_ttl=payload_ttl,
+                    uses_rich_update=uses_rich_update,
+                    via=via,
+                    via_v6=via_v6,
                 )
                 for (
                     profile_pk,

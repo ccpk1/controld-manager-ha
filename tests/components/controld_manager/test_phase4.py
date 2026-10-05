@@ -6084,6 +6084,7 @@ async def test_set_rule_state_supports_raw_rule_identity(hass) -> None:
 
     runtime = entry.runtime_data
     runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.client.async_set_profile_rule_enabled = AsyncMock()
     runtime.coordinator.async_refresh = AsyncMock()
 
     await hass.services.async_call(
@@ -6097,14 +6098,12 @@ async def test_set_rule_state_supports_raw_rule_identity(hass) -> None:
         blocking=True,
     )
 
-    runtime.client.async_set_profile_rule.assert_awaited_once_with(
+    # A pure toggle sends no action, so Control D preserves the rule as it is.
+    # The full identity resolves to the rule's hostname.
+    runtime.client.async_set_profile_rule_enabled.assert_awaited_once_with(
         "profile-1",
         "example2.com",
         enabled=False,
-        action_do=1,
-        group_pk="1",
-        ttl=None,
-        comment="Here is my reason",
     )
 
 
@@ -6409,6 +6408,7 @@ async def test_set_rule_state_supports_mode_updates(hass) -> None:
 
     runtime = entry.runtime_data
     runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.client.async_set_profile_rule_enabled = AsyncMock()
     runtime.coordinator.async_refresh = AsyncMock()
 
     await hass.services.async_call(
@@ -6422,6 +6422,9 @@ async def test_set_rule_state_supports_mode_updates(hass) -> None:
         blocking=True,
     )
 
+    # The rule is a block rule, so requesting redirect changes the action and the
+    # write must carry it. A status-only update is used only when the action is
+    # unchanged.
     runtime.client.async_set_profile_rule.assert_awaited_once_with(
         "profile-1",
         "example.com",
@@ -6431,6 +6434,7 @@ async def test_set_rule_state_supports_mode_updates(hass) -> None:
         ttl=None,
         comment="",
     )
+    runtime.client.async_set_profile_rule_enabled.assert_not_awaited()
 
 
 async def test_set_rule_state_supports_bare_hostname(hass) -> None:
@@ -6458,6 +6462,7 @@ async def test_set_rule_state_supports_bare_hostname(hass) -> None:
 
     runtime = entry.runtime_data
     runtime.client.async_set_profile_rule = AsyncMock()
+    runtime.client.async_set_profile_rule_enabled = AsyncMock()
     runtime.coordinator.async_refresh = AsyncMock()
 
     await hass.services.async_call(
@@ -6471,14 +6476,11 @@ async def test_set_rule_state_supports_bare_hostname(hass) -> None:
         blocking=True,
     )
 
-    runtime.client.async_set_profile_rule.assert_awaited_once_with(
+    # A pure toggle sends no action, so Control D preserves the rule as it is.
+    runtime.client.async_set_profile_rule_enabled.assert_awaited_once_with(
         "profile-1",
         "example.com",
         enabled=False,
-        action_do=0,
-        group_pk=None,
-        ttl=None,
-        comment="",
     )
 
 
@@ -7182,8 +7184,10 @@ async def test_set_rule_state_prefers_config_entry_id_over_name(hass) -> None:
             await hass.async_block_till_done()
 
     entry_one.runtime_data.client.async_set_profile_rule = AsyncMock()
+    entry_one.runtime_data.client.async_set_profile_rule_enabled = AsyncMock()
     entry_one.runtime_data.coordinator.async_refresh = AsyncMock()
     entry_two.runtime_data.client.async_set_profile_rule = AsyncMock()
+    entry_two.runtime_data.client.async_set_profile_rule_enabled = AsyncMock()
     entry_two.runtime_data.coordinator.async_refresh = AsyncMock()
 
     await hass.services.async_call(
@@ -7199,8 +7203,9 @@ async def test_set_rule_state_prefers_config_entry_id_over_name(hass) -> None:
         blocking=True,
     )
 
-    entry_one.runtime_data.client.async_set_profile_rule.assert_awaited_once()
-    entry_two.runtime_data.client.async_set_profile_rule.assert_not_awaited()
+    # The selected entry handles the toggle; the other entry is untouched.
+    entry_one.runtime_data.client.async_set_profile_rule_enabled.assert_awaited_once()
+    entry_two.runtime_data.client.async_set_profile_rule_enabled.assert_not_awaited()
 
 
 async def test_set_rule_state_requires_mutation_field(hass) -> None:
