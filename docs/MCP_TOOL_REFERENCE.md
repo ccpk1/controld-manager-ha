@@ -485,9 +485,18 @@ strictly better than exposing a surface that cannot be drilled into.
 would be a re-skin of this one.
 
 `catalog_type: 'redirect_locations'` is the one type that is **not**
-profile-scoped: it returns the account's 107 usable redirect destinations, each
-with the 3-letter code a redirect takes (`PK`) plus its city and country. Use it
-to choose a `redirect_target` instead of guessing a region code.
+profile-scoped: it returns the account's **107** usable redirect destinations,
+each with the 3-letter code a redirect takes (`PK`) plus its city and country,
+so a `redirect_target` is chosen rather than guessed. Codes look like `LHR`
+(London), `JFK` (New York), and `RES_ORD` (Residential Chicago). Verified
+end-to-end: a rule created with `redirect_target: 'LHR'` resolved to `action:
+3` with a London-range answer.
+
+**Client note:** a new enumerated value will be rejected by an editor client
+until its cached tool schema refreshes, and only a **window reload** does that
+— reloading the integration or the MCP server does not. If a value the server
+logs as registered is rejected as invalid, reload the window before suspecting
+the integration.
 
 ### Group 6 — Control
 
