@@ -849,6 +849,9 @@ class IntegrationManager(BaseManager):
                         "group_id": rule_row.group_pk,
                         "group_name": rule_row.group_name,
                         "action": rule_row.action_key,
+                        # Where a redirected rule sends traffic. Absent for a
+                        # block or bypass rule, which has no destination.
+                        "redirect_target": rule_row.redirect_target,
                         "enabled": rule_row.enabled,
                         "comment": rule_row.comment,
                     }
@@ -1235,6 +1238,10 @@ class IntegrationManager(BaseManager):
                 comment=IntegrationManager._optional_string(payload.get("comment"))
                 or "",
                 ttl=(int(action["ttl"]) if "ttl" in action else None),
+                # Captured for reading and for an undo. A toggle still writes a
+                # status-only payload and never restates these.
+                via=IntegrationManager._optional_string(action.get("via")),
+                via_v6=IntegrationManager._optional_string(action.get("via_v6")),
             )
         return rules
 

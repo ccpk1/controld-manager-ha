@@ -23,6 +23,7 @@ from .const import (
     ATTR_EXPIRES_AT,
     ATTR_GROUP,
     ATTR_PAUSED_UNTIL,
+    ATTR_REDIRECT_TARGET,
     ATTR_RULE_IDENTITY,
     DEFAULT_DISABLE_MINUTES,
     DEFAULT_ENABLED_FILTERS,
@@ -367,6 +368,10 @@ class ControlDManagerProfileRuleSwitch(ControlDManagerProfileEntity, SwitchEntit
                 attributes[ATTR_GROUP] = rule_row.group_name
             attributes[ATTR_COMMENT] = rule_row.comment
             attributes[ATTR_ACTION] = rule_row.action_key
+            # A redirected rule is only half-reported by its action: without the
+            # destination there is no way to see where traffic is being sent.
+            if (redirect_target := rule_row.redirect_target) is not None:
+                attributes[ATTR_REDIRECT_TARGET] = redirect_target
             if rule_row.ttl is not None:
                 expires_at = datetime.fromtimestamp(rule_row.ttl, UTC)
                 attributes[ATTR_EXPIRES_AT] = expires_at.isoformat()

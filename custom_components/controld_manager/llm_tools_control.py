@@ -993,14 +993,19 @@ class SetRuleStateTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the current rule states."""
+        """Return the current rule states, including any redirect destination."""
         rules = self._matching_rules(hass, args)
         if not rules:
             return None
-        return {
+        targets = [rule.redirect_target for rule in rules]
+        before: dict[str, Any] = {
             "enabled": [rule.enabled for rule in rules],
             "action": [rule.action_key for rule in rules],
         }
+        # A redirect whose destination is not reported is only half-described.
+        if any(target is not None for target in targets):
+            before["redirect_target"] = targets
+        return before
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Return whether the addressed rules already match the request."""
@@ -1009,12 +1014,40 @@ class SetRuleStateTool(_ControlDControlTool):
             return False
         wants_enabled = args.get(SERVICE_FIELD_ENABLED)
         wants_mode = args.get(SERVICE_FIELD_MODE)
+        wants_target = args.get(SERVICE_FIELD_REDIRECT_TARGET)
         for rule in rules:
             if wants_enabled is not None and bool(wants_enabled) != rule.enabled:
                 return False
             if wants_mode is not None and rule.action_key != wants_mode:
                 return False
+            if wants_target is not None and rule.redirect_target != wants_target:
+                return False
         return True
+
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
+        """Return one call per rule, restoring its previous state and destination."""
+        rules = self._matching_rules(hass, args)
+        if not rules:
+            return None
+        calls: list[str] = []
+        for rule in rules:
+            parts = [
+                f"rule_identity={rule.identity!r}",
+                f"enabled={rule.enabled}",
+            ]
+            if rule.redirect_target is not None:
+                # The destination must be restated, otherwise the rule is left
+                # redirecting with no target, which Control D rejects.
+                parts.append("mode='redirect'")
+                parts.append(f"redirect_target={rule.redirect_target!r}")
+                if rule.redirect_write_type is not None:
+                    parts.append(f"redirect_target_type={rule.redirect_write_type!r}")
+            else:
+                parts.append(f"mode={rule.action_key!r}")
+            if rule.ttl is not None:
+                parts.append(f"expire_at={rule.ttl}")
+            calls.append(f"{format_tool_name('set_rule_state')}({', '.join(parts)})")
+        return calls or None
 
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the requested rule state."""
@@ -1025,6 +1058,8 @@ class SetRuleStateTool(_ControlDControlTool):
             SERVICE_FIELD_COMMENT,
             SERVICE_FIELD_EXPIRE_AT,
             SERVICE_FIELD_EXPIRATION_DURATION,
+            SERVICE_FIELD_REDIRECT_TARGET,
+            SERVICE_FIELD_REDIRECT_TARGET_TYPE,
         ):
             if key in args:
                 after[key] = args[key]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Self
@@ -438,11 +439,50 @@ class ControlDRule:
     action_do: int
     comment: str = ""
     ttl: int | None = None
+    # A redirect rule carries its destination here. Without these the destination
+    # was discarded, so nothing could report where a redirected domain goes.
+    via: str | None = None
+    via_v6: str | None = None
 
     @property
     def action_key(self) -> str:
         """Return the current rule action key."""
         return rule_action_key_from_action_do(self.action_do)
+
+    @property
+    def redirect_target(self) -> str | None:
+        """Return the active redirect destination when there is one.
+
+        `-1` is Control D's "no value" sentinel, so it is filtered out rather
+        than reported as a destination.
+        """
+        if self.action_do not in {2, 3}:
+            return None
+        if self.via is not None and self.via != "-1":
+            return self.via
+        if self.via_v6 is not None and self.via_v6 != "-1":
+            return self.via_v6
+        return None
+
+    @property
+    def redirect_write_type(self) -> str | None:
+        """Return the destination family in the form a write accepts.
+
+        Deliberately not the same values the service model reports: the write
+        schema accepts `location`, `ipv4`, and `ipv6`, while the service model's
+        `redirect_target_type` is display-oriented (`auto`, `random`, `proxy`).
+        A caller building a write or an undo needs these values.
+        """
+        target = self.redirect_target
+        if target is None:
+            return None
+        if self.via_v6 is not None and self.via_v6 != "-1" and self.via in (None, "-1"):
+            return "ipv6"
+        try:
+            address = ipaddress.ip_address(target)
+        except ValueError:
+            return "location"
+        return "ipv4" if address.version == 4 else "ipv6"
 
 
 @dataclass(slots=True, frozen=True)
