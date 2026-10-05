@@ -72,8 +72,8 @@ class ControlDManagerAPI(llm.API):
         Summary registers only the overview. Read tiers add the read tools.
         Read-and-control adds the reversible controls, and Full additionally adds
         the destructive delete. Every write service requires an admin user, so a
-        non-admin caller is rejected by the service layer regardless of tier.
-        is the only thing deciding what is reachable.
+        non-admin caller is rejected by the service layer regardless of tier. The
+        mode is the only thing deciding what is reachable.
         """
         if self._mode == LLM_TOOL_MODE_OFF:
             return []

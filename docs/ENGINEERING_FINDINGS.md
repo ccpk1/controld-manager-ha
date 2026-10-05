@@ -605,6 +605,81 @@ All 24 tools here declare all four explicitly.
 Our `controld_manager__<verb>` naming complies, and the debug log added in `fccd0a2`
 records the registered surface at build time.
 
+### `open_world` has two definitions, and only one is operative
+
+The field is defined twice, by two first parties, and they do not say the same
+thing. This is the likely source of any conflicting information about it.
+
+The MCP SDK (`mcp/types.py`) is the normative source for the hint:
+
+> If true, this tool may interact with an "open world" of external entities. If
+> false, the tool's domain of interaction is closed. For example, the world of a
+> web search tool is open, whereas that of a memory tool is not. Default: true
+
+Home Assistant restates it in its own terms in `/docs/core/llm/`:
+
+> `open_world` | The tool reaches outside Home Assistant. Defaults to `True`.
+
+Those test different things. MCP's axis is bounded versus unbounded external
+entities; HA's is inside HA versus outside HA, which is broader and is the one
+that matters here.
+
+Both sources agree the field is only a hint. The SDK says so outright — *"all
+properties in ToolAnnotations are hints. They are not guaranteed to provide a
+faithful description of tool behavior"* — and the MCP specification adds that
+clients "MUST consider tool annotations to be untrusted unless they come from
+trusted servers".
+
+**Home Assistant never acts on the annotations.** Every `.annotations` reference
+in `homeassistant/` is either an assignment or the single read in
+`components/mcp_server/server.py`, which copies the four fields onto the MCP
+`types.ToolAnnotations`. Nothing in `conversation/`, the chat log, or the Assist
+pipeline consults them. So on the Assist path the field is inert, and the only
+consumer is the MCP client.
+
+**Home Assistant's own tools are all `open_world=False`** — `assist_satellite`,
+`calendar`, `climate`, `fan`, `homeassistant`, `humidifier`, `intent`,
+`lawn_mower`, `light`, `llm`, `media_player`, `todo`, and `vacuum` — because they
+act on local state. The one exception is KNX, which draws the line at the bus:
+
+```python
+_READ_ONLY = llm.ToolAnnotations(
+    read_only=True, destructive=False, idempotent=True, open_world=False
+)
+_BUS_PROBE = llm.ToolAnnotations(
+    read_only=False, destructive=False, idempotent=True, open_world=True
+)
+_BUS_WRITE = llm.ToolAnnotations(
+    read_only=False, destructive=True, idempotent=False, open_world=True
+)
+```
+
+KNX reads its local project with `False` and marks anything that transmits onto
+the bus `True`, which is the discriminator HA's own code applies. A bus is far
+less external than a cloud API.
+
+All 24 tools here call `api.controld.com`, so all 24 declare `open_world=True`.
+The opposite claim — that a cloud call is contained inside Home Assistant — is
+exactly the inaccuracy the least-safe defaults exist to prevent.
+
+### The deletes declare `idempotent=False`
+
+`delete_rule`, `delete_client`, and `delete_endpoint` are not idempotent, and
+neither is `delete_service` in the sense that matters. Home Assistant marks every
+one of its own removals the same way: `intent._REPEATS`,
+`todo.INTENT_LIST_REMOVE_ITEM`, and `media_player._CUMULATIVE` are all
+`destructive=True, idempotent=False`.
+
+The strict MCP reading could support `True`, since a second delete leaves the
+environment unchanged. But HA chose `False` for every removal, and a tool that
+diverges from that is a review finding rather than an improvement.
+
+**Two creates are consistent, by two different routes.** `create_rule` declares
+`idempotent=False` because its description states that creating the same rule
+twice creates two rules. `create_endpoint` declares `idempotent=True` because its
+description states that the name is unique across the account and the API rejects
+a duplicate. Each matches the duplicate behaviour its description documents.
+
 ### Duplicate endpoint names are a real problem
 
 Display names are not safe identifiers.

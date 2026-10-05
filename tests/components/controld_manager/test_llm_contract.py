@@ -224,11 +224,12 @@ async def test_read_tools_declare_all_four_annotations(
         assert annotations.read_only is True, tool.name
         assert annotations.destructive is False, tool.name
         assert annotations.idempotent is True, tool.name
-        assert annotations.open_world is False, tool.name
+        assert annotations.open_world is True, tool.name
 
 
 async def test_control_tool_annotations_are_accurate(hass: HomeAssistant) -> None:
-    """Only the delete is destructive, and only create_rule is not idempotent."""
+    """Only the deletes are destructive, and only the creates and deletes
+    are not idempotent."""
     tools = await _tools(hass, LLM_TOOL_MODE_FULL)
     by_name = {tool.name: tool for tool in tools}
 
@@ -236,15 +237,28 @@ async def test_control_tool_annotations_are_accurate(hass: HomeAssistant) -> Non
         annotations = by_name[f"{DOMAIN}__{name}"].annotations
         assert annotations is not None, name
         assert annotations.read_only is False, name
-        assert annotations.open_world is False, name
+        assert annotations.open_world is True, name
 
     # A repeat of create_rule has an effect, so it must not claim idempotency.
     assert by_name[f"{DOMAIN}__create_rule"].annotations.idempotent is False
     # Every irreversible delete declares itself destructive, and nothing else does.
     for name in _DESTRUCTIVE_TOOLS:
         assert by_name[f"{DOMAIN}__{name}"].annotations.destructive is True, name
+        assert by_name[f"{DOMAIN}__{name}"].annotations.idempotent is False, name
     for name in _CONTROL_TOOLS:
         assert by_name[f"{DOMAIN}__{name}"].annotations.destructive is False, name
+
+
+async def test_no_tool_claims_a_closed_world(hass: HomeAssistant) -> None:
+    """Every tool calls the Control D cloud API, so none is closed-world.
+
+    Home Assistant's own platform tools are all `open_world=False` because they
+    act on local state, and its default is `True`, so this guards both a copied
+    local-state pattern and a newly added annotation set.
+    """
+    tools = await _tools(hass, LLM_TOOL_MODE_FULL)
+    for tool in tools:
+        assert tool.annotations.open_world is True, tool.name
 
 
 async def test_delete_service_is_not_a_destructive_tool(hass: HomeAssistant) -> None:

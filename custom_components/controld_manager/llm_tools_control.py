@@ -107,28 +107,33 @@ from .utils.action_result import (
 
 LOGGER = logging.getLogger(__name__)
 
+# Every tool here calls the Control D cloud API, so all of them reach outside
+# Home Assistant and declare `open_world=True`. Home Assistant's own platform
+# tools are all `open_world=False`, because they act on local state.
 _CONTROL_ANNOTATIONS: Final = llm.ToolAnnotations(
     read_only=False,
     destructive=False,
     idempotent=True,
-    open_world=False,
+    open_world=True,
 )
 
+# Deletes follow Home Assistant's convention for removals: every one of its own
+# (intent, todo, media_player) declares non-idempotent.
 _DESTRUCTIVE_ANNOTATIONS: Final = llm.ToolAnnotations(
     read_only=False,
     destructive=True,
-    idempotent=True,
-    open_world=False,
+    idempotent=False,
+    open_world=True,
 )
 
 # A repeat of a non-idempotent action has an effect, so it must not claim
-# idempotency. `create_rule` is the only such tool: creating the same rule twice
+# idempotency. `create_rule` is one such tool: creating the same rule twice
 # creates two rules.
 _NON_IDEMPOTENT_ANNOTATIONS: Final = llm.ToolAnnotations(
     read_only=False,
     destructive=False,
     idempotent=False,
-    open_world=False,
+    open_world=True,
 )
 
 _PROFILE_ID_DESCRIPTION: Final = (

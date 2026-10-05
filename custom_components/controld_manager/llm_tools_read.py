@@ -61,12 +61,13 @@ from .const import (
 from .llm_tools_common import as_list, format_tool_name
 from .utils.time_window import ACTIVITY_LOG_WINDOWS, DEFAULT_ACTIVITY_LOG_WINDOW
 
-# Every read tool is a bounded, read-only query against the user's own account.
+# Every read tool queries the Control D cloud API rather than local state, so
+# it reaches outside Home Assistant even though it changes nothing.
 _READ_ANNOTATIONS: Final = llm.ToolAnnotations(
     read_only=True,
     destructive=False,
     idempotent=True,
-    open_world=False,
+    open_world=True,
 )
 
 

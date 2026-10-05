@@ -363,8 +363,8 @@ that supports `changed` and `undo` could not be made.
   be read returns one warning saying so, so `changed` and a missing `undo` are
   never mistaken for a confirmed account of what happened.
 
-`already_in_state` applies to **idempotent** tools only. `create_rule` is not
-idempotent and can never report it.
+`already_in_state` applies to **idempotent** tools only. `create_rule` and the
+three deletes are not idempotent and can never report it.
 
 Both shapes are strictly JSON-serializable (no datetimes or sets).
 
@@ -372,8 +372,20 @@ Both shapes are strictly JSON-serializable (no datetimes or sets).
 
 Every tool declares all four MCP annotations: `read_only`, `destructive`,
 `idempotent`, `open_world`. Read tools declare `read_only=True, destructive=False`
-explicitly, because the annotation defaults are the least safe case. `create_rule`
-declares `idempotent=False`.
+explicitly, because the annotation defaults are the least safe case.
+
+`open_world` is `True` for every tool, because all of them call the Control D
+cloud API rather than reading local state. Home Assistant's own platform tools
+are all `open_world=False` for that reason, so the value cannot be copied from
+them.
+
+`create_rule` declares `idempotent=False` — creating the same rule twice creates
+two rules — and so do the three irreversible deletes, following Home Assistant's
+convention for removals.
+
+Home Assistant never reads these annotations itself; the MCP Server integration
+forwards them to MCP clients as tool hints. Nothing on the Assist path acts on
+them.
 
 ### Analytics surfaces
 
@@ -446,7 +458,7 @@ come before controls.
 - **Availability** — every enabled tier, including Summary.
 - **Reversibility** — read-only; `undo` is `null`.
 - **Annotations** — `read_only=True`, `destructive=False`, `idempotent=True`,
-  `open_world=False`.
+  `open_world=True`.
 
 ### Group 2 — Inventory and topology
 

@@ -262,7 +262,7 @@ async def test_overview_tool_contract(hass: HomeAssistant) -> None:
     assert tool.annotations.read_only is True
     assert tool.annotations.destructive is False
     assert tool.annotations.idempotent is True
-    assert tool.annotations.open_world is False
+    assert tool.annotations.open_world is True
     assert tool.title
     # The model must never have to pick an account; the tool supplies the entry.
     assert SERVICE_FIELD_CONFIG_ENTRY_ID not in tool.parameters.schema
