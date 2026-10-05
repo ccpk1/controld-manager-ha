@@ -8,6 +8,13 @@ Each control tool delegates to an existing service and returns the action-result
 envelope. Every write service requires an admin user, so a non-admin caller is
 rejected by the service layer rather than by the tool; the configured tier
 additionally decides which of these tools are registered at all.
+
+Tool schemas are built on ``probatio``, not ``voluptuous``. Home Assistant
+declares ``llm.Tool.parameters`` as ``probatio.Schema``, and probatio replaced
+voluptuous as the validation engine in Core 2026.10. Importing voluptuous would
+still work at runtime, because HA aliases it to probatio in ``sys.modules``, but
+it would describe the wrong type. HA's own tool integrations import probatio
+directly. Service schemas elsewhere in this integration stay on voluptuous.
 """
 
 from __future__ import annotations
@@ -15,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Final, cast, override
 
-import voluptuous as vol
+import probatio
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
@@ -275,7 +282,16 @@ def _resolve_row_pks(
 
 
 class _ControlDControlTool(llm.Tool):
-    """Base class for a Control D control tool backed by a service."""
+    """Base class for a Control D control tool backed by a service.
+
+    Pylint reads this class in isolation, so it cannot see two things that are
+    true by construction. The hooks below are a template method: each declares
+    the full signature every subclass overrides, and most subclasses use only
+    part of it. And the dispatch reads `before` and `undo` from those hooks,
+    whose base implementations return ``None`` while subclasses return state.
+    """
+
+    # pylint: disable=unused-argument,assignment-from-none
 
     integration = DOMAIN
     annotations = _CONTROL_ANNOTATIONS
@@ -458,11 +474,13 @@ class _ControlDControlTool(llm.Tool):
                 ),
                 error=True,
             )
-        except Exception as err:
+        except Exception as err:  # pylint: disable=broad-exception-caught
             # An unexpected error must still leave the model with a coherent
             # action result. Letting it escape handed back a bare repr such as
             # `'group:1|example.com'` (a KeyError), which reads like data. The
             # error is logged so the underlying defect is still discoverable.
+            # The broad catch is the point: the tool layer is the boundary, so
+            # anything a service raises has to become an action result here.
             LOGGER.exception(
                 "Control D tool %s failed unexpectedly for %s", self._service, target
             )
@@ -527,30 +545,30 @@ class SetFilterStateTool(_ControlDControlTool):
         "to that profile, so name the profile explicitly rather than relying on "
         "the default."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_FILTER_ID,
                 description=(
                     "Optional. A filter id or list of ids (from get_catalog). "
                     "Provide this or filter_name."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_FILTER_NAME,
                 description=(
                     "Optional. A filter name or list of names (from get_catalog). "
                     "Provide this or filter_id."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Required(
+            ): probatio.Any(str, [str]),
+            probatio.Required(
                 SERVICE_FIELD_ENABLED,
                 description="Required. True to enable the filter, false to disable it.",
             ): bool,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID, description=_PROFILE_ID_DESCRIPTION
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_NAME, description=_PROFILE_NAME_DESCRIPTION
             ): str,
         }
@@ -638,42 +656,42 @@ class SetServiceStateTool(_ControlDControlTool):
         "This is reversible — set the mode back, or use the `undo` field. Every "
         "device on that profile is affected."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_SERVICE_ID,
                 description=(
                     "Optional. A service id or list of ids (from get_catalog). "
                     "Provide this or service_name."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_SERVICE_NAME,
                 description=(
                     "Optional. A service name or list of names (from "
                     "get_catalog). Provide this or service_id."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Required(
+            ): probatio.Any(str, [str]),
+            probatio.Required(
                 SERVICE_FIELD_MODE,
                 description=(
                     "Required. How to handle the service: 'Off', 'Blocked', "
                     "'Bypassed', or 'Redirected'. The values are "
                     "case-sensitive."
                 ),
-            ): vol.In(service_mode_labels()),
-            vol.Optional(
+            ): probatio.In(service_mode_labels()),
+            probatio.Optional(
                 SERVICE_FIELD_REDIRECT_TARGET,
                 description=_REDIRECT_TARGET_DESCRIPTION,
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_REDIRECT_TARGET_TYPE,
                 description=_REDIRECT_TARGET_TYPE_DESCRIPTION,
-            ): vol.In(("location", "ip")),
-            vol.Optional(
+            ): probatio.In(("location", "ip")),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID, description=_PROFILE_ID_DESCRIPTION
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_NAME, description=_PROFILE_NAME_DESCRIPTION
             ): str,
         }
@@ -783,26 +801,26 @@ class DeleteServiceTool(_ControlDControlTool):
         "service again with the mode it had. It is not a destructive tool, "
         "because the service can be re-added."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_SERVICE_ID,
                 description=(
                     "Optional. A service id or list of ids (from get_catalog, "
                     "catalog_type 'services'). Provide this or service_name."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_SERVICE_NAME,
                 description=(
                     "Optional. A service name or list of names (from "
                     "get_catalog). Provide this or service_id."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID, description=_PROFILE_ID_DESCRIPTION
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_NAME, description=_PROFILE_NAME_DESCRIPTION
             ): str,
         }
@@ -886,40 +904,40 @@ class SetOptionStateTool(_ControlDControlTool):
         "This is reversible — set the previous value back, or use the `undo` "
         "field. Options apply to every device on the profile."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_OPTION_ID,
                 description=(
                     "Optional. An option id or list of ids (from get_catalog). "
                     "Provide this or option_name."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_OPTION_NAME,
                 description=(
                     "Optional. An option name or list of names (from "
                     "get_catalog). Provide this or option_id."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_ENABLED,
                 description=(
                     "Optional. For a toggle option: true to enable it, false to "
                     "disable it."
                 ),
             ): bool,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_VALUE,
                 description=(
                     "Optional. For a dropdown option: the value to set, using "
                     "the choices reported by get_catalog."
                 ),
-            ): vol.Any(str, int),
-            vol.Optional(
+            ): probatio.Any(str, int),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID, description=_PROFILE_ID_DESCRIPTION
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_NAME, description=_PROFILE_NAME_DESCRIPTION
             ): str,
         }
@@ -1041,58 +1059,60 @@ class SetRuleStateTool(_ControlDControlTool):
         "its own, and `cancel_expiration` to clear an existing expiry. The "
         "`undo` field returns the call that reverses the change."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_RULE_IDENTITY,
                 description=(
                     "Required. The rule identity or list of identities (from "
                     "get_catalog, catalog_type 'rules')."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_ENABLED,
                 description="Optional. True to enable the rule, false to disable it.",
             ): bool,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_MODE,
                 description=(
                     "Optional. Change what the rule does: 'block', 'bypass', "
                     "or 'redirect'. The values are case-sensitive and are not "
                     "the same words the filter and service tools use."
                 ),
-            ): vol.In(rule_action_options()),
-            vol.Optional(
+            ): probatio.In(rule_action_options()),
+            probatio.Optional(
                 SERVICE_FIELD_REDIRECT_TARGET,
                 description=_REDIRECT_TARGET_DESCRIPTION,
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_REDIRECT_TARGET_TYPE,
                 description=_REDIRECT_TARGET_TYPE_DESCRIPTION,
-            ): vol.In(("location", "ip")),
-            vol.Optional(SERVICE_FIELD_COMMENT, description=_COMMENT_DESCRIPTION): str,
-            vol.Optional(
+            ): probatio.In(("location", "ip")),
+            probatio.Optional(
+                SERVICE_FIELD_COMMENT, description=_COMMENT_DESCRIPTION
+            ): str,
+            probatio.Optional(
                 SERVICE_FIELD_EXPIRATION_DURATION,
                 description=_EXPIRATION_DESCRIPTION,
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_EXPIRE_AT,
                 description=(
                     "Optional. An absolute expiry as an ISO 8601 timestamp. Use "
                     "instead of expiration_duration when the moment is known."
                 ),
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_CANCEL_EXPIRATION,
                 description=(
                     "Optional. True to clear an existing expiry, making the "
                     "change permanent."
                 ),
             ): bool,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID, description=_PROFILE_ID_DESCRIPTION
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_NAME, description=_PROFILE_NAME_DESCRIPTION
             ): str,
         }
@@ -1255,27 +1275,27 @@ class SetDefaultRuleStateTool(_ControlDControlTool):
         "\n"
         "This is reversible — set the previous mode back, or use the `undo` field."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_MODE,
                 description=(
                     "Required. The catch-all action: 'Blocking', 'Bypassing', "
                     "or 'Redirecting'. The values are case-sensitive."
                 ),
-            ): vol.In(default_rule_mode_labels()),
-            vol.Optional(
+            ): probatio.In(default_rule_mode_labels()),
+            probatio.Optional(
                 SERVICE_FIELD_REDIRECT_TARGET,
                 description=_REDIRECT_TARGET_DESCRIPTION,
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_REDIRECT_TARGET_TYPE,
                 description=_REDIRECT_TARGET_TYPE_DESCRIPTION,
-            ): vol.In(("location", "ip")),
-            vol.Optional(
+            ): probatio.In(("location", "ip")),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID, description=_PROFILE_ID_DESCRIPTION
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_NAME, description=_PROFILE_NAME_DESCRIPTION
             ): str,
         }
@@ -1361,14 +1381,14 @@ class EnableProfileTool(_ControlDControlTool):
         "This is reversible with `disable_profile`; the `undo` field names the "
         "call. Enabling a profile affects every device that profile covers."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID, description=_PROFILE_ID_DESCRIPTION
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_NAME, description=_PROFILE_NAME_DESCRIPTION
-            ): vol.Any(str, [str]),
+            ): probatio.Any(str, [str]),
         }
     )
     _service = SERVICE_ENABLE_PROFILE
@@ -1437,22 +1457,22 @@ class DisableProfileTool(_ControlDControlTool):
         "protection for the duration. Confirm with the user before disabling, and "
         "prefer a short `minutes` value over a long one."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID, description=_PROFILE_ID_DESCRIPTION
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_NAME, description=_PROFILE_NAME_DESCRIPTION
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_MINUTES,
                 description=(
                     "Optional. How long to disable the profile for, in minutes. "
                     "Defaults to a short window. Prefer a short value; the "
                     "profile re-enables itself when it elapses."
                 ),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=1440)),
+            ): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=1440)),
         }
     )
     _service = SERVICE_DISABLE_PROFILE
@@ -1526,16 +1546,16 @@ class CreateRuleTool(_ControlDControlTool):
         "available through these tools and you should say so rather than "
         "implying the change is easily reversible."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_HOSTNAME,
                 description=(
                     "Required. The domain or list of domains to create the rule "
                     "for, as bare domains such as 'example.com'."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_MODE,
                 description=(
                     "Optional. What the rule does: 'block' (the default), "
@@ -1543,49 +1563,51 @@ class CreateRuleTool(_ControlDControlTool):
                     "are case-sensitive and are not the same words the filter "
                     "and service tools use."
                 ),
-            ): vol.In(rule_action_options()),
-            vol.Optional(
+            ): probatio.In(rule_action_options()),
+            probatio.Optional(
                 SERVICE_FIELD_REDIRECT_TARGET,
                 description=_REDIRECT_TARGET_DESCRIPTION,
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_REDIRECT_TARGET_TYPE,
                 description=_REDIRECT_TARGET_TYPE_DESCRIPTION,
-            ): vol.In(("location", "ip")),
-            vol.Optional(
+            ): probatio.In(("location", "ip")),
+            probatio.Optional(
                 SERVICE_FIELD_RULE_GROUP_ID,
                 description=(
                     "Optional. The folder to create the rule in, by id (from "
                     "get_catalog, catalog_type 'rules'). Omit to use the root."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_RULE_GROUP_NAME,
                 description=(
                     "Optional. The folder to create the rule in, by name. "
                     "Provide this or rule_group_id."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_ENABLED,
                 description=(
                     "Optional. Defaults to true. Set false to create the rule "
                     "switched off."
                 ),
             ): bool,
-            vol.Optional(SERVICE_FIELD_COMMENT, description=_COMMENT_DESCRIPTION): str,
-            vol.Optional(
+            probatio.Optional(
+                SERVICE_FIELD_COMMENT, description=_COMMENT_DESCRIPTION
+            ): str,
+            probatio.Optional(
                 SERVICE_FIELD_EXPIRATION_DURATION,
                 description=_EXPIRATION_DESCRIPTION,
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_EXPIRE_AT,
                 description=("Optional. An absolute expiry as an ISO 8601 timestamp."),
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID, description=_PROFILE_ID_DESCRIPTION
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_NAME, description=_PROFILE_NAME_DESCRIPTION
             ): str,
         }
@@ -1635,20 +1657,20 @@ class DeleteRuleTool(_ControlDControlTool):
         "the `rule_identity` it reports. Deleting affects every device on the "
         "profile, and the rule is gone immediately."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_RULE_IDENTITY,
                 description=(
                     "Required. The rule identity or list of identities to delete "
                     "(from get_catalog, catalog_type 'rules'). This is "
                     "permanent."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID, description=_PROFILE_ID_DESCRIPTION
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_NAME, description=_PROFILE_NAME_DESCRIPTION
             ): str,
         }
@@ -1687,17 +1709,17 @@ class RenameEndpointTool(_ControlDControlTool):
         "change its clients; if you meant to label a single device under an "
         "endpoint, use `set_client_alias` instead."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
                     "Required. The endpoint device_id or list of device_ids "
                     "(from get_inventory). Ids are unique, so prefer this over a "
                     "name."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Required(
+            ): probatio.Any(str, [str]),
+            probatio.Required(
                 SERVICE_FIELD_NEW_NAME,
                 description=(
                     "Required. The new display name to apply to every selected "
@@ -1793,23 +1815,23 @@ class SetEndpointAnalyticsLoggingTool(_ControlDControlTool):
         "dashboard asks for a storage region; that choice is not made here. This "
         "is reversible — set it back."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
                     "Required. The endpoint device_id or list of device_ids "
                     "(from get_inventory) to change logging for."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Required(
+            ): probatio.Any(str, [str]),
+            probatio.Required(
                 SERVICE_FIELD_MODE,
                 description=(
                     "Required. 'None' stops logging for the endpoint, 'Some' "
                     "records block/redirect/bypass counts only, and 'Full' also "
                     "records the queries themselves."
                 ),
-            ): vol.In(endpoint_analytics_logging_mode_labels()),
+            ): probatio.In(endpoint_analytics_logging_mode_labels()),
         }
     )
     _service = SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING
@@ -1848,32 +1870,32 @@ class SetEndpointProfileTool(_ControlDControlTool):
         "This is reversible: set the previous value back, or clear the "
         "secondary, and the `undo` field names the call."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
                     "Required. The endpoint device_id or list of device_ids "
                     "(from get_inventory). Ids are unique, so prefer this over a "
                     "name."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID,
                 description=(
                     "Optional. The profile PK (from get_account_overview) to "
                     "enforce as the primary. A profile name is also accepted. "
                     "Omit to leave the primary unchanged."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE2_ID,
                 description=(
                     "Optional. The profile PK to enforce as the secondary. "
                     "Omit to leave the secondary unchanged."
                 ),
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_CLEAR_PROFILE2,
                 default=False,
                 description=(
@@ -1980,40 +2002,40 @@ class CreateEndpointTool(_ControlDControlTool):
         "asked for, so choose it deliberately: `Full` records the queries "
         "themselves."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_ENDPOINT_NAME,
                 description=(
                     "Required. The display name for the new endpoint, unique "
                     "across the account."
                 ),
             ): cv.string,
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_PROFILE_ID,
                 description=(
                     "Required. The profile PK (from get_account_overview) the "
                     "endpoint enforces. A profile name is also accepted."
                 ),
             ): cv.string,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_DESCRIPTION,
                 description="Optional. A free-text note stored on the endpoint.",
             ): cv.string,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_ICON,
                 description=(
                     "Optional. An icon slug, for example 'desktop-linux' or 'router'."
                 ),
             ): cv.string,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_MODE,
                 description=(
                     "Optional. The initial analytics logging level: 'None', "
                     "'Some' (counts only), or 'Full' (records the queries). "
                     "Stays off when omitted."
                 ),
-            ): vol.In(endpoint_analytics_logging_mode_labels()),
+            ): probatio.In(endpoint_analytics_logging_mode_labels()),
         }
     )
     _service = SERVICE_CREATE_ENDPOINT
@@ -2075,15 +2097,15 @@ class DeleteEndpointTool(_ControlDControlTool):
         "endpoint intact and its history readable, which is usually preferable "
         "to destroying it."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
                     "Required. The endpoint device_id or list of device_ids "
                     "(from get_inventory). This is permanent."
                 ),
-            ): vol.Any(str, [str]),
+            ): probatio.Any(str, [str]),
         }
     )
     _service = SERVICE_DELETE_ENDPOINT
@@ -2120,17 +2142,17 @@ class SetEndpointDescriptionTool(_ControlDControlTool):
         "This is reversible: set the previous value back, which `undo` names. "
         "It does not touch the endpoint's name, its profiles, or its clients."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
                     "Required. The endpoint device_id or list of device_ids "
                     "(from get_inventory). Ids are unique, so prefer this over a "
                     "name."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Required(
+            ): probatio.Any(str, [str]),
+            probatio.Required(
                 SERVICE_FIELD_DESCRIPTION,
                 description=(
                     "Required. The note to store. An empty string clears the "
@@ -2229,17 +2251,17 @@ class SetClientAliasTool(_ControlDControlTool):
         "This is reversible: `clear_client_alias` removes it, and the `undo` "
         "field names that call."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_CLIENT_ID,
                 description=(
                     "Optional. The client's `client_id` from get_inventory with "
                     "detail 'full'. Recommended: it addresses exactly one client "
                     "and takes precedence over any other selector."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_MAC,
                 description=(
                     "Optional. The client's MAC address, from get_inventory with "
@@ -2247,22 +2269,22 @@ class SetClientAliasTool(_ControlDControlTool):
                     "appear on several clients under one endpoint. Prefer "
                     "client_id."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_HOSTNAME,
                 description=(
                     "Optional. The client's hostname, from get_inventory with "
                     "detail 'full'. Not guaranteed unique. Prefer client_id."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Required(
+            ): probatio.Any(str, [str]),
+            probatio.Required(
                 SERVICE_FIELD_ALIAS,
                 description=(
                     "Required. The friendly label to assign to the client, for "
                     "example 'Kadens iPad'."
                 ),
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_PARENT_ENDPOINT_NAME,
                 description=(
                     "Optional. The parent endpoint's name, to disambiguate when "
@@ -2342,31 +2364,31 @@ class ClearClientAliasTool(_ControlDControlTool):
         "Only the alias is removed; the client's traffic and rules are "
         "unaffected."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_CLIENT_ID,
                 description=(
                     "Optional. The client's `client_id` from get_inventory with "
                     "detail 'full'. Recommended: it addresses exactly one client "
                     "and takes precedence over any other selector."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_MAC,
                 description=(
                     "Optional. The client's MAC address, from get_inventory with "
                     "detail 'full'. Convenient but not unique. Prefer client_id."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_HOSTNAME,
                 description=(
                     "Optional. The client's hostname, from get_inventory with "
                     "detail 'full'. Not guaranteed unique. Prefer client_id."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PARENT_ENDPOINT_NAME,
                 description=(
                     "Optional. The parent endpoint's name, to disambiguate when "
@@ -2465,17 +2487,17 @@ class DeleteClientTool(_ControlDControlTool):
         "a selector matched a row that had already gone, so re-read `get_inventory` "
         "afterwards when the exact number matters."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_CLIENT_ID,
                 description=(
                     "Optional. The client's `client_id` from get_inventory with "
                     "detail 'full'. Recommended: it addresses exactly one "
                     "client and takes precedence over any other selector."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_MAC,
                 description=(
                     "Optional. The client's MAC address, from get_inventory with "
@@ -2483,8 +2505,8 @@ class DeleteClientTool(_ControlDControlTool):
                     "several clients, and every match is deleted. Prefer "
                     "client_id."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_HOSTNAME,
                 description=(
                     "Optional. The client's hostname, from get_inventory with "
@@ -2492,8 +2514,8 @@ class DeleteClientTool(_ControlDControlTool):
                     "under one hostname, so this can match a long list. Prefer "
                     "client_id."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_PARENT_ENDPOINT_NAME,
                 description=(
                     "Optional. The parent endpoint's name, to disambiguate when "
@@ -2501,7 +2523,7 @@ class DeleteClientTool(_ControlDControlTool):
                     "endpoint."
                 ),
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_DELETE_HISTORY,
                 default=True,
                 description=(

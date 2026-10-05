@@ -413,3 +413,43 @@ async def test_a_missing_required_argument_is_a_clean_error(
             _llm_context(),
         )
     assert not isinstance(err.value, KeyError)
+
+
+async def test_every_tool_declares_a_probatio_schema(hass: HomeAssistant) -> None:
+    """Tool schemas must be `probatio.Schema`, which is what HA declares.
+
+    `llm.Tool.parameters` is annotated `probatio.Schema`, and probatio replaced
+    voluptuous as the validation engine in Core 2026.10. Importing voluptuous
+    still resolves at runtime because HA aliases it to probatio in `sys.modules`,
+    so a wrong import is invisible until something type-checks it. This asserts
+    the declared type directly rather than relying on that alias.
+    """
+    import probatio
+
+    tools = await _tools(hass, LLM_TOOL_MODE_FULL)
+    assert tools
+
+    wrong = {
+        tool.name: type(tool.parameters).__module__
+        for tool in tools
+        if not isinstance(tool.parameters, probatio.Schema)
+    }
+    assert wrong == {}, f"tools not using probatio.Schema: {wrong}"
+
+
+async def test_tool_schemas_still_convert_for_an_mcp_client(
+    hass: HomeAssistant,
+) -> None:
+    """A probatio schema must survive the conversion an MCP client triggers.
+
+    `mcp_server` builds each tool's published input schema with
+    `probatio.to_openapi`, so a schema probatio cannot convert would break the
+    MCP surface rather than just the type check.
+    """
+    import probatio
+
+    tools = await _tools(hass, LLM_TOOL_MODE_FULL)
+    for tool in tools:
+        schema = probatio.to_openapi(tool.parameters, openapi_version="3.1.0")
+        assert schema["type"] == "object", tool.name
+        assert "properties" in schema, tool.name

@@ -7,13 +7,18 @@ never imported on older Home Assistant.
 Each read tool delegates to an existing service and wraps the response in the
 documented envelope. The tool injects its own ``config_entry_id`` so the caller
 never selects an account.
+
+Tool schemas are built on ``probatio``, not ``voluptuous``. Home Assistant
+declares ``llm.Tool.parameters`` as ``probatio.Schema``, and probatio replaced
+voluptuous as the validation engine in Core 2026.10. HA's own tool integrations
+import probatio directly.
 """
 
 from __future__ import annotations
 
 from typing import Any, Final, cast, override
 
-import voluptuous as vol
+import probatio
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
 
@@ -174,7 +179,7 @@ class GetAccountOverviewTool(_ControlDReadTool):
         "profile is counted under each of them, so those rows deliberately "
         "total more than the account figure."
     )
-    parameters = vol.Schema({})
+    parameters = probatio.Schema({})
     _service = SERVICE_GET_ACCOUNT_OVERVIEW
     _response_type = "account_overview"
 
@@ -230,9 +235,9 @@ class GetInventoryTool(_ControlDReadTool):
         "All counts come from the same runtime state the integration's own "
         "entities use, so they always agree with the sensors."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_DETAIL,
                 default="summary",
                 description=(
@@ -240,23 +245,23 @@ class GetInventoryTool(_ControlDReadTool):
                     "endpoints. 'full' also returns the client rows under the "
                     "selected endpoints."
                 ),
-            ): vol.In(("summary", "full")),
-            vol.Optional(
+            ): probatio.In(("summary", "full")),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID,
                 description=(
                     "Optional. One Control D profile id, or a list of them "
                     "(from get_account_overview), to narrow the result to those "
                     "profiles. Omit to include every profile."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
                     "Optional. One endpoint device_id, or a list of them, to "
                     "narrow the result. Omit to include every endpoint."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_CLIENT_LIMIT,
                 default=100,
                 description=(
@@ -265,7 +270,7 @@ class GetInventoryTool(_ControlDReadTool):
                     "reports whether the cap was reached, so a capped list is "
                     "never mistaken for a complete one."
                 ),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
+            ): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=500)),
         }
     )
     _service = SERVICE_GET_INVENTORY
@@ -306,9 +311,9 @@ class GetActivityLogTool(_ControlDReadTool):
         "page sets `has_more`; there is no total, so never imply one. `status_code` "
         "is the DNS response code, and `rcode` is not an accepted parameter."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_WINDOW,
                 default=DEFAULT_ACTIVITY_LOG_WINDOW,
                 description=(
@@ -317,8 +322,8 @@ class GetActivityLogTool(_ControlDReadTool):
                     f"{DEFAULT_ACTIVITY_LOG_WINDOW}. Keep it short unless you "
                     "really need a wider view."
                 ),
-            ): vol.In(ACTIVITY_LOG_WINDOWS),
-            vol.Optional(
+            ): probatio.In(ACTIVITY_LOG_WINDOWS),
+            probatio.Optional(
                 SERVICE_FIELD_SEARCH,
                 description=(
                     "Optional. A substring to match against the queried domain, "
@@ -326,14 +331,14 @@ class GetActivityLogTool(_ControlDReadTool):
                     "exact domain."
                 ),
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_QUERY_ACTION,
                 description=(
                     "Optional. Filter by what was done: 'blocked', 'bypassed', "
                     "'redirected', or 'failed'. Omit to return all actions."
                 ),
-            ): vol.In(ACTIVITY_ACTIONS),
-            vol.Optional(
+            ): probatio.In(ACTIVITY_ACTIONS),
+            probatio.Optional(
                 SERVICE_FIELD_TRIGGER,
                 description=(
                     "Optional. Filter by what caused the action. Use 'filter' "
@@ -343,8 +348,8 @@ class GetActivityLogTool(_ControlDReadTool):
                     "protection. Pair with trigger_value to name the specific "
                     "cause."
                 ),
-            ): vol.In(ACTIVITY_TRIGGERS),
-            vol.Optional(
+            ): probatio.In(ACTIVITY_TRIGGERS),
+            probatio.Optional(
                 SERVICE_FIELD_TRIGGER_VALUE,
                 description=(
                     "Optional. The specific cause, used with `trigger` — for "
@@ -353,22 +358,22 @@ class GetActivityLogTool(_ControlDReadTool):
                     "invent a label."
                 ),
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID,
                 description=(
                     "Optional. One Control D profile id (from "
                     "get_account_overview) to scope the result to that profile."
                 ),
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
                     "Optional. One or more endpoint device_ids (from "
                     "get_inventory) to scope the result. Provide a list to cover "
                     "several endpoints at once."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_CLIENT_ID,
                 description=(
                     "Optional. One client id (from get_inventory with "
@@ -376,59 +381,59 @@ class GetActivityLogTool(_ControlDReadTool):
                     "Requires endpoint_id as well."
                 ),
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_PROTOCOL,
                 description=(
                     "Optional. DNS transport to filter by, such as 'doh', "
                     "'dot', 'doq', 'doh3', or 'legacy' for plain DNS."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_SOURCE_COUNTRY,
                 description=(
                     "Optional. One or more source country codes to filter by, "
                     "such as 'US'."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_DESTINATION_COUNTRY,
                 description=(
                     "Optional. A destination country code to filter by. This is "
                     "only available on the activity log, not on aggregate counts."
                 ),
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_SOURCE_ISP,
                 description="Optional. A source ISP name to filter by.",
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_SOURCE_ASN,
                 description="Optional. A source ASN to filter by.",
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_STATUS_CODE,
                 description=(
                     "Optional. The DNS response code to filter by, as a number "
                     "(for example 0 for a normal answer or 3 for NXDOMAIN)."
                 ),
-            ): vol.Coerce(int),
-            vol.Optional(
+            ): probatio.Coerce(int),
+            probatio.Optional(
                 SERVICE_FIELD_RECORD_TYPE,
                 description=(
                     "Optional. The DNS record type to filter by. One of "
                     "'A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'PTR', 'SRV', "
                     "or 'HTTPS'; defaults to 'A'."
                 ),
-            ): vol.In(DNS_RECORD_TYPES),
-            vol.Optional(
+            ): probatio.In(DNS_RECORD_TYPES),
+            probatio.Optional(
                 SERVICE_FIELD_PAGE,
                 default=0,
                 description=(
                     "Optional. Zero-based page number. Defaults to 0, the newest "
                     "records first."
                 ),
-            ): vol.All(vol.Coerce(int), vol.Range(min=0)),
-            vol.Optional(
+            ): probatio.All(probatio.Coerce(int), probatio.Range(min=0)),
+            probatio.Optional(
                 SERVICE_FIELD_PAGE_SIZE,
                 default=50,
                 description=(
@@ -436,15 +441,15 @@ class GetActivityLogTool(_ControlDReadTool):
                     "larger page costs more context; narrow the filters instead "
                     "if you need less."
                 ),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
-            vol.Optional(
+            ): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=500)),
+            probatio.Optional(
                 SERVICE_FIELD_SORT_ORDER,
                 default="desc",
                 description=(
                     "Optional. 'desc' (default) returns newest first; 'asc' "
                     "returns oldest first."
                 ),
-            ): vol.In(("desc", "asc")),
+            ): probatio.In(("desc", "asc")),
         }
     )
     _service = SERVICE_GET_ACTIVITY_LOG
@@ -480,9 +485,9 @@ class TestDomainTool(_ControlDReadTool):
         "hypothetical answer. The lookup is diagnostic and does not appear in "
         "the activity log."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
                     "Required. The endpoint device_id to test, from "
@@ -490,14 +495,14 @@ class TestDomainTool(_ControlDReadTool):
                     "because each endpoint enforces its own profile."
                 ),
             ): str,
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_DOMAIN,
                 description=(
                     "Required. The domain to test, for example 'google.com'. "
                     "Use a bare domain, not a URL."
                 ),
             ): str,
-            vol.Optional(
+            probatio.Optional(
                 SERVICE_FIELD_RECORD_TYPE,
                 default="A",
                 description=(
@@ -505,7 +510,7 @@ class TestDomainTool(_ControlDReadTool):
                     "'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'PTR', 'SRV', or "
                     "'HTTPS'; defaults to 'A'."
                 ),
-            ): vol.In(DNS_RECORD_TYPES),
+            ): probatio.In(DNS_RECORD_TYPES),
         }
     )
     _service = SERVICE_TEST_DOMAIN
@@ -543,24 +548,24 @@ class GetCatalogTool(_ControlDReadTool):
         "has over a thousand entries, so set `limit` and treat `truncated` as a "
         "signal to narrow the scope rather than assuming you have everything."
     )
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 SERVICE_FIELD_CATALOG_TYPE,
                 description=(
                     "Required. One of 'filters', 'services', 'rules', "
                     "'profile_options', 'default_rule', or 'redirect_locations'."
                 ),
-            ): vol.In(CATALOG_TYPES),
-            vol.Optional(
+            ): probatio.In(CATALOG_TYPES),
+            probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID,
                 description=(
                     "Optional. One or more profile ids (from "
                     "get_account_overview) to scope the catalog. Strongly "
                     "recommended; without it the result covers every profile."
                 ),
-            ): vol.Any(str, [str]),
-            vol.Optional(
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_LIMIT,
                 default=50,
                 description=(
@@ -568,7 +573,7 @@ class GetCatalogTool(_ControlDReadTool):
                     "50. `truncated` reports whether the cap was reached, so a "
                     "capped catalog is never mistaken for a complete one."
                 ),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
+            ): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=500)),
         }
     )
     _service = SERVICE_GET_CATALOG

@@ -58,6 +58,7 @@ def _async_setup_llm_api(
     Core 2026.10-only names never reach older Home Assistant at module import
     time.
     """
+    # pylint: disable=import-outside-toplevel
     from .helpers.llm_support import llm_tools_supported
 
     if not llm_tools_supported():

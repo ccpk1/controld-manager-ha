@@ -491,7 +491,7 @@ class IntegrationManager(BaseManager):
             if endpoint_ids and device_id not in endpoint_ids:
                 continue
             attached_ids = {item.profile_pk for item in endpoint.attached_profiles}
-            if profile_ids and not (attached_ids & selected_profile_set):
+            if profile_ids and not attached_ids & selected_profile_set:
                 continue
             rows.append(
                 {
