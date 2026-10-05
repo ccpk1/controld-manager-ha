@@ -17,10 +17,12 @@ from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import llm
 
 from custom_components.controld_manager.llm_tools_control import (
+    DeleteRuleTool,
     DeleteServiceTool,
     DisableProfileTool,
     EnableProfileTool,
     SetDefaultRuleStateTool,
+    SetEndpointAnalyticsLoggingTool,
     SetFilterStateTool,
     SetOptionStateTool,
     SetServiceStateTool,
@@ -371,6 +373,54 @@ async def test_a_service_before_state_uses_the_same_vocabulary_as_after() -> Non
     # The registry row is action_do=0, i.e. blocked, reported as its label.
     assert result.data["before"] == {"mode": ["Blocked"]}
     assert result.data["after"] == {"mode": "Bypassed"}
+
+
+async def test_deleting_a_rule_does_not_blame_an_unreadable_state() -> None:
+    """Deletion has no undo by design, so it must not cite unreadable state.
+
+    The warning exists for a tool that *could* have offered an undo had the prior
+    state been readable. Deletion is irreversible regardless, so the same warning
+    gives the wrong reason and implies an undo was otherwise available.
+    """
+    service_call = AsyncMock()
+    tool = _tool_with_registry(DeleteRuleTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"rule_identity": "root|gone.example.com", "profile_id": "p-1"},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    assert result.data["undo"] is None
+    assert result.data["warnings"] == []
+
+
+async def test_an_unreadable_precheck_still_warns_for_a_reversible_tool() -> None:
+    """The warning must survive where it is genuinely the right reason.
+
+    `set_endpoint_analytics_logging` cannot read the current level, so it really
+    cannot offer an undo. That case must keep reporting it.
+    """
+    service_call = AsyncMock()
+    tool = SetEndpointAnalyticsLoggingTool(entry_id="e-1")
+    tool._registry = lambda _hass: None  # type: ignore[method-assign]
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"endpoint_id": "ep-1", "mode": "None"},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["undo"] is None
+    assert len(result.data["warnings"]) == 1
+    assert "could not be read" in result.data["warnings"][0]
 
 
 async def test_deleting_a_service_names_the_call_that_re_adds_it() -> None:

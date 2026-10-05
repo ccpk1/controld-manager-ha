@@ -1484,6 +1484,9 @@ class DeleteRuleTool(_ControlDControlTool):
     )
     _service = SERVICE_DELETE_RULE
     annotations = _DESTRUCTIVE_ANNOTATIONS
+    # Deletion has no prior state to compare and no undo by design, so the
+    # "state could not be read" note would give the wrong reason for both.
+    _has_precheck = False
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the deleted rule target."""
