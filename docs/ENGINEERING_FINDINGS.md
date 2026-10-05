@@ -574,14 +574,51 @@ Implementation consequence:
 
 Verified against Core 2026.10 source and the developer blog on 2026-10-05.
 
-**Probatio replaced voluptuous as the validation engine.** `llm.Tool.parameters` is
-declared `probatio.Schema`, and `homeassistant/__init__.py` aliases voluptuous to
-probatio in `sys.modules` at startup. The release blog is explicit that this is a
-supported path for integrations, not a migration burden: *"Custom integrations need
-no changes"* and *"Your integration can keep the old import for as long as you
-like."* HA bans `import voluptuous` in **core** by lint rule only. HA's own
-documented tool example therefore uses `probatio.Schema`, which is why this
-integration's tool modules import probatio rather than relying on the alias.
+**Probatio replaced voluptuous as the validation engine, but custom integrations
+are explicitly expected to keep `vol`.** `llm.Tool.parameters` is declared
+`probatio.Schema`, and Core installs the alias itself in `homeassistant/__init__.py`:
+
+```python
+from probatio.compat import install_as_voluptuous
+
+# Probatio replaces voluptuous as the validation engine. Custom integrations and a
+# few dependencies still import voluptuous directly, so alias it to probatio in
+# sys.modules before anything imports it.
+install_as_voluptuous()
+```
+
+Core's own comment names custom integrations as the reason the alias exists. The
+release blog ("Probatio is our validation engine", 2026-09-30) says the same in
+plain terms:
+
+> `import voluptuous as vol` still works: Home Assistant aliases the name in
+> `sys.modules` at startup, so the import resolves to Probatio. **Custom
+> integrations need no changes.** … Core itself has moved to importing Probatio
+> directly, and `import voluptuous` is now banned there by a lint rule. **That ban
+> applies to our own source. Your integration can keep the old import for as long
+> as you like.**
+
+The ban's scope is visible in Core's `pyproject.toml`: `include = ["homeassistant*"]`
+combined with `[tool.ruff.lint.flake8-tidy-imports.banned-api] "voluptuous".msg`.
+It covers Core's own source tree only, and therefore does not reach
+`custom_components/`.
+
+**This means the two choices are behaviourally identical here.** At runtime
+`vol.Schema` *is* `probatio.Schema`, because the alias resolves before this
+integration's modules import. Migrating `config_flow.py` and `services.py` from
+`vol` to `probatio` would change no behaviour at all.
+
+**So why do the tool modules import probatio?** Because Home Assistant's documented
+LLM tool example uses `probatio.Schema`, and following the documented example for
+new code is better than leaning on a compatibility alias. It is a preference, not
+a requirement, and it is **not** a reason to migrate existing working schemas.
+
+**One real, modest cost of staying on `vol`.** `pyproject.toml` overrides mypy with
+`follow_imports = "skip"` for `voluptuous.*`, because mypy resolves the real
+voluptuous package and its schema types are not identical to probatio's. Schemas
+written as `vol.Schema` therefore get no type checking. Migrating to `probatio` and
+deleting that override would restore coverage — the only substantive argument for
+the change, and not a compliance argument.
 
 **`llm.py` is a reserved platform filename.** The `llm` integration discovers an
 `<integration>/llm.py` platform and calls `async_get_tools` on it, resolving the
