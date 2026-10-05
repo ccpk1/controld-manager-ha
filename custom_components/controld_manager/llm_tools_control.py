@@ -2457,8 +2457,13 @@ class DeleteClientTool(_ControlDControlTool):
         "client in place.\n"
         "\n"
         "Set `delete_history: false` to remove only the rows and keep their "
-        "history. The result reports the number of rows the API confirmed it "
-        "removed, which can be fewer than the number requested."
+        "history.\n"
+        "\n"
+        "The result reports the clients the call **targeted** under "
+        "`before.client_count`, not how many the API actually removed, because the "
+        "API's own count is not returned through this path. The two can differ if "
+        "a selector matched a row that had already gone, so re-read `get_inventory` "
+        "afterwards when the exact number matters."
     )
     parameters = vol.Schema(
         {
