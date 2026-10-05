@@ -99,6 +99,39 @@ def test_normalization_captures_the_redirect_destination(
     assert rule.redirect_write_type == expected_type
 
 
+@pytest.mark.parametrize(
+    ("action", "expected_target", "expected_type"),
+    [
+        pytest.param(
+            {"do": 2, "status": 1, "via": "127.0.0.1"},
+            "127.0.0.1",
+            "ipv4",
+            id="ipv4-proxy",
+        ),
+        pytest.param(
+            {"do": 3, "status": 1, "via": "CLE"}, "CLE", "location", id="location"
+        ),
+        pytest.param({"do": 0, "status": 1}, None, None, id="block-folder"),
+        pytest.param({"do": 1, "status": 1}, None, None, id="allow-folder"),
+    ],
+)
+def test_normalization_captures_a_folders_redirect_destination(
+    action: dict[str, Any], expected_target: str | None, expected_type: str | None
+) -> None:
+    """A folder applies one action to every rule in it, destination included.
+
+    The folder payload carries `action.via` exactly as a rule does, so it was
+    being discarded the same way.
+    """
+    groups = IntegrationManager._normalize_rule_groups(
+        ({"PK": 1, "group": "Localhost", "action": action, "count": 1},)
+    )
+    group = groups["1"]
+
+    assert group.redirect_target == expected_target
+    assert group.redirect_write_type == expected_type
+
+
 def test_the_redirect_destination_is_none_for_a_non_redirect_action() -> None:
     """A block rule must not report a destination even if one is present."""
     rules = IntegrationManager._normalize_rules(

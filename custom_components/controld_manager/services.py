@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 from dataclasses import dataclass
 from datetime import timedelta
@@ -1618,26 +1617,9 @@ async def _async_load_rules_for_resolution(
     profile_pks: frozenset[str],
 ) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
     """Load live rule-group and rule rows for targeted profiles."""
-    integration_manager = entry.runtime_data.managers.integration
-    profile_details = await asyncio.gather(
-        *(
-            entry.runtime_data.client.async_get_profile_detail(
-                profile_pk,
-                include_services=False,
-                include_rules=True,
-            )
-            for profile_pk in profile_pks
-        )
+    return await entry.runtime_data.managers.integration.async_load_live_rules(
+        profile_pks
     )
-
-    # pylint: disable=too-many-lines
-    return {
-        profile_pk: (
-            integration_manager.normalize_live_rule_groups(detail.groups),
-            integration_manager.normalize_live_rules(detail.groups, detail.rules),
-        )
-        for profile_pk, detail in zip(profile_pks, profile_details, strict=True)
-    }
 
 
 def _resolve_live_rule_group_pk(

@@ -742,6 +742,39 @@ class IntegrationManager(BaseManager):
         """Return normalized rule rows for read-only live resolution."""
         return self._normalize_rules(groups_payload, rules_payload)
 
+    async def async_load_live_rules(
+        self,
+        profile_pks: frozenset[str],
+    ) -> dict[str, tuple[dict[str, ControlDRuleGroup], dict[str, ControlDRule]]]:
+        """Fetch and normalize live rule groups and rules for the given profiles.
+
+        The registry only holds rules a profile exposes, so anything that needs
+        to reason about a rule the profile does not expose — resolving a write,
+        reading the state before one, or building the undo — has to fetch. One
+        implementation keeps those paths from disagreeing, and returning the
+        groups alongside the rules avoids a second request for the callers that
+        need both.
+        """
+        if not profile_pks:
+            return {}
+        details = await asyncio.gather(
+            *(
+                self.runtime.client.async_get_profile_detail(
+                    profile_pk,
+                    include_services=False,
+                    include_rules=True,
+                )
+                for profile_pk in profile_pks
+            )
+        )
+        return {
+            profile_pk: (
+                self._normalize_rule_groups(tuple(detail.groups)),
+                self._normalize_rules(tuple(detail.groups), tuple(detail.rules)),
+            )
+            for profile_pk, detail in zip(profile_pks, details, strict=True)
+        }
+
     async def _async_build_service_catalog(
         self, profile_pks: frozenset[str]
     ) -> tuple[list[JsonValueType], str]:
@@ -834,6 +867,8 @@ class IntegrationManager(BaseManager):
                         "group_id": group_row.group_pk,
                         "name": group_row.name,
                         "current_mode": group_row.current_mode,
+                        # Where a redirect folder sends the rules inside it.
+                        "redirect_target": group_row.redirect_target,
                     }
                 )
                 text_lines.append(f"group:{group_row.group_pk}, {group_row.name}")
@@ -1259,6 +1294,10 @@ class IntegrationManager(BaseManager):
                 name=IntegrationManager._require_string(payload, "group"),
                 enabled=bool(action.get("status", 0)) and "do" in action,
                 action_do=(int(action["do"]) if "do" in action else None),
+                # Captured for reading, so a redirect folder can report where it
+                # sends traffic instead of just saying "redirect".
+                via=IntegrationManager._optional_string(action.get("via")),
+                via_v6=IntegrationManager._optional_string(action.get("via_v6")),
             )
         return groups
 

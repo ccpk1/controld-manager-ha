@@ -327,11 +327,25 @@ class ControlDRuleGroup:
     name: str
     enabled: bool = False
     action_do: int | None = None
+    # A folder applies one action to every rule inside it, and a redirect folder
+    # carries a destination just as a redirect rule does.
+    via: str | None = None
+    via_v6: str | None = None
 
     @property
     def current_mode(self) -> str:
         """Return the current folder-rule mode key."""
         return rule_group_mode_from_action(self.action_do, self.enabled)
+
+    @property
+    def redirect_target(self) -> str | None:
+        """Return the folder's redirect destination when there is one."""
+        return redirect_target_from(self.action_do, self.via, self.via_v6)
+
+    @property
+    def redirect_write_type(self) -> str | None:
+        """Return the destination family in the form a write accepts."""
+        return redirect_write_type_from(self.action_do, self.via, self.via_v6)
 
 
 @dataclass(slots=True, frozen=True)
@@ -426,6 +440,48 @@ def build_rule_item_target(rule_identity: str) -> str:
     return f"rule:{rule_identity}"
 
 
+REDIRECT_ACTION_DO_VALUES: frozenset[int] = frozenset({2, 3})
+
+
+def redirect_target_from(
+    action_do: int | None, via: str | None, via_v6: str | None
+) -> str | None:
+    """Return a redirect destination from an action and its target fields.
+
+    Shared by rules, rule folders, and services, which all carry the destination
+    the same way. `-1` is Control D's "no value" sentinel and is filtered out
+    rather than reported as a destination.
+    """
+    if action_do not in REDIRECT_ACTION_DO_VALUES:
+        return None
+    if via is not None and via != "-1":
+        return via
+    if via_v6 is not None and via_v6 != "-1":
+        return via_v6
+    return None
+
+
+def redirect_write_type_from(
+    action_do: int | None, via: str | None, via_v6: str | None
+) -> str | None:
+    """Return a redirect destination's family in the form a write accepts.
+
+    Deliberately not the display-oriented values the service model reports
+    (`auto`, `random`, `proxy`): the write schema accepts `location`, `ipv4`,
+    and `ipv6`, and a caller building a write or an undo needs those.
+    """
+    target = redirect_target_from(action_do, via, via_v6)
+    if target is None:
+        return None
+    if via_v6 is not None and via_v6 != "-1" and (via is None or via == "-1"):
+        return "ipv6"
+    try:
+        address = ipaddress.ip_address(target)
+    except ValueError:
+        return "location"
+    return "ipv4" if address.version == 4 else "ipv6"
+
+
 @dataclass(slots=True, frozen=True)
 class ControlDRule:
     """Normalized rule state for one profile."""
@@ -451,38 +507,13 @@ class ControlDRule:
 
     @property
     def redirect_target(self) -> str | None:
-        """Return the active redirect destination when there is one.
-
-        `-1` is Control D's "no value" sentinel, so it is filtered out rather
-        than reported as a destination.
-        """
-        if self.action_do not in {2, 3}:
-            return None
-        if self.via is not None and self.via != "-1":
-            return self.via
-        if self.via_v6 is not None and self.via_v6 != "-1":
-            return self.via_v6
-        return None
+        """Return the active redirect destination when there is one."""
+        return redirect_target_from(self.action_do, self.via, self.via_v6)
 
     @property
     def redirect_write_type(self) -> str | None:
-        """Return the destination family in the form a write accepts.
-
-        Deliberately not the same values the service model reports: the write
-        schema accepts `location`, `ipv4`, and `ipv6`, while the service model's
-        `redirect_target_type` is display-oriented (`auto`, `random`, `proxy`).
-        A caller building a write or an undo needs these values.
-        """
-        target = self.redirect_target
-        if target is None:
-            return None
-        if self.via_v6 is not None and self.via_v6 != "-1" and self.via in (None, "-1"):
-            return "ipv6"
-        try:
-            address = ipaddress.ip_address(target)
-        except ValueError:
-            return "location"
-        return "ipv4" if address.version == 4 else "ipv6"
+        """Return the destination family in the form a write accepts."""
+        return redirect_write_type_from(self.action_do, self.via, self.via_v6)
 
 
 @dataclass(slots=True, frozen=True)

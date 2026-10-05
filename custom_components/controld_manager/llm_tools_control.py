@@ -69,6 +69,7 @@ from .llm_tools_common import as_list, format_tool_name
 from .models import (
     DEFAULT_RULE_MODE_LABELS,
     SERVICE_MODE_LABELS,
+    ControlDRule,
     default_rule_mode_labels,
     endpoint_analytics_logging_mode_labels,
     normalize_default_rule_mode,
@@ -284,6 +285,18 @@ class _ControlDControlTool(llm.Tool):
         """
         return None
 
+    async def _async_preload(self, hass: HomeAssistant, args: dict[str, Any]) -> None:
+        """Load anything the pre-write hooks need that the registry cannot supply.
+
+        The hooks above are synchronous because most targets are fully described
+        by the runtime registry. A target the registry does not hold has to be
+        fetched, and fetching is asynchronous, so a tool overrides this to
+        populate state the hooks can then read synchronously.
+
+        Called once per ``async_call``, before ``_before``.
+        """
+        return None
+
     @override
     async def async_call(
         self,
@@ -293,6 +306,25 @@ class _ControlDControlTool(llm.Tool):
     ) -> llm.ToolResult:
         """Call the backing service and return the action result."""
         args = self._args(tool_input)
+        try:
+            await self._async_preload(hass, args)
+            return await self._async_dispatch(hass, args, llm_context)
+        finally:
+            # Preloaded state is per-call, so it never outlives the call that
+            # needed it.
+            self._clear_preload()
+
+    def _clear_preload(self) -> None:
+        """Drop any state loaded by ``_async_preload``."""
+        return None
+
+    async def _async_dispatch(
+        self,
+        hass: HomeAssistant,
+        args: dict[str, Any],
+        llm_context: llm.LLMContext,
+    ) -> llm.ToolResult:
+        """Run the pre-check, the write, and the action-result assembly."""
         target = self._target(args)
         before = self._before(hass, args)
 
@@ -901,6 +933,9 @@ class SetOptionStateTool(_ControlDControlTool):
 class SetRuleStateTool(_ControlDControlTool):
     """Enable, disable, or modify one custom rule."""
 
+    # Rows fetched for a rule the registry does not expose, held for one call.
+    _preloaded_rules: dict[str, dict[str, ControlDRule]] | None = None
+
     name = format_tool_name("set_rule_state")
     title = "Set rule state"
     description = (
@@ -978,17 +1013,64 @@ class SetRuleStateTool(_ControlDControlTool):
     def _matching_rules(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> tuple[Any, ...]:
-        """Return the rule rows this call addresses, by identity."""
+        """Return the rule rows this call addresses, by identity.
+
+        Prefers rows preloaded from the API: the registry only holds rules a
+        profile exposes, so without them the pre-check, the no-op check, and the
+        undo would all be blind for an unexposed rule.
+        """
         registry = self._registry(hass)
         if registry is None:
             return ()
         identities = set(as_list(args[SERVICE_FIELD_RULE_IDENTITY]))
-        return tuple(
-            rule
-            for profile_pk in _resolve_profile_pks(registry, args)
-            for rule in registry.rules_by_profile.get(profile_pk, {}).values()
-            if rule.identity in identities
+        rows_by_profile = self._preloaded_rules or {}
+        found: list[Any] = []
+        for profile_pk in _resolve_profile_pks(registry, args):
+            source = rows_by_profile.get(profile_pk) or registry.rules_by_profile.get(
+                profile_pk, {}
+            )
+            found.extend(
+                rule for rule in source.values() if rule.identity in identities
+            )
+        return tuple(found)
+
+    async def _async_preload(self, hass: HomeAssistant, args: dict[str, Any]) -> None:
+        """Fetch rules the registry does not hold.
+
+        Only runs when the registry cannot answer, so the common case of an
+        exposed rule costs no extra request.
+        """
+        registry = self._registry(hass)
+        if registry is None:
+            return
+        identities = set(as_list(args[SERVICE_FIELD_RULE_IDENTITY]))
+        if not identities:
+            return
+        profiles = _resolve_profile_pks(registry, args)
+        if all(
+            any(
+                rule.identity in identities
+                for rule in registry.rules_by_profile.get(profile_pk, {}).values()
+            )
+            for profile_pk in profiles
+        ):
+            return
+        entry = hass.config_entries.async_get_entry(self._entry_id)
+        manager = getattr(
+            getattr(getattr(entry, "runtime_data", None), "managers", None),
+            "integration",
+            None,
         )
+        if manager is None:
+            return
+        loaded = await manager.async_load_live_rules(frozenset(profiles))
+        self._preloaded_rules = {
+            profile_pk: rows[1] for profile_pk, rows in loaded.items()
+        }
+
+    def _clear_preload(self) -> None:
+        """Drop the preloaded rows once the call is done."""
+        self._preloaded_rules = None
 
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
