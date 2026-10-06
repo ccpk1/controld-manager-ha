@@ -81,25 +81,64 @@ class EndpointManager(BaseManager):
                     profile_pk=profile_pk,
                     secondary=False,
                 )
-                endpoint = replace(endpoint, owning_profile_pk=profile_pk)
+                endpoint = self._with_primary_profile(endpoint, profile_pk)
             if profile2_pk is not None:
                 await self.runtime.client.async_set_endpoint_profile(
                     endpoint.device_id,
                     profile_pk=profile2_pk,
                     secondary=True,
                 )
-                endpoint = replace(endpoint, secondary_profile_pk=profile2_pk)
+                endpoint = self._with_secondary_profile(endpoint, profile2_pk)
             elif clear_profile2:
                 await self.runtime.client.async_clear_endpoint_secondary_profile(
                     endpoint.device_id
                 )
-                endpoint = replace(endpoint, secondary_profile_pk=None)
+                endpoint = self._with_secondary_profile(endpoint, None)
             # Written back after the API accepts it, like the rename and alias
             # writes. Without this the registry keeps the old value until the
             # next refresh, so a following call's `before` and `undo` would
             # report state that is no longer true.
             self.runtime.registry.endpoints[endpoint.device_id] = endpoint
         self.runtime.active_coordinator.schedule_write_verification()
+
+    def _profile_entry(self, profile_pk: str) -> ControlDAttachedProfile:
+        """Return one attached-profile entry, named from the profile registry."""
+        profile = self.runtime.registry.profiles.get(profile_pk)
+        return ControlDAttachedProfile(
+            profile_pk=profile_pk,
+            name=profile.name if profile is not None else None,
+        )
+
+    def _with_primary_profile(
+        self, endpoint: ControlDEndpointSummary, profile_pk: str
+    ) -> ControlDEndpointSummary:
+        """Return the endpoint with a new primary, keeping any secondary.
+
+        The primary holds the first slot, so replacing it must not disturb the
+        second; this is what keeps `owning_profile_pk` and
+        `secondary_profile_pk` consistent, since both are read from this list.
+        """
+        secondary = endpoint.attached_profiles[1:2]
+        return replace(
+            endpoint,
+            attached_profiles=(self._profile_entry(profile_pk), *secondary),
+        )
+
+    def _with_secondary_profile(
+        self, endpoint: ControlDEndpointSummary, profile_pk: str | None
+    ) -> ControlDEndpointSummary:
+        """Return the endpoint with its secondary set, or cleared when None.
+
+        An endpoint always enforces one profile, so clearing the secondary keeps
+        the primary rather than emptying the list.
+        """
+        primary = endpoint.attached_profiles[:1]
+        if profile_pk is None:
+            return replace(endpoint, attached_profiles=primary)
+        return replace(
+            endpoint,
+            attached_profiles=(*primary, self._profile_entry(profile_pk)),
+        )
 
     async def async_set_endpoint_descriptions(
         self,
@@ -517,15 +556,11 @@ class EndpointManager(BaseManager):
         for device_payload in devices_payload:
             device_id = self._require_string(device_payload, "device_id")
             attached_profiles = tuple(self._iter_attached_profiles(device_payload))
-            owning_profile_pk = (
-                attached_profiles[0].profile_pk if attached_profiles else None
-            )
             relationship = self._extract_client_relationship(device_payload)
             endpoints[device_id] = ControlDEndpointSummary(
                 device_id=device_id,
                 endpoint_pk=self._optional_string(device_payload.get("PK")),
                 name=self._optional_string(device_payload.get("name")),
-                owning_profile_pk=owning_profile_pk,
                 last_active=self._normalize_datetime_value(
                     device_payload.get("last_activity")
                     or device_payload.get("last_active")
@@ -538,7 +573,6 @@ class EndpointManager(BaseManager):
                 # Present only when this device is also a client under another
                 # endpoint, which is how a standalone endpoint is aliased.
                 parent_client_id=relationship[2] if relationship else None,
-                secondary_profile_pk=self._extract_secondary_profile_pk(device_payload),
                 description=self._optional_string(device_payload.get("desc")),
                 icon=self._optional_string(device_payload.get("icon")),
                 authorize_by_secure_dns=bool(device_payload.get("learn_ip")),
@@ -619,7 +653,14 @@ class EndpointManager(BaseManager):
     def _iter_attached_profiles(
         self, device_payload: dict[str, Any]
     ) -> list[ControlDAttachedProfile]:
-        """Return attached profiles in upstream payload order."""
+        """Return attached profiles in upstream payload order.
+
+        Control D sends `profile` before `profile2`, and that order is the
+        definition of which is primary: the first entry becomes
+        `owning_profile_pk` and the second `secondary_profile_pk`. This is the
+        only place the profile list is read, so those two accessors cannot
+        disagree with each other.
+        """
         attached_profiles: list[ControlDAttachedProfile] = []
         for key, value in device_payload.items():
             if PROFILE_KEY_PATTERN.fullmatch(key) is None or not isinstance(
@@ -636,20 +677,6 @@ class EndpointManager(BaseManager):
                 )
             )
         return attached_profiles
-
-    @staticmethod
-    def _extract_secondary_profile_pk(device_payload: dict[str, Any]) -> str | None:
-        """Return the second enforced profile, read by its own key.
-
-        An endpoint may enforce two profiles. The primary is `profile`, and is
-        what `owning_profile_pk` holds; `profile2` is the optional second. Reading
-        it by key rather than by position avoids depending on payload key order.
-        """
-        secondary = device_payload.get("profile2")
-        if not isinstance(secondary, dict):
-            return None
-        pk = secondary.get("PK")
-        return pk if isinstance(pk, str) and pk else None
 
     def _extract_parent_device_id(self, device_payload: dict[str, Any]) -> str | None:
         parent_device = device_payload.get("parent_device")

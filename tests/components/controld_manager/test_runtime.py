@@ -41,6 +41,7 @@ from custom_components.controld_manager.managers import (
 )
 from custom_components.controld_manager.models import (
     ControlDAccountAnalytics,
+    ControlDAttachedProfile,
     ControlDClientAliasTarget,
     ControlDEndpointSummary,
     ControlDInventoryPayload,
@@ -2139,6 +2140,7 @@ def _profile_write_runtime(
         registry=SimpleNamespace(
             user=SimpleNamespace(stats_endpoint="america"),
             endpoints={endpoint.device_id: endpoint},
+            profiles={},
         ),
         active_coordinator=SimpleNamespace(schedule_write_verification=lambda: None),
     )
@@ -2155,8 +2157,7 @@ async def test_a_profile_write_updates_the_registry_immediately() -> None:
         device_id="ep-1",
         endpoint_pk="ep-1",
         name="Endpoint-Test",
-        owning_profile_pk="primary-a",
-        secondary_profile_pk=None,
+        attached_profiles=(ControlDAttachedProfile(profile_pk="primary-a"),),
     )
     runtime = _profile_write_runtime(endpoint)
     manager = EndpointManager()
@@ -2195,7 +2196,7 @@ async def test_a_primary_profile_write_updates_the_registry_immediately() -> Non
         device_id="ep-2",
         endpoint_pk="ep-2",
         name="Endpoint-Test",
-        owning_profile_pk="primary-a",
+        attached_profiles=(ControlDAttachedProfile(profile_pk="primary-a"),),
     )
     runtime = _profile_write_runtime(endpoint)
     manager = EndpointManager()
@@ -2214,7 +2215,7 @@ async def test_a_description_write_updates_the_registry_immediately() -> None:
         device_id="ep-3",
         endpoint_pk="ep-3",
         name="Endpoint-Test",
-        owning_profile_pk="primary-a",
+        attached_profiles=(ControlDAttachedProfile(profile_pk="primary-a"),),
         description="before",
     )
     runtime = SimpleNamespace(
@@ -2235,3 +2236,61 @@ async def test_a_description_write_updates_the_registry_immediately() -> None:
         (runtime.registry.endpoints["ep-3"],), ""
     )
     assert runtime.registry.endpoints["ep-3"].description is None
+
+
+async def test_a_primary_write_keeps_the_secondary_and_the_list_agreeing() -> None:
+    """The enforced-profile list is the one stored fact, so it cannot drift.
+
+    `owning_profile_pk` and `secondary_profile_pk` are read from that list, so a
+    write has to move the list itself. Updating only the scalars left it stale,
+    which made one endpoint row report two different primaries and made
+    profile-filtered reads miss the profile that was just attached.
+    """
+    endpoint = ControlDEndpointSummary(
+        device_id="ep-4",
+        endpoint_pk="ep-4",
+        name="Endpoint-Test",
+        attached_profiles=(
+            ControlDAttachedProfile(profile_pk="primary-a"),
+            ControlDAttachedProfile(profile_pk="secondary-a"),
+        ),
+    )
+    runtime = _profile_write_runtime(endpoint)
+    manager = EndpointManager()
+    manager.attach_runtime(cast(Any, runtime))
+
+    await manager.async_set_endpoint_profiles(
+        (endpoint,), profile_pk="primary-b", profile2_pk=None, clear_profile2=False
+    )
+
+    written = runtime.registry.endpoints["ep-4"]
+    assert written.owning_profile_pk == "primary-b"
+    # Replacing the primary must not disturb the second slot.
+    assert written.secondary_profile_pk == "secondary-a"
+    assert [entry.profile_pk for entry in written.attached_profiles] == [
+        "primary-b",
+        "secondary-a",
+    ]
+
+
+async def test_a_profile_name_is_resolved_from_the_registry() -> None:
+    """The list carries names too, so a row needs no second lookup to show one."""
+    endpoint = ControlDEndpointSummary(
+        device_id="ep-5",
+        endpoint_pk="ep-5",
+        name="Endpoint-Test",
+        attached_profiles=(ControlDAttachedProfile(profile_pk="primary-a"),),
+    )
+    runtime = _profile_write_runtime(endpoint)
+    runtime.registry.profiles = {
+        "primary-b": SimpleNamespace(profile_pk="primary-b", name="Kids")
+    }
+    manager = EndpointManager()
+    manager.attach_runtime(cast(Any, runtime))
+
+    await manager.async_set_endpoint_profiles(
+        (endpoint,), profile_pk="primary-b", profile2_pk=None, clear_profile2=False
+    )
+
+    written = runtime.registry.endpoints["ep-5"]
+    assert written.attached_profiles[0].name == "Kids"

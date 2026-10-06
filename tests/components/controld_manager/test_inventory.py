@@ -54,7 +54,6 @@ def _registry() -> ControlDRegistry:
                 device_id="vlan60",
                 endpoint_pk="vlan60",
                 name="Firewalla-VLAN60",
-                owning_profile_pk="p-1",
                 attached_profiles=(
                     ControlDAttachedProfile(profile_pk="p-1"),
                     ControlDAttachedProfile(profile_pk="p-2"),
@@ -66,7 +65,6 @@ def _registry() -> ControlDRegistry:
                 device_id="ipad",
                 endpoint_pk="ipad",
                 name="Chads-iPad",
-                owning_profile_pk="p-2",
                 attached_profiles=(ControlDAttachedProfile(profile_pk="p-2"),),
                 associated_client_count=0,
                 parent_device_id="vlan60",
@@ -159,24 +157,27 @@ def test_profile_rows_use_the_shared_endpoint_count_accessor() -> None:
 
 
 def test_endpoint_rows_expose_attachment_and_role() -> None:
-    """An endpoint states its role and lists every attached profile."""
+    """An endpoint states its role and names each enforced profile's slot."""
     response = _build(_registry())
     rows = {row["device_id"]: row for row in response["endpoints"]}
 
     vlan = rows["vlan60"]
     assert vlan["role"] == "endpoint"
     assert vlan["is_endpoint"] is True
-    assert vlan["owning_profile_id"] == "p-1"
-    assert vlan["owning_profile_name"] == "Default"
-    assert {attached["profile_id"] for attached in vlan["attached_profiles"]} == {
-        "p-1",
-        "p-2",
-    }
+    # One list, with the slot named, rather than a primary/secondary pair plus
+    # a copy of the list that could disagree with it.
+    assert vlan["enforced_profiles"] == [
+        {"profile_id": "p-1", "profile_name": "Default", "slot": "primary"},
+        {"profile_id": "p-2", "profile_name": "Kids", "slot": "secondary"},
+    ]
+    assert "owning_profile_id" not in vlan
+    assert "attached_profiles" not in vlan
     assert vlan["associated_client_count"] == 2
     assert vlan["last_active"] == "2026-10-03T12:00:00+00:00"
 
     ipad = rows["ipad"]
-    assert ipad["owning_profile_id"] == "p-2"
+    assert [entry["slot"] for entry in ipad["enforced_profiles"]] == ["primary"]
+    assert ipad["enforced_profiles"][0]["profile_id"] == "p-2"
     assert ipad["parent_device_id"] == "vlan60"
     assert ipad["last_active"] is None
 
@@ -342,11 +343,12 @@ def test_advanced_settings_default_off_when_the_api_omits_them() -> None:
     assert endpoint.prevent_deactivation_enabled is False
 
 
-def test_secondary_profile_is_captured_by_its_own_key() -> None:
+def test_secondary_profile_is_captured_from_the_enforced_list() -> None:
     """An endpoint may enforce two profiles, and the second must be visible.
 
     Without it a caller cannot tell what a profile change would overwrite, and a
     reverse of that change would clear the secondary instead of restoring it.
+    Both are read from the one list, so the row and the accessors cannot disagree.
     """
     endpoint = _endpoint_rows(
         {
@@ -360,6 +362,15 @@ def test_secondary_profile_is_captured_by_its_own_key() -> None:
 
     assert endpoint.owning_profile_pk == "primary-pk"
     assert endpoint.secondary_profile_pk == "secondary-pk"
+    assert [entry.profile_pk for entry in endpoint.attached_profiles] == [
+        "primary-pk",
+        "secondary-pk",
+    ]
+    # The names come along, so a row needs no second lookup to show one.
+    assert [entry.name for entry in endpoint.attached_profiles] == [
+        "Chads Phone",
+        "Default",
+    ]
 
 
 def test_secondary_profile_is_absent_when_only_one_is_enforced() -> None:

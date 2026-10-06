@@ -75,7 +75,6 @@ def _registry() -> ControlDRegistry:
                 device_id="ep-1",
                 endpoint_pk="ep-1",
                 name="VLAN60",
-                owning_profile_pk="p-1",
                 attached_profiles=(ControlDAttachedProfile(profile_pk="p-1"),),
                 associated_client_count=3,
             )

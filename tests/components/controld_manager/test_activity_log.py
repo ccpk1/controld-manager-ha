@@ -19,6 +19,7 @@ from custom_components.controld_manager.managers.integration_manager import (
 )
 from custom_components.controld_manager.models import (
     ControlDActivityLogPage,
+    ControlDAttachedProfile,
     ControlDDnsVerdict,
     ControlDEndpointSummary,
     ControlDRegistry,
@@ -299,7 +300,7 @@ async def test_an_empty_endpoint_name_is_resolved_from_the_inventory() -> None:
         device_id="ep-1",
         endpoint_pk="pk-1",
         name="kadens-phone",
-        owning_profile_pk="profile-1",
+        attached_profiles=(ControlDAttachedProfile(profile_pk="profile-1"),),
     )
 
     response = await manager.async_build_activity_log_response(

@@ -575,17 +575,21 @@ uniqueness.
 | Field | Meaning |
 | --- | --- |
 | `device_id`, `name`, `role`, `is_endpoint` | Identity and that this row is an endpoint |
-| `owning_profile_id`, `owning_profile_name` | The **primary** enforced profile |
-| `secondary_profile_id`, `secondary_profile_name` | The **second** enforced profile, when one is attached |
-| `attached_profiles` | Every attached profile, with names |
+| `enforced_profiles` | Every profile this endpoint enforces, in order, each with `profile_id`, `profile_name`, and its `slot` |
 | `associated_client_count` | Clients attributed to this endpoint |
 | `parent_device_id`, `parent_client_id` | Set when the device is also a client under another endpoint |
 | `last_active` | When the endpoint was last seen. **Absent** when it has never been seen |
 | `advanced` | The dashboard's Advanced Settings; see above |
 
 Two profiles are common here: 11 of 20 endpoints on the account that motivated
-this integration enforce a primary *and* a secondary, so a caller reading only
-`owning_profile_id` sees half the picture.
+this integration enforce a primary *and* a secondary. The rule engine **merges**
+both before matching, so an endpoint whose second profile blocks something is
+blocked regardless of what the primary allows. Reading only the primary sees half
+the picture — which is why this is one list rather than a primary/secondary pair.
+
+`slot` is `primary`, `secondary`, or `additional` beyond those. The list is the
+single stored statement of what the endpoint enforces: the primary/secondary
+accessors used internally are read from it, so they cannot disagree with it.
 
 ## Not yet exposed
 

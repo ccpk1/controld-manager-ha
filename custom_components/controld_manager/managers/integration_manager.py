@@ -48,6 +48,18 @@ LOGGER = logging.getLogger(__name__)
 # and return every row on that profile.
 _CATALOG_SEARCH_EXCLUDED_KEYS = frozenset({"profile_id", "profile_name"})
 
+# An endpoint enforces its primary profile in the first slot and its optional
+# second in the next. Beyond that Control D defines nothing, so any further entry
+# is reported as an additional enforced profile rather than given a wrong name.
+_PROFILE_SLOTS: tuple[str, ...] = ("primary", "secondary")
+
+
+def _profile_slot(index: int) -> str:
+    """Return the slot name for one enforced profile by its position."""
+    if index < len(_PROFILE_SLOTS):
+        return _PROFILE_SLOTS[index]
+    return "additional"
+
 
 def _filter_catalog_items(
     items: list[JsonValueType], search: str
@@ -532,16 +544,18 @@ class IntegrationManager(BaseManager):
                     "is_endpoint": True,
                     "device_id": device_id,
                     "name": endpoint.name,
-                    "owning_profile_id": endpoint.owning_profile_pk,
-                    "owning_profile_name": self._profile_name(
-                        endpoint.owning_profile_pk
-                    ),
-                    "attached_profiles": [
+                    # The profiles this endpoint enforces, in Control D's own
+                    # order, with the slot named. An endpoint may enforce two and
+                    # the rule engine merges them, so both apply. This is one
+                    # list rather than a primary/secondary pair plus a copy of
+                    # the list, which is what let the two disagree before.
+                    "enforced_profiles": [
                         {
                             "profile_id": item.profile_pk,
                             "profile_name": self._profile_name(item.profile_pk),
+                            "slot": _profile_slot(index),
                         }
-                        for item in endpoint.attached_profiles
+                        for index, item in enumerate(endpoint.attached_profiles)
                     ],
                     "associated_client_count": endpoint.associated_client_count,
                     "parent_device_id": endpoint.parent_device_id,
@@ -549,10 +563,6 @@ class IntegrationManager(BaseManager):
                     # endpoint. Aliasing uses the client identity, and the parent
                     # endpoint alone is not enough to address it.
                     "parent_client_id": endpoint.parent_client_id,
-                    "secondary_profile_id": endpoint.secondary_profile_pk,
-                    "secondary_profile_name": self._profile_name(
-                        endpoint.secondary_profile_pk
-                    ),
                     "last_active": self._serialize_datetime(endpoint.last_active),
                     # The endpoint's Advanced Settings, named as the dashboard
                     # names them. Each is false when Control D omits the field,

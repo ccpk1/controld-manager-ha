@@ -166,8 +166,13 @@ class ControlDEndpointSummary:
     device_id: str
     endpoint_pk: str | None
     name: str | None
-    owning_profile_pk: str | None
     last_active: datetime | None = None
+    # The one stored statement of which profiles this endpoint enforces, in
+    # Control D's own order: the primary first, the secondary second when there
+    # is one. `owning_profile_pk` and `secondary_profile_pk` below are accessors
+    # over this list rather than separate fields, because storing the same fact
+    # three times let them drift apart: a profile write updated the scalars and
+    # left this list stale, so one row could report two different primaries.
     attached_profiles: tuple[ControlDAttachedProfile, ...] = ()
     associated_client_count: int = 0
     parent_device_id: str | None = None
@@ -175,10 +180,6 @@ class ControlDEndpointSummary:
     # `client_id`. Aliasing uses the client identity, so without this the parent
     # client of a standalone endpoint could not be addressed at all.
     parent_client_id: str | None = None
-    # The second enforced profile, when one is attached. Endpoints may enforce
-    # two, and only the primary is `owning_profile_pk`; without this the
-    # secondary is invisible to a caller that needs to restore it.
-    secondary_profile_pk: str | None = None
     # Advanced endpoint settings. Control D omits a field entirely when the
     # feature is off, so absence means "not enabled" rather than "unknown".
     description: str | None = None
@@ -191,6 +192,27 @@ class ControlDEndpointSummary:
     # The PIN itself is deliberately not stored: it is a credential, and only
     # whether one is set is ever reported.
     prevent_deactivation_enabled: bool = False
+
+    @property
+    def owning_profile_pk(self) -> str | None:
+        """Return the primary enforced profile.
+
+        The name is historical: this is the profile Home Assistant groups the
+        endpoint under, and the one a client under this endpoint inherits.
+        """
+        return self.attached_profiles[0].profile_pk if self.attached_profiles else None
+
+    @property
+    def secondary_profile_pk(self) -> str | None:
+        """Return the second enforced profile, when this endpoint enforces two.
+
+        An endpoint may enforce two profiles at once and the rule engine merges
+        them before matching, so the secondary is a real part of the policy
+        rather than an override.
+        """
+        if len(self.attached_profiles) < 2:
+            return None
+        return self.attached_profiles[1].profile_pk
 
     @property
     def legacy_dns_enabled(self) -> bool:
