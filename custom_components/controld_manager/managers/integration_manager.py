@@ -16,6 +16,7 @@ from ..const import (
     DETAIL_FULL,
     VERDICT_SOURCE_LABELS,
 )
+from ..llm_tools_common import SYSTEM_MODEL
 from ..models import (
     ControlDAccountAnalytics,
     ControlDDefaultRule,
@@ -388,6 +389,11 @@ class IntegrationManager(BaseManager):
         registry = self.runtime.registry
         return {
             "config_entry_id": config_entry_id,
+            # The cross-cutting model, served here so a client that sees only
+            # tool results can still obtain it. Assist already has it as the
+            # API prompt, which is why this is the one place the two paths
+            # carry the same text.
+            "system_model": SYSTEM_MODEL,
             "account": {
                 "region": registry.user.stats_endpoint if registry.user else None,
                 # Control D's 0/1 account flag: 1 enabled, 0 disabled. This is the
