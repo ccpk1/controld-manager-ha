@@ -33,8 +33,9 @@ Use these terms consistently across code and docs.
 | Device | A Home Assistant device registry object used only as a logical and visual container |
 | Entity | A Home Assistant platform object only |
 | Profile | A Control D configuration container holding rules, services, and blocklists |
-| Endpoint | A top-level Control D protected device row from `/devices`, such as a router segment or an individually protected client |
-| Client | A client visible under an endpoint in analytics and device relationships; client aliases are client-scoped, not endpoint-scoped |
+| Endpoint | A Control D DNS resolver that enforces a profile: a top-level protected row from `/devices`, whether a router segment, a ctrld instance, or an individually protected device. An endpoint **always** enforces at least one profile |
+| Client | A device seen under an endpoint in analytics and device relationships; client aliases are client-scoped, not endpoint-scoped |
+| Protected device | Everything DNS protection covers: an endpoint, or a client under one. The count sensors report the total, which is endpoints plus clients |
 | Runtime snapshot | The coordinator-owned in-memory view of current Control D state |
 | Registry | The manager-owned indexed runtime structure derived from API payloads |
 | Policy | A Control D rule, filter, service toggle, or other supported profile-level control |
@@ -46,6 +47,8 @@ Critical rules:
 - never use `entity` to describe a Control D profile, endpoint, policy, or API object
 - never use `device` to describe a physical Control D endpoint
 - never use `domain` to describe DNS domains or Control D policy categories inside integration code
+- never call a client an endpoint, or an endpoint a client. A client under an endpoint inherits that endpoint's profile, and the two are separate rows in inventory
+- a client that is **explicitly assigned** a profile becomes its own endpoint too, so one device may legitimately appear as both. `get_inventory` marks it with `is_standalone_endpoint`, `own_endpoint_id`, and `parent_client_id`
 
 ## Core runtime model
 
@@ -167,7 +170,7 @@ assistants and MCP clients through Home Assistant.
 Files:
 
 - `llm_api.py` owns the integration-owned `llm.API` registration
-- `llm_tools_common.py` owns the shared API prompt and tool-name helper
+- `llm_tools_common.py` owns `SYSTEM_MODEL`, the one canonical statement of what the surface is, plus the tool-name helper. `SYSTEM_MODEL` reaches the model two ways: as the API prompt, which Assist appends to the system prompt, and as the `system_model` field on the `get_account_overview` result, which is how a client that sees only tool calls obtains it. MCP's `prompts` primitive is user-controlled, so it cannot carry guidance a tool-only client needs
 - `llm_tools_read.py` and `llm_tools_control.py` own the read and control tools
 
 Rules:
@@ -185,7 +188,7 @@ Rules:
   `already_in_state` instead of claiming a change that did not happen. This is a
   read-only view of data the coordinator already holds, never a second data path
 - tools use the repository lexicon exactly; a Control D endpoint is never called
-  a client or a device
+  a client or a device, and a client is never called an endpoint
 - the tool layer is opt-in per config entry via the LLM tool mode, which decides
   which tools are registered. Every write service additionally requires an admin
   user, so the tier is a reachability limit rather than the only authorization
@@ -247,7 +250,7 @@ The default Home Assistant naming contract is intentionally scope-specific.
 Examples:
 
 - Account device: `Account`
-- Account entities: `Account Profile Count`, `Account Endpoint Count`
+- Account entities: `Account Profile Count`, `Account Protected Devices`
 - Profile device: upstream profile name
 - Small profile entity set: `Disable`
 - High-cardinality profile entities: `Options / Disable`, `Filters / Ads & Trackers`, `Services / Hosting / Alibaba Cloud`, `Rules / Domain / example.com`
