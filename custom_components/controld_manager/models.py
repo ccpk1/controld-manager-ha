@@ -925,6 +925,34 @@ class ControlDRegistry:
         """Return the number of clients seen under those endpoints."""
         return self.endpoint_inventory.client_count
 
+    def _endpoints_for_profile(
+        self, profile_pk: str
+    ) -> tuple[ControlDEndpointSummary, ...]:
+        """Return the endpoints that enforce one profile.
+
+        An endpoint enforcing two profiles is returned for each of them, which is
+        why the per-profile counts overlap the account total when summed.
+        """
+        return tuple(
+            endpoint
+            for endpoint in self.endpoints.values()
+            if any(
+                attached.profile_pk == profile_pk
+                for attached in endpoint.attached_profiles
+            )
+        )
+
+    def endpoint_count_for_profile(self, profile_pk: str) -> int:
+        """Return how many endpoints enforce one profile."""
+        return len(self._endpoints_for_profile(profile_pk))
+
+    def client_count_for_profile(self, profile_pk: str) -> int:
+        """Return how many clients sit behind those endpoints."""
+        return sum(
+            endpoint.associated_client_count
+            for endpoint in self._endpoints_for_profile(profile_pk)
+        )
+
     def protected_device_count_for_profile(self, profile_pk: str) -> int:
         """Return the protected device count attributed to one profile.
 
@@ -932,14 +960,9 @@ class ControlDRegistry:
         these per-profile figures deliberately exceed the account total when
         summed. The account figure is a single pass and does not overlap.
         """
-        return sum(
-            1 + endpoint.associated_client_count
-            for endpoint in self.endpoints.values()
-            if any(
-                attached_profile.profile_pk == profile_pk
-                for attached_profile in endpoint.attached_profiles
-            )
-        )
+        return self.endpoint_count_for_profile(
+            profile_pk
+        ) + self.client_count_for_profile(profile_pk)
 
 
 @dataclass(slots=True, frozen=True)

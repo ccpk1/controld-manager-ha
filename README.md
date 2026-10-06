@@ -170,6 +170,15 @@ Exposure is opt-in, and the tier decides which tools exist at all. It is set in 
 
 The 24 tools cover reads such as `get_account_overview`, `get_inventory`, `get_activity_log`, `test_domain`, and `get_catalog`, plus writes such as `set_service_state`, `set_rule_state`, `set_endpoint_profile`, and `create_rule`. The full contract, including every field and response shape, is documented in [docs/MCP_TOOL_REFERENCE.md](docs/MCP_TOOL_REFERENCE.md).
 
+### How the assistant learns to use them
+
+An assistant needs more than a list of tools: it needs to know what a profile is, why a client is not an endpoint, where identifiers come from, and how to read the result of a write. That context is one canonical piece of text, delivered two ways:
+
+- **Assist** receives it in the system prompt on every turn.
+- **MCP clients** receive it from `get_account_overview`, which returns it alongside the account counts.
+
+The second path matters because MCP clients are not required to surface anything except tools, and the common ones do not. So the guidance travels inside a tool result rather than relying on the client to display it. Calling that one tool is enough; it is not needed on every request.
+
 ### What it is good at
 
 The reason this exists is troubleshooting. Control D's per-query activity log and ranked breakdowns are high-cardinality telemetry that would be noise in your entity model, so they are exposed on demand instead. Questions this surface is designed to answer:
@@ -182,6 +191,7 @@ The reason this exists is troubleshooting. Control D's per-query activity log an
 ### Safety
 
 - **Every write requires an administrator.** A read changes nothing and is available to any user, but a write is rejected for a non-admin user. This applies to the tools and to the underlying services alike.
+- **Reaching the surface may also require an administrator.** The MCP Server integration has its own *Require an administrator account* option that gates the MCP endpoint itself. With it enabled, a non-admin user cannot reach these tools at all, whatever tier is configured.
 - **The destructive tier is separate.** `delete_rule`, `delete_client`, and `delete_endpoint` exist only at the Full tier, and the tools describe the blast radius before acting.
 - **Writes report honestly.** A change returns whether it actually changed anything, what the state was before, and the call that reverses it where one exists.
 - **Selectors are never guessed.** A name that matches nothing, or more than one object, is refused rather than resolved arbitrarily.

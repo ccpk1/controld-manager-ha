@@ -628,9 +628,10 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
         hass.states.get(profile_count_entity_id).attributes["unit_of_measurement"]
         == "profiles"
     )
+    # "devices", not "endpoints": the value counts endpoints plus their clients.
     assert (
         hass.states.get(endpoint_count_entity_id).attributes["unit_of_measurement"]
-        == "endpoints"
+        == "devices"
     )
     assert hass.states.get(total_queries_entity_id).state == "57826"
     assert hass.states.get(blocked_queries_entity_id).state == "8100"
@@ -800,11 +801,12 @@ async def test_profile_analytics_sensors_are_created_for_each_profile(hass) -> N
         hass.states.get(profile_total_entity_id).attributes["unit_of_measurement"]
         == "queries"
     )
+    # "devices", not "endpoints", for the same reason as the account sensor.
     assert (
         hass.states.get(profile_endpoint_count_entity_id).attributes[
             "unit_of_measurement"
         ]
-        == "endpoints"
+        == "devices"
     )
     assert hass.states.get(profile_total_entity_id).name == "Primary Total queries"
     assert (

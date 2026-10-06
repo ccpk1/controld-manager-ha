@@ -115,6 +115,10 @@ async def async_get_config_entry_diagnostics(
                     "option_count": len(
                         registry.options_by_profile.get(profile_pk, {})
                     ),
+                    "endpoint_count": registry.endpoint_count_for_profile(profile_pk),
+                    "client_count": registry.client_count_for_profile(profile_pk),
+                    # Endpoints plus clients. These per-profile rows overlap, so
+                    # they total more than the account figure when summed.
                     "protected_device_count": (
                         registry.protected_device_count_for_profile(profile_pk)
                     ),

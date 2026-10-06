@@ -1333,10 +1333,10 @@ to Home Assistant entities does not restrict an assistant, and vice versa.
 | Tier | What an assistant can do |
 | --- | --- |
 | Off | Nothing. No tools are registered. |
-| Summary only (default) | Read account-wide counts and block statistics, plus one row per profile with the profile's name, protected device count, paused state, and block counts. |
+| Summary only (default) | Read account-wide counts and block statistics, plus one row per profile with the profile's name, protected device count, paused state, and block counts. The overview result also carries the system model, so this tier can explain the integration's own vocabulary. |
 | Read only | Read everything: profiles, endpoints, clients, filters, services, options, rules, the activity log, and DNS lookups for a specific domain. |
-| Read and control | Everything above, plus reversible changes such as enabling or disabling a profile, filter, service, option, or rule, and renaming endpoints and clients. |
-| Full | Everything above, plus destructive actions. Today this means deleting custom rules. |
+| Read and control | Everything above, plus reversible changes: enabling or disabling a profile, filter, service, option, or rule; setting a service to blocked, bypassed, or redirected; attaching or clearing an endpoint's profiles; renaming an endpoint; setting an endpoint's description or analytics logging level; removing a service's row; creating or deleting an endpoint; and setting or clearing client aliases. |
+| Full | Everything above, plus the three irreversible deletes: `delete_rule`, `delete_endpoint`, and `delete_client`. Each names what it destroys before acting. |
 
 The default is Summary only. An assistant cannot reach a tier you did not select,
 including through a tool that names a lower tier: a control tool reports that the
@@ -1360,6 +1360,19 @@ query-level analytics.
 registered as an admin-only service, so a non-admin user is rejected by the
 service itself, independent of the tier. Automations and scripts are unaffected,
 because the admin check only applies when a user is attached to the call.
+
+**Reaching the surface may also require an administrator.** The MCP Server
+integration has its own *Require an administrator account* option, which gates
+the MCP endpoint itself rather than anything this integration controls. With it
+enabled, a non-admin user cannot reach these tools at all, whatever tier is
+configured.
+
+**The assistant receives a system model.** The account overview tool returns a
+short description of what the integration is and what is true across all of its
+tools: the vocabulary, where identifiers come from, how to read a write result,
+and how to report what is not exposed. Assist gets this in its system prompt
+automatically; an MCP client receives it from that tool, which is why the
+tool is worth calling once before asking anything substantive.
 
 Treat Read and control and Full as consequential tiers: the assistant can change
 real policy, and a mistake affects every device on the affected profile. Prefer

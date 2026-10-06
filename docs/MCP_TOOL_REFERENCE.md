@@ -42,8 +42,15 @@ passed through and is never translated.
 
 ### Terminology
 
-These words are exact and are not interchangeable. They come from the repository
-lexicon in `ARCHITECTURE.md` and `DEVELOPMENT_STANDARDS.md`.
+The words are not interchangeable. A **profile** is a policy container. An
+**endpoint** is a DNS resolver that enforces a profile: a protected row from
+`/devices`, whether a router segment, a ctrld instance, or an individually
+protected device. **An endpoint always enforces at least one profile**, so its
+primary is never empty and only its secondary can be removed. A **client** is a
+device seen under an endpoint. Home Assistant devices are containers only.
+
+These definitions come from the repository lexicon in `ARCHITECTURE.md` and
+`DEVELOPMENT_STANDARDS.md`.
 
 | Term | Meaning |
 | --- | --- |
@@ -67,6 +74,24 @@ Scope rules:
   `client_id` is still what aliases it.
 - Never call an endpoint a device or a client, and never call a client an
   endpoint.
+
+### The system model
+
+One canonical piece of text explains what this surface is and what is true
+across all of its tools: the vocabulary, where identifiers come from, how to read
+a write result, and how to report what is not exposed. It is served two ways:
+
+- As the API prompt, which Assist appends to the system prompt on every turn.
+- As `result.system_model` on `get_account_overview`, so a client that only ever
+  sees tool results can still obtain it.
+
+The second path exists because MCP's `prompts` primitive is **user-controlled**:
+a client shows a prompt for explicit invocation rather than injecting it, and
+the clients in common use send `tools/list` and nothing more. Relying on it would
+exclude the majority of clients, so the model travels inside a tool result.
+
+This is the one place the two paths deliberately carry identical text. The cost
+is that Assist holds it twice; the alternative was two texts that drift.
 
 ### Client identity
 

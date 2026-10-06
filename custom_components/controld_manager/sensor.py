@@ -97,7 +97,7 @@ def _build_sensor_entity(
         if sensor_key == "status":
             return ControlDManagerProfileStatusSensor(config_entry, profile_pk)
         if sensor_key == "endpoint_count":
-            return ControlDManagerProfileEndpointCountSensor(config_entry, profile_pk)
+            return ControlDManagerProfileProtectedDeviceSensor(config_entry, profile_pk)
         if sensor_key == "blocked_queries_ratio":
             return ControlDManagerProfileBlockedQueriesRatioSensor(
                 config_entry, profile_pk
@@ -113,7 +113,7 @@ def _build_sensor_entity(
     if key == "instance::profile_count":
         return ControlDManagerProfileCountSensor(config_entry)
     if key == "instance::endpoint_count":
-        return ControlDManagerEndpointCountSensor(config_entry)
+        return ControlDManagerProtectedDeviceSensor(config_entry)
     if key == "instance::status":
         return ControlDManagerStatusSensor(config_entry)
     if key == "instance::total_queries":
@@ -288,7 +288,7 @@ class ControlDManagerProfileStatusSensor(ControlDManagerProfileEntity, SensorEnt
 
 
 class ControlDManagerProfileCountSensor(ControlDManagerInstanceEntity, SensorEntity):
-    """Expose the current number of discovered profiles."""
+    """Expose how many Control D profiles this entry manages."""
 
     _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_COUNT
     _attr_native_unit_of_measurement = "profiles"
@@ -303,15 +303,17 @@ class ControlDManagerProfileCountSensor(ControlDManagerInstanceEntity, SensorEnt
 
     @property
     def native_value(self) -> int:
-        """Return the current number of discovered profiles."""
+        """Return the number of profiles returned by the account."""
         return self.runtime.registry.profile_count
 
 
-class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEntity):
-    """Expose the current number of discovered endpoints."""
+class ControlDManagerProtectedDeviceSensor(ControlDManagerInstanceEntity, SensorEntity):
+    """Expose everything DNS protection covers: endpoints plus their clients."""
 
     _attr_translation_key = TRANS_KEY_ENTITY_PIHOLE_UNIQUE_CLIENTS
-    _attr_native_unit_of_measurement = "endpoints"
+    # Not "endpoints": the value counts protected devices, and a client is not
+    # an endpoint. "devices" is the honest unit for the total.
+    _attr_native_unit_of_measurement = "devices"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _purpose = PURPOSE_INSTANCE_SUMMARY
     _item_type = ITEM_TYPE_SUMMARY_METRIC
@@ -351,13 +353,13 @@ class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEn
         return attributes
 
 
-class ControlDManagerProfileEndpointCountSensor(
+class ControlDManagerProfileProtectedDeviceSensor(
     ControlDManagerProfileEntity, SensorEntity
 ):
-    """Expose the current number of endpoints attached to one profile."""
+    """Expose the protected devices attributed to one profile."""
 
     _attr_translation_key = TRANS_KEY_ENTITY_PIHOLE_UNIQUE_CLIENTS
-    _attr_native_unit_of_measurement = "endpoints"
+    _attr_native_unit_of_measurement = "devices"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _purpose = PURPOSE_PROFILE_SUMMARY
     _item_type = ITEM_TYPE_SUMMARY_METRIC
