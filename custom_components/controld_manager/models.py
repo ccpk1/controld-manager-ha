@@ -321,12 +321,16 @@ class ControlDFilter:
 
 @dataclass(slots=True, frozen=True)
 class ControlDServiceCategory:
-    """Normalized service category metadata."""
+    """Normalized service category metadata.
+
+    The vendor's service count is deliberately not carried. It was stored and
+    never read, and the one consumer that needs it (the options-flow category
+    picker) reads it from the raw payload rather than this model.
+    """
 
     category_pk: str
     name: str
     description: str | None = None
-    count: int = 0
 
 
 @dataclass(slots=True, frozen=True)

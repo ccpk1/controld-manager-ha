@@ -340,7 +340,10 @@ class IntegrationManager(BaseManager):
         profile_rows: list[JsonValueType] = [
             {
                 "profile_id": profile_pk,
-                "profile_name": self.runtime.registry.profiles[profile_pk].name,
+                # Names resolve through the one helper rather than a direct
+                # registry read, so the envelope and the rows below it cannot
+                # disagree about what a profile is called.
+                "profile_name": self._profile_name(profile_pk),
             }
             for profile_pk in self._sorted_profile_pks(profile_pks)
             if profile_pk in self.runtime.registry.profiles
@@ -1142,7 +1145,6 @@ class IntegrationManager(BaseManager):
                 description=IntegrationManager._optional_string(
                     payload.get("description")
                 ),
-                count=int(payload.get("count", 0) or 0),
             )
         return categories
 
