@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-controld-manager"
-version = "1.3.2"
+# PEP 440 normalizes this to 2.0.0b1. The non-canonical spelling is kept so the
+# string a human reads here matches manifest.json and the git tag exactly.
+version = "2.0.0-beta.1"
 description = "Home Assistant custom integration for Control D Manager"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -44,6 +46,25 @@ strict = true
 warn_unused_ignores = true
 show_error_codes = true
 files = ["custom_components/controld_manager"]
+
+# Home Assistant 2026.10 replaced voluptuous with probatio and installs a runtime
+# shim aliasing `voluptuous` to probatio, but mypy still resolves the real
+# voluptuous package (pulled transitively). Their schema types are not identical,
+# so every `vol.Schema` handed to Home Assistant is reported as an argument-type
+# mismatch. Skip analyzing voluptuous to avoid those false positives; runtime
+# behavior is unaffected and this stays version-agnostic.
+[[tool.mypy.overrides]]
+module = "voluptuous.*"
+follow_imports = "skip"
+
+# Home Assistant 2026.10 moved device-class enums into per-platform `const`
+# modules and re-exports them from the package. Relax implicit-reexport checking
+# for this one module so the package-level import keeps working; importing from
+# `homeassistant.components.binary_sensor.const` would break older Core, where
+# that module does not exist.
+[[tool.mypy.overrides]]
+module = "homeassistant.components.binary_sensor"
+no_implicit_reexport = false
 
 [tool.pylint.main]
 ignore-paths = [

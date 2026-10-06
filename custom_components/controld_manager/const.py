@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-
-from homeassistant.const import Platform
+from typing import Final
 
 DOMAIN = "controld_manager"
 DEFAULT_TITLE = "Control D"
@@ -56,6 +55,7 @@ CORE_PROFILE_OPTION_TOGGLES = frozenset({"safesearch", "safeyoutube"})
 CORE_PROFILE_OPTION_SELECTS = frozenset({"ai_malware"})
 ADVANCED_PROFILE_OPTION_TOGGLES = frozenset(
     {
+        "block_attacks",
         "block_rfc1918",
         "no_dnssec",
         "spoof_ipv6",
@@ -74,20 +74,40 @@ SUPPORTED_PROFILE_OPTION_SELECTS = (
     CORE_PROFILE_OPTION_SELECTS | ADVANCED_PROFILE_OPTION_SELECTS
 )
 
-PLATFORMS: tuple[Platform, ...] = (
-    Platform.BINARY_SENSOR,
-    Platform.BUTTON,
-    Platform.SENSOR,
-    Platform.SELECT,
-    Platform.SWITCH,
+# Minimum Home Assistant version that supports the LLM tool contract
+# (llm.ToolResult, llm.ToolAnnotations, Tool.integration). Kept here as a pure
+# tuple so this module stays free of version-check logic; the predicate lives in
+# helpers/llm_support.py, which api/ never imports.
+MIN_LLM_TOOLS_HA_VERSION: Final = (2026, 10)
+
+# LLM/MCP tool exposure tiers. The tier is the only write control: Control D
+# Write services require an admin user, so the tier decides what is registered
+# and the service layer decides who may call it.
+CONF_LLM_TOOL_MODE: Final = "llm_tool_mode"
+LLM_TOOL_MODE_OFF: Final = "off"
+LLM_TOOL_MODE_SUMMARY_ONLY: Final = "summary_only"
+LLM_TOOL_MODE_READ_ONLY: Final = "read_only"
+LLM_TOOL_MODE_READ_AND_CONTROL: Final = "read_and_control"
+LLM_TOOL_MODE_FULL: Final = "full"
+LLM_TOOL_MODES: tuple[str, ...] = (
+    LLM_TOOL_MODE_OFF,
+    LLM_TOOL_MODE_SUMMARY_ONLY,
+    LLM_TOOL_MODE_READ_ONLY,
+    LLM_TOOL_MODE_READ_AND_CONTROL,
+    LLM_TOOL_MODE_FULL,
 )
+DEFAULT_LLM_TOOL_MODE: Final = LLM_TOOL_MODE_SUMMARY_ONLY
 
 SERVICE_CREATE_RULE = "create_rule"
 SERVICE_CLEAR_CLIENT_ALIAS = "clear_client_alias"
 SERVICE_DELETE_RULE = "delete_rule"
 SERVICE_DISABLE_PROFILE = "disable_profile"
 SERVICE_ENABLE_PROFILE = "enable_profile"
+SERVICE_GET_ACCOUNT_OVERVIEW = "get_account_overview"
+SERVICE_GET_ACTIVITY_LOG = "get_activity_log"
 SERVICE_GET_CATALOG = "get_catalog"
+SERVICE_GET_INVENTORY = "get_inventory"
+SERVICE_TEST_DOMAIN = "test_domain"
 SERVICE_RENAME_ENDPOINT = "rename_endpoint"
 SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING = "set_endpoint_analytics_logging"
 SERVICE_SET_CLIENT_ALIAS = "set_client_alias"
@@ -96,39 +116,137 @@ SERVICE_SET_FILTER_STATE = "set_filter_state"
 SERVICE_SET_OPTION_STATE = "set_option_state"
 SERVICE_SET_RULE_STATE = "set_rule_state"
 SERVICE_SET_SERVICE_STATE = "set_service_state"
+SERVICE_DELETE_SERVICE = "delete_service"
+SERVICE_DELETE_CLIENT = "delete_client"
+SERVICE_DELETE_ENDPOINT = "delete_endpoint"
+SERVICE_CREATE_ENDPOINT = "create_endpoint"
+SERVICE_SET_ENDPOINT_PROFILE = "set_endpoint_profile"
+SERVICE_SET_ENDPOINT_DESCRIPTION = "set_endpoint_description"
 SERVICE_FIELD_ALIAS = "alias"
 SERVICE_FIELD_CANCEL_EXPIRATION = "cancel_expiration"
 SERVICE_FIELD_CATALOG_TYPE = "catalog_type"
+SERVICE_FIELD_CLEAR_PROFILE2 = "clear_profile2"
+SERVICE_FIELD_CLIENT_ID = "client_id"
+SERVICE_FIELD_CLIENT_LIMIT = "client_limit"
+SERVICE_FIELD_COMMENT = "comment"
 SERVICE_FIELD_CONFIG_ENTRY_ID = "config_entry_id"
 SERVICE_FIELD_CONFIG_ENTRY_NAME = "config_entry_name"
+SERVICE_FIELD_DELETE_HISTORY = "delete_history"
+SERVICE_FIELD_DESCRIPTION = "description"
+SERVICE_FIELD_DESTINATION_COUNTRY = "destination_country"
+SERVICE_FIELD_DESTINATION_ISP = "destination_isp"
+SERVICE_FIELD_DETAIL = "detail"
+SERVICE_FIELD_DOMAIN = "domain"
 SERVICE_FIELD_ENABLED = "enabled"
-SERVICE_FIELD_COMMENT = "comment"
-SERVICE_FIELD_EXPIRATION_DURATION = "expiration_duration"
-SERVICE_FIELD_EXPIRE_AT = "expire_at"
 SERVICE_FIELD_ENDPOINT_HOSTNAME = "endpoint_hostname"
+SERVICE_FIELD_ENDPOINT_ID = "endpoint_id"
 SERVICE_FIELD_ENDPOINT_IP = "endpoint_ip"
 SERVICE_FIELD_ENDPOINT_MAC = "endpoint_mac"
 SERVICE_FIELD_ENDPOINT_NAME = "endpoint_name"
-SERVICE_FIELD_HOSTNAME = "hostname"
+SERVICE_FIELD_EXPIRATION_DURATION = "expiration_duration"
+SERVICE_FIELD_EXPIRE_AT = "expire_at"
 SERVICE_FIELD_FILTER_ID = "filter_id"
 SERVICE_FIELD_FILTER_NAME = "filter_name"
-SERVICE_FIELD_MODE = "mode"
+SERVICE_FIELD_HOSTNAME = "hostname"
+SERVICE_FIELD_ICON = "icon"
+SERVICE_FIELD_INCLUDE_PROFILE_DETAILS = "include_profile_details"
+SERVICE_FIELD_LIMIT = "limit"
 SERVICE_FIELD_MINUTES = "minutes"
+SERVICE_FIELD_MODE = "mode"
 SERVICE_FIELD_NEW_NAME = "new_name"
 SERVICE_FIELD_OPTION_ID = "option_id"
 SERVICE_FIELD_OPTION_NAME = "option_name"
+SERVICE_FIELD_PAGE = "page"
+SERVICE_FIELD_PAGE_SIZE = "page_size"
+SERVICE_FIELD_PARENT_ENDPOINT_NAME = "parent_endpoint_name"
+SERVICE_FIELD_PROFILE2_ID = "profile2_id"
 SERVICE_FIELD_PROFILE_ID = "profile_id"
 SERVICE_FIELD_PROFILE_NAME = "profile_name"
-SERVICE_FIELD_PARENT_ENDPOINT_NAME = "parent_endpoint_name"
+SERVICE_FIELD_PROTOCOL = "protocol"
+SERVICE_FIELD_QUERY_ACTION = "query_action"
+SERVICE_FIELD_RECORD_TYPE = "record_type"
 SERVICE_FIELD_REDIRECT_TARGET = "redirect_target"
 SERVICE_FIELD_REDIRECT_TARGET_TYPE = "redirect_target_type"
 SERVICE_FIELD_RULE_GROUP_ID = "rule_group_id"
 SERVICE_FIELD_RULE_GROUP_NAME = "rule_group_name"
 SERVICE_FIELD_RULE_IDENTITY = "rule_identity"
+SERVICE_FIELD_SEARCH = "search"
 SERVICE_FIELD_SERVICE_ID = "service_id"
 SERVICE_FIELD_SERVICE_NAME = "service_name"
+SERVICE_FIELD_SORT_ORDER = "sort_order"
+SERVICE_FIELD_SOURCE_ASN = "source_asn"
+SERVICE_FIELD_SOURCE_COUNTRY = "source_country"
+SERVICE_FIELD_SOURCE_ISP = "source_isp"
+SERVICE_FIELD_STATUS_CODE = "status_code"
+SERVICE_FIELD_TRIGGER = "trigger"
+SERVICE_FIELD_TRIGGER_VALUE = "trigger_value"
 SERVICE_FIELD_VALUE = "value"
+SERVICE_FIELD_WINDOW = "window"
 DEFAULT_DISABLE_MINUTES = 15
+
+# Detail levels for inventory-style reads: summary omits per-client rows.
+DETAIL_SUMMARY = "summary"
+DETAIL_FULL = "full"
+DETAIL_LEVELS: tuple[str, ...] = (DETAIL_SUMMARY, DETAIL_FULL)
+
+# Activity-log action filter. Managed here so the client action enum stays in one place.
+ACTIVITY_ACTIONS: tuple[str, ...] = ("blocked", "bypassed", "redirected", "failed")
+ACTIVITY_ACTION_CODES: dict[str, int] = {
+    "failed": -1,
+    "blocked": 0,
+    "bypassed": 1,
+    "redirected": 3,
+}
+
+# The reverse of ACTIVITY_ACTION_CODES, for naming the verdict on records we
+# return. The codes are not contiguous and `failed` is negative, so a record
+# read on its own cannot be interpreted without this map. Code 2 belongs to the
+# analytics count surface only and never appears on the activity log, so it
+# deliberately has no label here.
+ACTIVITY_ACTION_LABELS: dict[int, str] = {
+    code: label for label, code in ACTIVITY_ACTION_CODES.items()
+}
+
+# Trigger classes accepted by the per-record activity log. The ranked breakdown
+# endpoint supports only filter and service, but the activity log additionally
+# supports custom rules, the default rule, global rules, and rebind protection.
+ACTIVITY_TRIGGERS: tuple[str, ...] = (
+    "default",
+    "grule",
+    "filter",
+    "service",
+    "custom",
+    "rebind",
+)
+
+DNS_RECORD_TYPES: tuple[str, ...] = (
+    "A",
+    "AAAA",
+    "CNAME",
+    "MX",
+    "TXT",
+    "NS",
+    "PTR",
+    "SRV",
+    "HTTPS",
+)
+
+# Catalog surfaces exposed by the read-only get_catalog service.
+CATALOG_TYPES: tuple[str, ...] = (
+    "filters",
+    "services",
+    "rules",
+    "profile_options",
+    "default_rule",
+    "redirect_locations",
+)
+
+VERDICT_SOURCE_LABELS: dict[str, str] = {
+    "bl": "filter",
+    "rules": "custom",
+    "svc": "service",
+    "default": "default",
+}
 
 ATTR_PURPOSE = "purpose"
 ATTR_INTEGRATION = "integration"
@@ -258,6 +376,15 @@ TRANS_KEY_SERVICE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE = (
 )
 TRANS_KEY_SERVICE_SELECTOR_CONFLICT = "service_selector_conflict"
 TRANS_KEY_SERVICE_MODE_REJECTED = "service_mode_rejected"
+TRANS_KEY_DELETE_SERVICES_FAILED = "delete_services_failed"
+TRANS_KEY_DELETE_CLIENTS_FAILED = "delete_clients_failed"
+TRANS_KEY_CLIENT_DELETE_TARGET_REQUIRED = "client_delete_target_required"
+TRANS_KEY_SET_ENDPOINT_PROFILES_FAILED = "set_endpoint_profiles_failed"
+TRANS_KEY_CREATE_ENDPOINTS_FAILED = "create_endpoints_failed"
+TRANS_KEY_DELETE_ENDPOINTS_FAILED = "delete_endpoints_failed"
+TRANS_KEY_ENDPOINT_NAME_TAKEN = "endpoint_name_taken"
+TRANS_KEY_SET_ENDPOINT_DESCRIPTIONS_FAILED = "set_endpoint_descriptions_failed"
+TRANS_KEY_ENDPOINT_PROFILE_SELECTION_REQUIRED = "endpoint_profile_selection_required"
 TRANS_KEY_ALL_RULES_SELECTION_CONFLICT = "all_rules_selection_conflict"
 TRANS_KEY_MANUAL_SYNC_FAILED = "manual_sync_failed"
 TRANS_KEY_FILTER_NOT_FOUND = "filter_not_found"

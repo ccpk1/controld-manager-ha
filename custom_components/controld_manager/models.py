@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Self
@@ -16,6 +17,7 @@ from .const import (
     CONF_ENDPOINT_SENSORS_ENABLED,
     CONF_EXPOSE_EXTERNAL_FILTERS,
     CONF_EXPOSED_CUSTOM_RULES,
+    CONF_LLM_TOOL_MODE,
     CONF_MANAGED_IN_HOME_ASSISTANT,
     CONF_PROFILE_ANALYTICS_INTERVAL_MINUTES,
     CONF_PROFILE_POLICIES,
@@ -23,7 +25,9 @@ from .const import (
     DEFAULT_CONFIGURATION_SYNC_INTERVAL,
     DEFAULT_ENDPOINT_ANALYTICS_INTERVAL,
     DEFAULT_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
+    DEFAULT_LLM_TOOL_MODE,
     DEFAULT_PROFILE_ANALYTICS_INTERVAL,
+    LLM_TOOL_MODES,
     MAX_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
     MAX_REFRESH_INTERVAL,
     MIN_ENDPOINT_INACTIVITY_THRESHOLD_MINUTES,
@@ -91,9 +95,13 @@ class ControlDUser:
     instance_id: str
     account_pk: str
     display_name: str | None = None
-    last_active: str | None = None
+    # Control D returns both of these as integers on GET /users, despite the
+    # names reading like strings. `status` is a required field whose code
+    # meanings the published schema does not define, so it is carried verbatim
+    # and never turned into a label.
+    last_active: int | None = None
     stats_endpoint: str | None = None
-    status: str | None = None
+    status: int | None = None
     safe_countries: tuple[str, ...] = ()
 
 
@@ -108,6 +116,30 @@ class ControlDAccountAnalytics:
     blocked_queries_ratio: float | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class ControlDActivityLogPage:
+    """One page of per-record DNS activity, newest first."""
+
+    records: tuple[dict[str, Any], ...] = ()
+    page: int = 0
+    page_size: int = 0
+
+
+@dataclass(slots=True, frozen=True)
+class ControlDDnsVerdict:
+    """Normalized policy verdict for one domain on one endpoint."""
+
+    domain: str
+    record_type: str
+    rcode: int
+    is_blocked: bool
+    profile_pk: str | None = None
+    source: str | None = None
+    action: int | None = None
+    match: str | None = None
+    answers: tuple[str, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -134,11 +166,68 @@ class ControlDEndpointSummary:
     device_id: str
     endpoint_pk: str | None
     name: str | None
-    owning_profile_pk: str | None
     last_active: datetime | None = None
+    # The one stored statement of which profiles this endpoint enforces, in
+    # Control D's own order: the primary first, the secondary second when there
+    # is one. `owning_profile_pk` and `secondary_profile_pk` below are accessors
+    # over this list rather than separate fields, because storing the same fact
+    # three times let them drift apart: a profile write updated the scalars and
+    # left this list stale, so one row could report two different primaries.
     attached_profiles: tuple[ControlDAttachedProfile, ...] = ()
     associated_client_count: int = 0
     parent_device_id: str | None = None
+    # A device that is also a client under another endpoint carries the parent's
+    # `client_id`. Aliasing uses the client identity, so without this the parent
+    # client of a standalone endpoint could not be addressed at all.
+    parent_client_id: str | None = None
+    # Advanced endpoint settings. Control D omits a field entirely when the
+    # feature is off, so absence means "not enabled" rather than "unknown".
+    description: str | None = None
+    icon: str | None = None
+    authorize_by_secure_dns: bool = False
+    require_authorized_ips: bool = False
+    legacy_dns_resolver: str | None = None
+    dynamic_dns_hostname: str | None = None
+    expose_ip_host: str | None = None
+    # The PIN itself is deliberately not stored: it is a credential, and only
+    # whether one is set is ever reported.
+    prevent_deactivation_enabled: bool = False
+
+    @property
+    def owning_profile_pk(self) -> str | None:
+        """Return the primary enforced profile.
+
+        The name is historical: this is the profile Home Assistant groups the
+        endpoint under, and the one a client under this endpoint inherits.
+        """
+        return self.attached_profiles[0].profile_pk if self.attached_profiles else None
+
+    @property
+    def secondary_profile_pk(self) -> str | None:
+        """Return the second enforced profile, when this endpoint enforces two.
+
+        An endpoint may enforce two profiles at once and the rule engine merges
+        them before matching, so the secondary is a real part of the policy
+        rather than an override.
+        """
+        if len(self.attached_profiles) < 2:
+            return None
+        return self.attached_profiles[1].profile_pk
+
+    @property
+    def legacy_dns_enabled(self) -> bool:
+        """Return whether this endpoint issues plain-DNS resolver IPs."""
+        return self.legacy_dns_resolver is not None
+
+    @property
+    def dynamic_dns_enabled(self) -> bool:
+        """Return whether this endpoint authorizes by a dynamic-DNS hostname."""
+        return self.dynamic_dns_hostname is not None
+
+    @property
+    def expose_ip_enabled(self) -> bool:
+        """Return whether this endpoint publishes its source IP as a hostname."""
+        return self.expose_ip_host is not None
 
 
 def build_client_alias_target_key(
@@ -165,6 +254,7 @@ class ControlDClientAliasTarget:
     client_hostname: str | None = None
     client_ip_address: str | None = None
     client_mac_address: str | None = None
+    client_last_active: datetime | None = None
 
     @property
     def display_name(self) -> str:
@@ -231,12 +321,16 @@ class ControlDFilter:
 
 @dataclass(slots=True, frozen=True)
 class ControlDServiceCategory:
-    """Normalized service category metadata."""
+    """Normalized service category metadata.
+
+    The vendor's service count is deliberately not carried. It was stored and
+    never read, and the one consumer that needs it (the options-flow category
+    picker) reads it from the raw payload rather than this model.
+    """
 
     category_pk: str
     name: str
     description: str | None = None
-    count: int = 0
 
 
 @dataclass(slots=True, frozen=True)
@@ -295,11 +389,25 @@ class ControlDRuleGroup:
     name: str
     enabled: bool = False
     action_do: int | None = None
+    # A folder applies one action to every rule inside it, and a redirect folder
+    # carries a destination just as a redirect rule does.
+    via: str | None = None
+    via_v6: str | None = None
 
     @property
     def current_mode(self) -> str:
         """Return the current folder-rule mode key."""
         return rule_group_mode_from_action(self.action_do, self.enabled)
+
+    @property
+    def redirect_target(self) -> str | None:
+        """Return the folder's redirect destination when there is one."""
+        return redirect_target_from(self.action_do, self.via, self.via_v6)
+
+    @property
+    def redirect_write_type(self) -> str | None:
+        """Return the destination family in the form a write accepts."""
+        return redirect_write_type_from(self.action_do, self.via, self.via_v6)
 
 
 @dataclass(slots=True, frozen=True)
@@ -394,6 +502,48 @@ def build_rule_item_target(rule_identity: str) -> str:
     return f"rule:{rule_identity}"
 
 
+REDIRECT_ACTION_DO_VALUES: frozenset[int] = frozenset({2, 3})
+
+
+def redirect_target_from(
+    action_do: int | None, via: str | None, via_v6: str | None
+) -> str | None:
+    """Return a redirect destination from an action and its target fields.
+
+    Shared by rules, rule folders, and services, which all carry the destination
+    the same way. `-1` is Control D's "no value" sentinel and is filtered out
+    rather than reported as a destination.
+    """
+    if action_do not in REDIRECT_ACTION_DO_VALUES:
+        return None
+    if via is not None and via != "-1":
+        return via
+    if via_v6 is not None and via_v6 != "-1":
+        return via_v6
+    return None
+
+
+def redirect_write_type_from(
+    action_do: int | None, via: str | None, via_v6: str | None
+) -> str | None:
+    """Return a redirect destination's family in the form a write accepts.
+
+    Deliberately not the display-oriented values the service model reports
+    (`auto`, `random`, `proxy`): the write schema accepts `location`, `ipv4`,
+    and `ipv6`, and a caller building a write or an undo needs those.
+    """
+    target = redirect_target_from(action_do, via, via_v6)
+    if target is None:
+        return None
+    if via_v6 is not None and via_v6 != "-1" and (via is None or via == "-1"):
+        return "ipv6"
+    try:
+        address = ipaddress.ip_address(target)
+    except ValueError:
+        return "location"
+    return "ipv4" if address.version == 4 else "ipv6"
+
+
 @dataclass(slots=True, frozen=True)
 class ControlDRule:
     """Normalized rule state for one profile."""
@@ -407,11 +557,25 @@ class ControlDRule:
     action_do: int
     comment: str = ""
     ttl: int | None = None
+    # A redirect rule carries its destination here. Without these the destination
+    # was discarded, so nothing could report where a redirected domain goes.
+    via: str | None = None
+    via_v6: str | None = None
 
     @property
     def action_key(self) -> str:
         """Return the current rule action key."""
         return rule_action_key_from_action_do(self.action_do)
+
+    @property
+    def redirect_target(self) -> str | None:
+        """Return the active redirect destination when there is one."""
+        return redirect_target_from(self.action_do, self.via, self.via_v6)
+
+    @property
+    def redirect_write_type(self) -> str | None:
+        """Return the destination family in the form a write accepts."""
+        return redirect_write_type_from(self.action_do, self.via, self.via_v6)
 
 
 @dataclass(slots=True, frozen=True)
@@ -580,6 +744,7 @@ class ControlDOptions:
     configuration_sync_interval: timedelta = DEFAULT_CONFIGURATION_SYNC_INTERVAL
     profile_analytics_interval: timedelta = DEFAULT_PROFILE_ANALYTICS_INTERVAL
     endpoint_analytics_interval: timedelta = DEFAULT_ENDPOINT_ANALYTICS_INTERVAL
+    llm_tool_mode: str = DEFAULT_LLM_TOOL_MODE
     profile_policies: dict[str, ControlDProfilePolicy] = field(default_factory=dict)
 
     @classmethod
@@ -601,6 +766,7 @@ class ControlDOptions:
                 data.get(CONF_ENDPOINT_ANALYTICS_INTERVAL_MINUTES),
                 DEFAULT_ENDPOINT_ANALYTICS_INTERVAL,
             ),
+            llm_tool_mode=_bounded_llm_tool_mode(data.get(CONF_LLM_TOOL_MODE)),
             profile_policies={
                 profile_pk: ControlDProfilePolicy.from_mapping(policy)
                 for profile_pk, policy in data.get(CONF_PROFILE_POLICIES, {}).items()
@@ -620,6 +786,7 @@ class ControlDOptions:
             CONF_ENDPOINT_ANALYTICS_INTERVAL_MINUTES: int(
                 self.endpoint_analytics_interval.total_seconds() // 60
             ),
+            CONF_LLM_TOOL_MODE: self.llm_tool_mode,
             CONF_PROFILE_POLICIES: {
                 profile_pk: policy.as_mapping()
                 for profile_pk, policy in self.profile_policies.items()
@@ -648,6 +815,13 @@ def _bounded_timedelta(value: Any, default: timedelta) -> timedelta:
     max_minutes = int(MAX_REFRESH_INTERVAL.total_seconds() // 60)
     minutes = max(min_minutes, min(max_minutes, minutes))
     return timedelta(minutes=minutes)
+
+
+def _bounded_llm_tool_mode(value: Any) -> str:
+    """Normalize a stored LLM tool mode into the supported tier set."""
+    if isinstance(value, str) and value in LLM_TOOL_MODES:
+        return value
+    return DEFAULT_LLM_TOOL_MODE
 
 
 @dataclass(slots=True, frozen=True)
@@ -726,6 +900,26 @@ class ControlDRegistry:
     def empty(cls) -> Self:
         """Return an empty runtime registry."""
         return cls()
+
+    @property
+    def profile_count(self) -> int:
+        """Return the number of discovered profiles."""
+        return len(self.profiles)
+
+    @property
+    def endpoint_count(self) -> int:
+        """Return the protected endpoint count shown on the account entity."""
+        return self.endpoint_inventory.protected_endpoint_count
+
+    @property
+    def discovered_endpoint_count(self) -> int:
+        """Return the raw endpoint inventory count."""
+        return self.endpoint_inventory.discovered_endpoint_count
+
+    @property
+    def router_client_count(self) -> int:
+        """Return the router-attached client count."""
+        return self.endpoint_inventory.router_client_count
 
     def protected_endpoint_count_for_profile(self, profile_pk: str) -> int:
         """Return the protected endpoint count for one profile."""

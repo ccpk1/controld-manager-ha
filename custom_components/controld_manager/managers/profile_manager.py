@@ -49,8 +49,22 @@ class ProfileManager(BaseManager):
         """Return one cached rule-group row from the current registry."""
         return self.runtime.registry.rule_groups_by_profile[profile_pk][group_pk]
 
-    def _rule_row(self, profile_pk: str, rule_identity: str) -> ControlDRule:
-        """Return one cached rule row from the current registry."""
+    def _rule_row(
+        self,
+        profile_pk: str,
+        rule_identity: str,
+        rule_rows_by_profile: dict[str, dict[str, ControlDRule]] | None = None,
+    ) -> ControlDRule:
+        """Return one rule row, preferring live rows over the cached registry.
+
+        Resolution can answer for a rule the profile does not expose, in which
+        case the registry holds no row for it. The live rows fetched during
+        resolution carry it, so they take precedence when present.
+        """
+        if rule_rows_by_profile is not None:
+            live_rows = rule_rows_by_profile.get(profile_pk)
+            if live_rows is not None and rule_identity in live_rows:
+                return live_rows[rule_identity]
         return self.runtime.registry.rules_by_profile[profile_pk][rule_identity]
 
     def _updated_filter_rows(
@@ -570,6 +584,36 @@ class ProfileManager(BaseManager):
 
         self._schedule_runtime_refresh()
 
+    async def async_delete_services(
+        self,
+        profile_services: dict[str, frozenset[str]],
+    ) -> None:
+        """Remove one or more configured service rows from their profiles.
+
+        This unconfigures the row rather than switching it off, so the service no
+        longer appears on the profile at all. It is reversible: setting the
+        service again on the profile re-adds it.
+        """
+        targets: list[tuple[str, str]] = [
+            (profile_pk, service_pk)
+            for profile_pk, service_pks in profile_services.items()
+            for service_pk in service_pks
+        ]
+
+        await asyncio.gather(
+            *(
+                self.runtime.client.async_delete_profile_service(profile_pk, service_pk)
+                for profile_pk, service_pk in targets
+            )
+        )
+
+        for profile_pk, service_pk in targets:
+            self.runtime.registry.services_by_profile.get(profile_pk, {}).pop(
+                service_pk, None
+            )
+
+        self._schedule_runtime_refresh()
+
     async def async_set_profile_options_state(
         self,
         profile_options: dict[str, frozenset[str]],
@@ -810,18 +854,65 @@ class ProfileManager(BaseManager):
         )
         self._schedule_runtime_refresh()
 
+    async def _async_write_rule(
+        self,
+        *,
+        profile_pk: str,
+        rule_row: ControlDRule,
+        next_enabled: bool,
+        next_action_do: int,
+        next_comment: str,
+        payload_ttl: int | None,
+        uses_rich_update: bool,
+        via: str | None,
+        via_v6: str | None,
+    ) -> None:
+        """Write one rule's requested state using the narrowest correct contract.
+
+        A status-only update is used whenever the action is not changing, because
+        Control D preserves the rest of the rule for a status-only write and
+        rejects a restated redirect action that carries no target.
+        """
+        if not uses_rich_update and next_action_do == rule_row.action_do:
+            await self.runtime.client.async_set_profile_rule_enabled(
+                profile_pk, rule_row.rule_pk, enabled=next_enabled
+            )
+            return
+        if uses_rich_update:
+            await self.runtime.client.async_update_profile_rule_rich(
+                profile_pk,
+                rule_row.rule_pk,
+                enabled=next_enabled,
+                action_do=next_action_do,
+                group_pk=rule_row.group_pk,
+                comment=next_comment,
+                ttl=payload_ttl,
+                via=via,
+                via_v6=via_v6,
+            )
+            return
+        await self.runtime.client.async_set_profile_rule(
+            profile_pk,
+            rule_row.rule_pk,
+            enabled=next_enabled,
+            action_do=next_action_do,
+            group_pk=rule_row.group_pk,
+            ttl=payload_ttl,
+            comment=next_comment,
+        )
+
     async def async_set_rule_enabled(
         self, profile_pk: str, rule_identity: str, enabled: bool
     ) -> None:
         """Enable or disable one selected rule."""
         rule_row = self._rule_row(profile_pk, rule_identity)
-        await self.runtime.client.async_set_profile_rule(
+        # A pure toggle sends no action, so Control D preserves the rule's
+        # existing configuration. Restating the action breaks a redirect rule,
+        # whose action carries a target that a bare action value does not.
+        await self.runtime.client.async_set_profile_rule_enabled(
             profile_pk,
             rule_row.rule_pk,
             enabled=enabled,
-            action_do=rule_row.action_do,
-            group_pk=rule_row.group_pk,
-            ttl=rule_row.ttl,
         )
         self._update_cached_rule(
             profile_pk,
@@ -849,13 +940,10 @@ class ProfileManager(BaseManager):
 
         await asyncio.gather(
             *(
-                self.runtime.client.async_set_profile_rule(
+                self.runtime.client.async_set_profile_rule_enabled(
                     profile_pk,
                     rule_row.rule_pk,
                     enabled=enabled,
-                    action_do=rule_row.action_do,
-                    group_pk=rule_row.group_pk,
-                    ttl=rule_row.ttl,
                 )
                 for profile_pk, _, rule_row in updated_rules
             )
@@ -881,6 +969,7 @@ class ProfileManager(BaseManager):
         comment: str | None,
         redirect_target: str | None,
         redirect_target_type: str | None,
+        rule_rows_by_profile: dict[str, dict[str, ControlDRule]] | None = None,
     ) -> None:
         """Update one or more selected rules across profiles."""
         updated_rules: list[
@@ -901,7 +990,9 @@ class ProfileManager(BaseManager):
 
         for profile_pk, rule_identities in profile_rules.items():
             for rule_identity in rule_identities:
-                rule_row = self._rule_row(profile_pk, rule_identity)
+                rule_row = self._rule_row(
+                    profile_pk, rule_identity, rule_rows_by_profile
+                )
                 (
                     next_enabled,
                     next_action_do,
@@ -945,28 +1036,16 @@ class ProfileManager(BaseManager):
 
         await asyncio.gather(
             *(
-                (
-                    self.runtime.client.async_update_profile_rule_rich(
-                        profile_pk,
-                        rule_row.rule_pk,
-                        enabled=next_enabled,
-                        action_do=next_action_do,
-                        group_pk=rule_row.group_pk,
-                        comment=next_comment,
-                        ttl=payload_ttl,
-                        via=via,
-                        via_v6=via_v6,
-                    )
-                    if uses_rich_update
-                    else self.runtime.client.async_set_profile_rule(
-                        profile_pk,
-                        rule_row.rule_pk,
-                        enabled=next_enabled,
-                        action_do=next_action_do,
-                        group_pk=rule_row.group_pk,
-                        ttl=payload_ttl,
-                        comment=next_comment,
-                    )
+                self._async_write_rule(
+                    profile_pk=profile_pk,
+                    rule_row=rule_row,
+                    next_enabled=next_enabled,
+                    next_action_do=next_action_do,
+                    next_comment=next_comment,
+                    payload_ttl=payload_ttl,
+                    uses_rich_update=uses_rich_update,
+                    via=via,
+                    via_v6=via_v6,
                 )
                 for (
                     profile_pk,
@@ -1137,13 +1216,14 @@ class ProfileManager(BaseManager):
     async def async_delete_rules(
         self,
         profile_rules: dict[str, frozenset[str]],
+        rule_rows_by_profile: dict[str, dict[str, ControlDRule]] | None = None,
     ) -> None:
         """Delete one or more selected rules across profiles."""
         delete_requests: list[tuple[str, list[str], tuple[str, ...]]] = []
 
         for profile_pk, rule_identities in profile_rules.items():
             hostnames = [
-                self._rule_row(profile_pk, rule_identity).rule_pk
+                self._rule_row(profile_pk, rule_identity, rule_rows_by_profile).rule_pk
                 for rule_identity in rule_identities
             ]
             delete_requests.append((profile_pk, hostnames, tuple(rule_identities)))

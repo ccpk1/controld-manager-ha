@@ -304,7 +304,7 @@ class ControlDManagerProfileCountSensor(ControlDManagerInstanceEntity, SensorEnt
     @property
     def native_value(self) -> int:
         """Return the current number of discovered profiles."""
-        return len(self.runtime.registry.profiles)
+        return self.runtime.registry.profile_count
 
 
 class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEntity):
@@ -324,7 +324,7 @@ class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEn
     @property
     def native_value(self) -> int:
         """Return the current number of discovered endpoints."""
-        return self.runtime.registry.endpoint_inventory.protected_endpoint_count
+        return self.runtime.registry.endpoint_count
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
@@ -333,11 +333,9 @@ class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEn
         attributes.update(
             {
                 ATTR_DISCOVERED_ENDPOINT_COUNT: (
-                    self.runtime.registry.endpoint_inventory.discovered_endpoint_count
+                    self.runtime.registry.discovered_endpoint_count
                 ),
-                ATTR_ROUTER_CLIENT_COUNT: (
-                    self.runtime.registry.endpoint_inventory.router_client_count
-                ),
+                ATTR_ROUTER_CLIENT_COUNT: (self.runtime.registry.router_client_count),
             }
         )
         return attributes

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -14,7 +15,7 @@ from .api import (
 from .const import (
     CONF_API_TOKEN,
     DOMAIN,
-    PLATFORMS,
+    LLM_TOOL_MODE_OFF,
 )
 from .coordinator import ControlDManagerDataUpdateCoordinator
 from .managers import (
@@ -35,6 +36,39 @@ from .services import async_register_services
 
 ControlDManagerConfigEntry = ConfigEntry[ControlDManagerRuntime]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)  # pylint: disable=invalid-name
+
+# Entity platforms forwarded for each config entry.
+PLATFORMS: tuple[Platform, ...] = (
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.SENSOR,
+    Platform.SELECT,
+    Platform.SWITCH,
+)
+
+
+def _async_setup_llm_api(
+    hass: HomeAssistant, entry: ControlDManagerConfigEntry
+) -> None:
+    """Register the LLM API when the running Core and tier both allow it.
+
+    Nothing is registered on Home Assistant older than the LLM tool contract, or
+    when the user has turned AI tool access off, so the integration loads exactly
+    as before. ``llm_support`` and ``llm_api`` are imported lazily here so the
+    Core 2026.10-only names never reach older Home Assistant at module import
+    time.
+    """
+    # pylint: disable=import-outside-toplevel
+    from .helpers.llm_support import llm_tools_supported
+
+    if not llm_tools_supported():
+        return
+    if entry.runtime_data.options.llm_tool_mode == LLM_TOOL_MODE_OFF:
+        return
+
+    from .llm_api import async_register_control_d_api
+
+    entry.async_on_unload(async_register_control_d_api(hass, entry))
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -92,6 +126,7 @@ async def async_setup_entry(
 
     entry.runtime_data = runtime
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    _async_setup_llm_api(hass, entry)
     return True
 
 

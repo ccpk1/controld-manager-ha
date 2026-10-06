@@ -159,6 +159,40 @@ Rules:
 - services must not become a second business-logic path
 - shared entity behavior belongs in `entity.py`
 
+### LLM tool layer
+
+The LLM/MCP tool surface is a distinct layer that exposes the integration to AI
+assistants and MCP clients through Home Assistant.
+
+Files:
+
+- `llm_api.py` owns the integration-owned `llm.API` registration
+- `llm_tools_common.py` owns the shared API prompt and tool-name helper
+- `llm_tools_read.py` and `llm_tools_control.py` own the read and control tools
+
+Rules:
+
+- the layer is loaded only when the running Home Assistant supports the LLM tool
+  contract, gated by `llm_tools_supported()` in `const.py`; nothing in it may be
+  imported at module level from unconditionally loaded modules
+- the module must never be named `llm.py`, and there must never be a `llm/`
+  package, because either is discovered as Home Assistant's own `llm` platform
+  and imported outside the version guard
+- tools call **services** for every write; they must not write through the API
+  client or managers directly
+- tools **may read** the runtime registry directly, for one purpose only: to
+  compare the requested state against the current state so a write can report
+  `already_in_state` instead of claiming a change that did not happen. This is a
+  read-only view of data the coordinator already holds, never a second data path
+- tools use the repository lexicon exactly; a Control D endpoint is never called
+  a client or a device
+- the tool layer is opt-in per config entry via the LLM tool mode, which decides
+  which tools are registered. Every write service additionally requires an admin
+  user, so the tier is a reachability limit rather than the only authorization
+  boundary
+- `undo` in the action result is a **list** of calls, because the tools accept
+  lists of targets and restoring three previous values takes three calls
+
 ## Polling architecture
 
 The integration currently uses one coordinator-owned polling path.

@@ -1,0 +1,41 @@
+{
+  "//": [
+    "Type-checker configuration for the Control D Manager integration.",
+    "",
+    "mypy is the gate that CI and the repo tooling run; Pylance reads this file so",
+    "the editor agrees with it instead of flagging idiomatic patterns as errors.",
+    "Only diagnostics that are genuinely wrong for this codebase are relaxed, and",
+    "each one names why rather than switching a mode off wholesale."
+  ],
+  "include": ["custom_components", "tests", "utils"],
+  "typeCheckingMode": "standard",
+  "reportUnusedParameter": "none",
+  "//reportUnusedParameter": [
+    "The control tools are a template-method hierarchy: `_before`, `_after`,",
+    "`_undo`, `_is_already_in_state`, and `_async_preload` declare a fixed",
+    "signature in the base class and each subclass uses only the parts it needs.",
+    "An unused `hass` in one hook is the contract, not a defect."
+  ],
+  "reportUnnecessaryIsInstance": "none",
+  "//reportUnnecessaryIsInstance": [
+    "The API payloads are untyped JSON, so runtime `isinstance` narrowing is how",
+    "they are validated; the narrowing is load-bearing even where the annotation",
+    "already implies it."
+  ],
+  "reportMissingTypeStubs": "none",
+  "//reportMissingTypeStubs": [
+    "`voluptuous as vol` and `probatio` ship no stubs, and the integration depends",
+    "on both. mypy already reports on these and passes."
+  ],
+  "reportPrivateUsage": "none",
+  "//reportPrivateUsage": [
+    "The test suite deliberately exercises protected hooks (`_undo`, `_before`,",
+    "`_registry`, `_service`) because those are the units under test, and the",
+    "contract audit script reads `_service` to compare tool and service schemas."
+  ],
+  "reportGeneralTypeIssues": "error",
+  "reportMissingImports": "error",
+  "reportUndefinedVariable": "error",
+  "reportPossiblyUnbound": "error",
+  "exclude": ["**/__pycache__", ".artifacts"]
+}

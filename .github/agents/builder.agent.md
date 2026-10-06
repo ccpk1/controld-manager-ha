@@ -1,7 +1,7 @@
 ---
 name: Control D Builder
 description: Implementation agent for the Control D Manager Home Assistant integration. Use when you need code changes, validation, phased execution, or scaffold-to-feature implementation work in this standalone repo.
-tools: ["search", "edit", "read", "execute", "web", "agent", "todo"]
+tools: [execute, read, agent, browser, vscodeGeneral/rename, vscodeGeneral/usages, vscodeNotebooks/createJupyterNotebook, vscodeNotebooks/editNotebook, edit, search, web, 'control-d-ha/*', todo]
 handoffs:
   - label: Create New Plan
     agent: Control D Strategist

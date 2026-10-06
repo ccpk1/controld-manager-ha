@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -163,6 +163,69 @@ async def test_client_reads_org_stats_endpoint_from_nested_org_payload() -> None
     assert identity.instance_id == "user-123"
     assert identity.account_pk == "pk-1"
     assert identity.stats_endpoint == "us-east1-org01"
+
+
+async def test_client_parses_the_integer_user_fields() -> None:
+    """`status` and `last_active` are integers on GET /users, not strings.
+
+    They were parsed with a string-only helper, so both were silently null in
+    production while the test fixture supplied a string and hid it.
+    """
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    with patch.object(
+        client,
+        "async_get_user",
+        AsyncMock(
+            return_value={
+                "id": "user-123",
+                "PK": "pk-1",
+                "status": 1,
+                "last_active": 1669595046,
+            }
+        ),
+    ):
+        identity = await client.async_get_instance_identity()
+
+    assert identity.status == 1
+    assert identity.last_active == 1669595046
+
+
+async def test_client_accepts_numeric_strings_for_the_integer_user_fields() -> None:
+    """A stringified number still parses, so a transport change cannot drop it."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    with patch.object(
+        client,
+        "async_get_user",
+        AsyncMock(
+            return_value={
+                "id": "user-123",
+                "PK": "pk-1",
+                "status": "1",
+                "last_active": "1669595046",
+            }
+        ),
+    ):
+        identity = await client.async_get_instance_identity()
+
+    assert identity.status == 1
+    assert identity.last_active == 1669595046
+
+
+@pytest.mark.parametrize("value", [None, True, False, "", "not-a-number", 1.5])
+async def test_client_treats_non_integer_user_fields_as_absent(value: Any) -> None:
+    """Anything that is not the documented integer type is reported as absent."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    with patch.object(
+        client,
+        "async_get_user",
+        AsyncMock(return_value={"id": "user-123", "PK": "pk-1", "status": value}),
+    ):
+        identity = await client.async_get_instance_identity()
+
+    assert identity.status is None
 
 
 async def test_client_fetches_account_analytics() -> None:
@@ -597,6 +660,53 @@ async def test_client_renames_endpoint_with_devices_contract() -> None:
     )
 
 
+async def test_client_deletes_analytics_clients_in_bulk() -> None:
+    """Send the captured bulk client delete: parent ids plus client ids."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    request = AsyncMock(
+        return_value={
+            "success": True,
+            "body": {"deletedCount": 2, "deletedClients": ["a1", "b2"]},
+        }
+    )
+
+    with patch.object(client, "_async_request_url", request):
+        body = await client.async_delete_analytics_clients(
+            "america",
+            parent_endpoint_ids=["461wtt4eyr"],
+            client_ids=["a1", "b2"],
+        )
+
+    request.assert_awaited_once_with(
+        "DELETE",
+        "https://america.analytics.controld.com/v2/client",
+        payload={"endpointIds": ["461wtt4eyr"], "clientIds": ["a1", "b2"]},
+    )
+    assert body is not None
+    assert body["deletedCount"] == 2
+
+
+async def test_client_deletes_analytics_client_history_on_the_same_verb() -> None:
+    """Purge stored query history through the sibling activity-log verb."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    request = AsyncMock(return_value={"success": True})
+
+    with patch.object(client, "_async_request_url", request):
+        await client.async_delete_analytics_client_history(
+            "america",
+            parent_endpoint_ids=["461wtt4eyr"],
+            client_ids=["a1"],
+        )
+
+    request.assert_awaited_once_with(
+        "DELETE",
+        "https://america.analytics.controld.com/v2/activity-log",
+        payload={"endpointIds": ["461wtt4eyr"], "clientIds": ["a1"]},
+    )
+
+
 async def test_client_sets_endpoint_analytics_logging_with_devices_contract() -> None:
     """Send the validated endpoint analytics logging contract to the devices API."""
     client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
@@ -611,3 +721,119 @@ async def test_client_sets_endpoint_analytics_logging_with_devices_contract() ->
         "/devices/device-1",
         {"stats": 2},
     )
+
+
+async def test_client_sets_primary_profile_with_the_suffixed_write_key() -> None:
+    """The write key is `profile_id`, while the read key is `profile`."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    request = AsyncMock(return_value=None)
+
+    with patch.object(client, "_async_request", request):
+        await client.async_set_endpoint_profile(
+            "device-1", profile_pk="pk-1", secondary=False
+        )
+
+    request.assert_awaited_once_with("PUT", "/devices/device-1", {"profile_id": "pk-1"})
+
+
+async def test_client_sets_secondary_profile_with_the_suffixed_write_key() -> None:
+    """The secondary write key is `profile_id2`, not the read name `profile2`."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    request = AsyncMock(return_value=None)
+
+    with patch.object(client, "_async_request", request):
+        await client.async_set_endpoint_profile(
+            "device-1", profile_pk="pk-2", secondary=True
+        )
+
+    request.assert_awaited_once_with(
+        "PUT", "/devices/device-1", {"profile_id2": "pk-2"}
+    )
+
+
+async def test_client_clears_secondary_profile_with_the_negative_sentinel() -> None:
+    """`-1` is the API's clear sentinel for the secondary slot."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    request = AsyncMock(return_value=None)
+
+    with patch.object(client, "_async_request", request):
+        await client.async_clear_endpoint_secondary_profile("device-1")
+
+    request.assert_awaited_once_with("PUT", "/devices/device-1", {"profile_id2": -1})
+
+
+async def test_client_creates_endpoint_with_the_captured_payload() -> None:
+    """Create sends the captured key names, with `profile_id` as the primary."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    # `_optional_body_mapping` unwraps the envelope, so the stub carries one.
+    request = AsyncMock(return_value={"body": {"device_id": "new-1"}})
+
+    with patch.object(client, "_async_request", request):
+        body = await client.async_create_endpoint(
+            name="Kids-Tablet",
+            profile_pk="pk-1",
+            icon="desktop-linux",
+            desc="kitchen",
+            stats=2,
+        )
+
+    request.assert_awaited_once_with(
+        "POST",
+        "/devices",
+        {
+            "name": "Kids-Tablet",
+            "profile_id": "pk-1",
+            "icon": "desktop-linux",
+            "desc": "kitchen",
+            "stats": 2,
+        },
+    )
+    assert body == {"device_id": "new-1"}
+
+
+async def test_client_create_omits_unset_optional_fields() -> None:
+    """Only the required name and profile go out when nothing else is asked for."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    request = AsyncMock(return_value={"device_id": "new-2"})
+
+    with patch.object(client, "_async_request", request):
+        await client.async_create_endpoint(name="Bare", profile_pk="pk-1")
+
+    request.assert_awaited_once_with(
+        "POST", "/devices", {"name": "Bare", "profile_id": "pk-1"}
+    )
+
+
+async def test_client_deletes_endpoint_by_device_id() -> None:
+    """Delete addresses the endpoint the same way every other endpoint verb does."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    request = AsyncMock(return_value=None)
+
+    with patch.object(client, "_async_request", request):
+        await client.async_delete_endpoint("device-1")
+
+    request.assert_awaited_once_with("DELETE", "/devices/device-1")
+
+
+async def test_client_sets_and_clears_endpoint_description() -> None:
+    """An empty description clears it, because the API drops the field."""
+    client = ControlDAPIClient("token", cast(ClientSession, MagicMock()))
+
+    request = AsyncMock(return_value=None)
+
+    with patch.object(client, "_async_request", request):
+        await client.async_set_endpoint_description("device-1", description="note")
+        await client.async_set_endpoint_description("device-1", description="")
+
+    assert request.await_args_list[0].args == (
+        "PUT",
+        "/devices/device-1",
+        {"desc": "note"},
+    )
+    assert request.await_args_list[1].args == ("PUT", "/devices/device-1", {"desc": ""})

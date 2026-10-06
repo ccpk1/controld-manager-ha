@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 from dataclasses import dataclass
 from datetime import timedelta
@@ -21,6 +20,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.util import dt as dt_util
 
 from .api import (
@@ -29,21 +29,41 @@ from .api import (
     ControlDApiResponseError,
 )
 from .const import (
+    ACTIVITY_ACTIONS,
+    ACTIVITY_TRIGGERS,
+    CATALOG_TYPES,
     DEFAULT_DISABLE_MINUTES,
+    DETAIL_LEVELS,
+    DETAIL_SUMMARY,
+    DNS_RECORD_TYPES,
     DOMAIN,
     SERVICE_CLEAR_CLIENT_ALIAS,
+    SERVICE_CREATE_ENDPOINT,
     SERVICE_CREATE_RULE,
+    SERVICE_DELETE_CLIENT,
+    SERVICE_DELETE_ENDPOINT,
     SERVICE_DELETE_RULE,
+    SERVICE_DELETE_SERVICE,
     SERVICE_DISABLE_PROFILE,
     SERVICE_ENABLE_PROFILE,
     SERVICE_FIELD_ALIAS,
     SERVICE_FIELD_CANCEL_EXPIRATION,
     SERVICE_FIELD_CATALOG_TYPE,
+    SERVICE_FIELD_CLEAR_PROFILE2,
+    SERVICE_FIELD_CLIENT_ID,
+    SERVICE_FIELD_CLIENT_LIMIT,
     SERVICE_FIELD_COMMENT,
     SERVICE_FIELD_CONFIG_ENTRY_ID,
     SERVICE_FIELD_CONFIG_ENTRY_NAME,
+    SERVICE_FIELD_DELETE_HISTORY,
+    SERVICE_FIELD_DESCRIPTION,
+    SERVICE_FIELD_DESTINATION_COUNTRY,
+    SERVICE_FIELD_DESTINATION_ISP,
+    SERVICE_FIELD_DETAIL,
+    SERVICE_FIELD_DOMAIN,
     SERVICE_FIELD_ENABLED,
     SERVICE_FIELD_ENDPOINT_HOSTNAME,
+    SERVICE_FIELD_ENDPOINT_ID,
     SERVICE_FIELD_ENDPOINT_IP,
     SERVICE_FIELD_ENDPOINT_MAC,
     SERVICE_FIELD_ENDPOINT_NAME,
@@ -52,47 +72,76 @@ from .const import (
     SERVICE_FIELD_FILTER_ID,
     SERVICE_FIELD_FILTER_NAME,
     SERVICE_FIELD_HOSTNAME,
+    SERVICE_FIELD_ICON,
+    SERVICE_FIELD_LIMIT,
     SERVICE_FIELD_MINUTES,
     SERVICE_FIELD_MODE,
     SERVICE_FIELD_NEW_NAME,
     SERVICE_FIELD_OPTION_ID,
     SERVICE_FIELD_OPTION_NAME,
+    SERVICE_FIELD_PAGE,
+    SERVICE_FIELD_PAGE_SIZE,
     SERVICE_FIELD_PARENT_ENDPOINT_NAME,
+    SERVICE_FIELD_PROFILE2_ID,
     SERVICE_FIELD_PROFILE_ID,
     SERVICE_FIELD_PROFILE_NAME,
+    SERVICE_FIELD_PROTOCOL,
+    SERVICE_FIELD_QUERY_ACTION,
+    SERVICE_FIELD_RECORD_TYPE,
     SERVICE_FIELD_REDIRECT_TARGET,
     SERVICE_FIELD_REDIRECT_TARGET_TYPE,
     SERVICE_FIELD_RULE_GROUP_ID,
     SERVICE_FIELD_RULE_GROUP_NAME,
     SERVICE_FIELD_RULE_IDENTITY,
+    SERVICE_FIELD_SEARCH,
     SERVICE_FIELD_SERVICE_ID,
     SERVICE_FIELD_SERVICE_NAME,
+    SERVICE_FIELD_SORT_ORDER,
+    SERVICE_FIELD_SOURCE_ASN,
+    SERVICE_FIELD_SOURCE_COUNTRY,
+    SERVICE_FIELD_SOURCE_ISP,
+    SERVICE_FIELD_STATUS_CODE,
+    SERVICE_FIELD_TRIGGER,
+    SERVICE_FIELD_TRIGGER_VALUE,
     SERVICE_FIELD_VALUE,
+    SERVICE_FIELD_WINDOW,
+    SERVICE_GET_ACCOUNT_OVERVIEW,
+    SERVICE_GET_ACTIVITY_LOG,
     SERVICE_GET_CATALOG,
+    SERVICE_GET_INVENTORY,
     SERVICE_RENAME_ENDPOINT,
     SERVICE_SET_CLIENT_ALIAS,
     SERVICE_SET_DEFAULT_RULE_STATE,
     SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING,
+    SERVICE_SET_ENDPOINT_DESCRIPTION,
+    SERVICE_SET_ENDPOINT_PROFILE,
     SERVICE_SET_FILTER_STATE,
     SERVICE_SET_OPTION_STATE,
     SERVICE_SET_RULE_STATE,
     SERVICE_SET_SERVICE_STATE,
+    SERVICE_TEST_DOMAIN,
     TRANS_KEY_CLEAR_CLIENT_ALIASES_FAILED,
     TRANS_KEY_CLIENT_ALIAS_INVALID,
     TRANS_KEY_CLIENT_ALIAS_TARGET_AMBIGUOUS,
     TRANS_KEY_CLIENT_ALIAS_TARGET_NOT_FOUND,
     TRANS_KEY_CLIENT_ALIAS_TARGET_REQUIRED,
+    TRANS_KEY_CLIENT_DELETE_TARGET_REQUIRED,
     TRANS_KEY_CONFIG_ENTRY_NAME_AMBIGUOUS,
     TRANS_KEY_CONFIG_ENTRY_NAME_NOT_FOUND,
     TRANS_KEY_CONFIG_ENTRY_NOT_FOUND,
     TRANS_KEY_CONFIG_ENTRY_NOT_LOADED,
+    TRANS_KEY_CREATE_ENDPOINTS_FAILED,
     TRANS_KEY_CREATE_RULES_FAILED,
     TRANS_KEY_DEFAULT_RULE_REDIRECT_TARGET_INVALID,
     TRANS_KEY_DEFAULT_RULE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE,
+    TRANS_KEY_DELETE_CLIENTS_FAILED,
+    TRANS_KEY_DELETE_ENDPOINTS_FAILED,
     TRANS_KEY_DELETE_RULES_FAILED,
+    TRANS_KEY_DELETE_SERVICES_FAILED,
     TRANS_KEY_DISABLE_PROFILES_FAILED,
     TRANS_KEY_ENABLE_PROFILES_FAILED,
     TRANS_KEY_ENDPOINT_NAME_INVALID,
+    TRANS_KEY_ENDPOINT_PROFILE_SELECTION_REQUIRED,
     TRANS_KEY_ENDPOINT_TARGET_AMBIGUOUS,
     TRANS_KEY_ENDPOINT_TARGET_NOT_FOUND,
     TRANS_KEY_ENDPOINT_TARGET_REQUIRED,
@@ -109,6 +158,8 @@ from .const import (
     TRANS_KEY_RULE_HOSTNAME_DUPLICATE,
     TRANS_KEY_RULE_HOSTNAME_REQUIRED,
     TRANS_KEY_RULE_MUTATION_REQUIRED,
+    TRANS_KEY_RULE_NAME_AMBIGUOUS,
+    TRANS_KEY_RULE_NAME_NOT_FOUND,
     TRANS_KEY_RULE_REDIRECT_TARGET_INVALID,
     TRANS_KEY_RULE_REDIRECT_TARGET_REQUIRES_REDIRECT_MODE,
     TRANS_KEY_SERVICE_MODE_REJECTED,
@@ -117,6 +168,8 @@ from .const import (
     TRANS_KEY_SET_CLIENT_ALIASES_FAILED,
     TRANS_KEY_SET_DEFAULT_RULES_FAILED,
     TRANS_KEY_SET_ENDPOINT_ANALYTICS_LOGGING_FAILED,
+    TRANS_KEY_SET_ENDPOINT_DESCRIPTIONS_FAILED,
+    TRANS_KEY_SET_ENDPOINT_PROFILES_FAILED,
     TRANS_KEY_SET_FILTERS_FAILED,
     TRANS_KEY_SET_OPTIONS_FAILED,
     TRANS_KEY_SET_RULES_FAILED,
@@ -127,6 +180,7 @@ from .models import (
     ControlDClientAliasTarget,
     ControlDEndpointSummary,
     ControlDManagerRuntime,
+    ControlDRule,
     ControlDService,
     default_rule_mode_labels,
     endpoint_analytics_logging_mode_labels,
@@ -144,6 +198,10 @@ from .service_selectors import (
     _resolve_selected_rule_identities,
     _resolve_selected_service_pks,
 )
+from .utils.time_window import (
+    ACTIVITY_LOG_WINDOWS,
+    DEFAULT_ACTIVITY_LOG_WINDOW,
+)
 
 ControlDManagerConfigEntry = ConfigEntry[ControlDManagerRuntime]
 
@@ -155,13 +213,6 @@ def _ha_error(translation_key: str) -> HomeAssistantError:
         translation_key=translation_key,
     )
 
-
-CATALOG_TYPES: tuple[str, ...] = (
-    "filters",
-    "services",
-    "rules",
-    "profile_options",
-)
 
 _PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS: dict[vol.Marker, object] = {
     vol.Optional(SERVICE_FIELD_PROFILE_ID): vol.Any(cv.string, [cv.string]),
@@ -198,6 +249,7 @@ _PROFILE_SERVICE_ENTRY_TARGET_FIELDS: dict[vol.Marker, object] = {
 }
 
 _CLIENT_ALIAS_SELECTOR_FIELDS: dict[vol.Marker, object] = {
+    vol.Optional(SERVICE_FIELD_CLIENT_ID): vol.Any(cv.string, [cv.string]),
     vol.Optional(SERVICE_FIELD_ENDPOINT_MAC): vol.Any(cv.string, [cv.string]),
     vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
     vol.Optional(SERVICE_FIELD_ENDPOINT_HOSTNAME): vol.Any(cv.string, [cv.string]),
@@ -251,6 +303,7 @@ CLEAR_CLIENT_ALIAS_SERVICE_SCHEMA = vol.Schema(
 
 RENAME_ENDPOINT_SERVICE_SCHEMA = vol.Schema(
     {
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
         vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
         vol.Required(SERVICE_FIELD_NEW_NAME): cv.string,
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
@@ -259,6 +312,7 @@ RENAME_ENDPOINT_SERVICE_SCHEMA = vol.Schema(
 
 SET_ENDPOINT_ANALYTICS_LOGGING_SERVICE_SCHEMA = vol.Schema(
     {
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
         vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
         vol.Required(SERVICE_FIELD_MODE): vol.In(
             endpoint_analytics_logging_mode_labels()
@@ -282,6 +336,63 @@ SET_SERVICE_STATE_SERVICE_SCHEMA = vol.Schema(
         **_SERVICE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
         vol.Required(SERVICE_FIELD_MODE): vol.In(service_mode_labels()),
         **_RULE_REDIRECT_SERVICE_FIELDS,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+DELETE_SERVICE_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        **_SERVICE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+DELETE_CLIENT_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_CLIENT_ALIAS_SELECTOR_FIELDS,
+        vol.Optional(SERVICE_FIELD_DELETE_HISTORY, default=True): cv.boolean,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+CREATE_ENDPOINT_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required(SERVICE_FIELD_ENDPOINT_NAME): cv.string,
+        vol.Required(SERVICE_FIELD_PROFILE_ID): cv.string,
+        vol.Optional(SERVICE_FIELD_DESCRIPTION): cv.string,
+        vol.Optional(SERVICE_FIELD_ICON): cv.string,
+        vol.Optional(SERVICE_FIELD_MODE): vol.In(
+            endpoint_analytics_logging_mode_labels()
+        ),
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+DELETE_ENDPOINT_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+SET_ENDPOINT_DESCRIPTION_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
+        vol.Required(SERVICE_FIELD_DESCRIPTION): cv.string,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+SET_ENDPOINT_PROFILE_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_PROFILE_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_PROFILE2_ID): cv.string,
+        vol.Optional(SERVICE_FIELD_CLEAR_PROFILE2, default=False): cv.boolean,
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
@@ -352,7 +463,76 @@ DELETE_RULE_SERVICE_SCHEMA = vol.Schema(
 GET_CATALOG_SERVICE_SCHEMA = vol.Schema(
     {
         vol.Required(SERVICE_FIELD_CATALOG_TYPE): vol.In(CATALOG_TYPES),
+        vol.Optional(SERVICE_FIELD_LIMIT, default=50): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=500)
+        ),
+        vol.Optional(SERVICE_FIELD_SEARCH): cv.string,
         **_PROFILE_SERVICE_EXPLICIT_SELECTOR_FIELDS,
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+GET_ACCOUNT_OVERVIEW_SERVICE_SCHEMA = vol.Schema(
+    {
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+GET_INVENTORY_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(SERVICE_FIELD_DETAIL, default=DETAIL_SUMMARY): vol.In(
+            DETAIL_LEVELS
+        ),
+        vol.Optional(SERVICE_FIELD_PROFILE_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_PROFILE_NAME): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_CLIENT_LIMIT, default=100): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=500)
+        ),
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+GET_ACTIVITY_LOG_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(SERVICE_FIELD_WINDOW, default=DEFAULT_ACTIVITY_LOG_WINDOW): vol.In(
+            ACTIVITY_LOG_WINDOWS
+        ),
+        vol.Optional(SERVICE_FIELD_SEARCH): cv.string,
+        vol.Optional(SERVICE_FIELD_QUERY_ACTION): vol.In(ACTIVITY_ACTIONS),
+        vol.Optional(SERVICE_FIELD_TRIGGER): vol.In(ACTIVITY_TRIGGERS),
+        vol.Optional(SERVICE_FIELD_TRIGGER_VALUE): cv.string,
+        vol.Optional(SERVICE_FIELD_PROFILE_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_PROFILE_NAME): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_CLIENT_ID): cv.string,
+        vol.Optional(SERVICE_FIELD_PROTOCOL): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_SOURCE_COUNTRY): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_DESTINATION_COUNTRY): cv.string,
+        vol.Optional(SERVICE_FIELD_SOURCE_ISP): cv.string,
+        vol.Optional(SERVICE_FIELD_DESTINATION_ISP): cv.string,
+        vol.Optional(SERVICE_FIELD_SOURCE_ASN): cv.string,
+        vol.Optional(SERVICE_FIELD_STATUS_CODE): vol.Coerce(int),
+        vol.Optional(SERVICE_FIELD_RECORD_TYPE): vol.In(DNS_RECORD_TYPES),
+        vol.Optional(SERVICE_FIELD_PAGE, default=0): vol.All(
+            vol.Coerce(int), vol.Range(min=0)
+        ),
+        vol.Optional(SERVICE_FIELD_PAGE_SIZE, default=50): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=500)
+        ),
+        vol.Optional(SERVICE_FIELD_SORT_ORDER, default="desc"): vol.In(("desc", "asc")),
+        **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
+    }
+)
+
+TEST_DOMAIN_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): cv.string,
+        vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): cv.string,
+        vol.Required(SERVICE_FIELD_DOMAIN): cv.string,
+        vol.Optional(SERVICE_FIELD_RECORD_TYPE, default="A"): vol.In(DNS_RECORD_TYPES),
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
     }
 )
@@ -384,11 +564,22 @@ class ResolvedCatalogServiceTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedEntryServiceTarget:
+    """Resolved service target for a read-only, entry-scoped response."""
+
+    entry: ControlDManagerConfigEntry
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedRuleServiceTarget:
     """Resolved service target for a profile-rule mutation."""
 
     entry: ControlDManagerConfigEntry
     profile_rules: dict[str, frozenset[str]]
+    # Populated when resolution had to fetch live rows because the profile does
+    # not expose its rules. The write needs the same rows, since the registry
+    # has none for an unexposed rule.
+    rule_rows_by_profile: dict[str, dict[str, ControlDRule]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -425,6 +616,15 @@ class ResolvedClientAliasServiceTarget:
 
     entry: ControlDManagerConfigEntry
     targets: tuple[ControlDClientAliasTarget, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedClientDeleteServiceTarget:
+    """Resolved service target for destructive client-row deletion."""
+
+    entry: ControlDManagerConfigEntry
+    targets: tuple[ControlDClientAliasTarget, ...]
+    delete_history: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,6 +745,125 @@ async def async_register_services(hass: HomeAssistant) -> None:
         ) as err:
             raise _ha_error(TRANS_KEY_RENAME_ENDPOINTS_FAILED) from err
 
+    async def async_handle_set_endpoint_description(call: ServiceCall) -> None:
+        """Set one description across resolved endpoints, or clear it.
+
+        An empty string clears it, because the API drops the field instead of
+        storing a blank value.
+        """
+        resolved_target = _resolve_endpoint_service_target(hass, call)
+        try:
+            endpoint_manager = resolved_target.entry.runtime_data.managers.endpoint
+            await endpoint_manager.async_set_endpoint_descriptions(
+                resolved_target.endpoints,
+                call.data[SERVICE_FIELD_DESCRIPTION],
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+            ValueError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_SET_ENDPOINT_DESCRIPTIONS_FAILED) from err
+
+    async def async_handle_create_endpoint(call: ServiceCall) -> None:
+        """Create one endpoint enforcing a selected profile.
+
+        The primary profile is required because the platform has no endpoint
+        without one, and the name must be unique.
+        """
+        resolved_target = _resolve_profile_service_target(
+            hass,
+            call,
+            allow_entity_ids=False,
+            allow_profile_names=True,
+            profile_device_field=SERVICE_FIELD_PROFILE_ID,
+            require_profile_selector=True,
+        )
+        profile_pks = sorted(resolved_target.profile_pks)
+        if len(profile_pks) != 1:
+            raise ServiceValidationError(
+                "Select exactly one Control D profile to enforce",
+                translation_domain=DOMAIN,
+                translation_key=TRANS_KEY_ENDPOINT_PROFILE_SELECTION_REQUIRED,
+            )
+        mode = call.data.get(SERVICE_FIELD_MODE)
+        stats_value = (
+            endpoint_analytics_stats_value_from_mode(
+                normalize_endpoint_analytics_logging_mode(mode)
+            )
+            if mode is not None
+            else None
+        )
+        try:
+            endpoint_manager = resolved_target.entry.runtime_data.managers.endpoint
+            await endpoint_manager.async_create_endpoint(
+                name=_normalize_endpoint_name(call.data[SERVICE_FIELD_ENDPOINT_NAME]),
+                profile_pk=profile_pks[0],
+                icon=call.data.get(SERVICE_FIELD_ICON),
+                desc=call.data.get(SERVICE_FIELD_DESCRIPTION),
+                stats=stats_value,
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+            ValueError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_CREATE_ENDPOINTS_FAILED) from err
+
+    async def async_handle_delete_endpoint(call: ServiceCall) -> None:
+        """Delete one or more resolved endpoints. Irreversible."""
+        resolved_target = _resolve_endpoint_service_target(hass, call)
+        try:
+            endpoint_manager = resolved_target.entry.runtime_data.managers.endpoint
+            await endpoint_manager.async_delete_endpoints(resolved_target.endpoints)
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+            ValueError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_DELETE_ENDPOINTS_FAILED) from err
+
+    async def async_handle_set_endpoint_profile(call: ServiceCall) -> None:
+        """Attach, or clear, the enforced profiles on resolved endpoints.
+
+        An endpoint always enforces one profile, so the primary slot can be
+        changed but not emptied; only the secondary can be cleared.
+        """
+        resolved_target = _resolve_endpoint_service_target(hass, call)
+        profile_pk = _resolve_endpoint_profile_pk(hass, call)
+        profile2_pk = call.data.get(SERVICE_FIELD_PROFILE2_ID)
+        clear_profile2 = bool(call.data.get(SERVICE_FIELD_CLEAR_PROFILE2))
+        if profile_pk is None and profile2_pk is None and not clear_profile2:
+            raise ServiceValidationError(
+                "Select a profile to enforce, or ask to clear the secondary",
+                translation_domain=DOMAIN,
+                translation_key=TRANS_KEY_ENDPOINT_PROFILE_SELECTION_REQUIRED,
+            )
+        if profile2_pk is not None and clear_profile2:
+            raise ServiceValidationError(
+                "Set the secondary profile or clear it, not both",
+                translation_domain=DOMAIN,
+                translation_key=TRANS_KEY_ENDPOINT_PROFILE_SELECTION_REQUIRED,
+            )
+        try:
+            endpoint_manager = resolved_target.entry.runtime_data.managers.endpoint
+            await endpoint_manager.async_set_endpoint_profiles(
+                resolved_target.endpoints,
+                profile_pk=profile_pk,
+                profile2_pk=profile2_pk,
+                clear_profile2=clear_profile2,
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+            ValueError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_SET_ENDPOINT_PROFILES_FAILED) from err
+
     async def async_handle_set_endpoint_analytics_logging(call: ServiceCall) -> None:
         """Update one endpoint analytics logging mode across resolved endpoints."""
         resolved_target = _resolve_endpoint_service_target(hass, call)
@@ -586,7 +905,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
         """Enable or disable one or more targeted Control D rules."""
         mutation = _parse_rule_mutation(call)
         _require_rule_mutation(mutation)
-        resolved_target = _resolve_rule_service_target(hass, call)
+        resolved_target = await _resolve_rule_service_target(hass, call)
         try:
             profile_manager = resolved_target.entry.runtime_data.managers.profile
             await profile_manager.async_set_rules_state(
@@ -597,6 +916,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 comment=mutation.comment,
                 redirect_target=mutation.redirect_target,
                 redirect_target_type=mutation.redirect_target_type,
+                rule_rows_by_profile=resolved_target.rule_rows_by_profile,
             )
         except (
             ControlDApiAuthError,
@@ -637,10 +957,13 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def async_handle_delete_rule(call: ServiceCall) -> None:
         """Delete one or more targeted Control D rules."""
-        resolved_target = _resolve_rule_service_target(hass, call)
+        resolved_target = await _resolve_rule_service_target(hass, call)
         try:
             profile_manager = resolved_target.entry.runtime_data.managers.profile
-            await profile_manager.async_delete_rules(resolved_target.profile_rules)
+            await profile_manager.async_delete_rules(
+                resolved_target.profile_rules,
+                rule_rows_by_profile=resolved_target.rule_rows_by_profile,
+            )
         except (
             ControlDApiAuthError,
             ControlDApiConnectionError,
@@ -672,6 +995,42 @@ async def async_register_services(hass: HomeAssistant) -> None:
             ControlDApiConnectionError,
         ) as err:
             raise _ha_error(TRANS_KEY_SET_SERVICES_FAILED) from err
+
+    async def async_handle_delete_service(call: ServiceCall) -> None:
+        """Remove one or more configured Control D service rows."""
+        resolved_target = await _resolve_service_service_target(hass, call)
+        try:
+            profile_manager = resolved_target.entry.runtime_data.managers.profile
+            await profile_manager.async_delete_services(
+                resolved_target.profile_services,
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_DELETE_SERVICES_FAILED) from err
+
+    async def async_handle_delete_client(call: ServiceCall) -> None:
+        """Delete client rows, optionally with their stored query history.
+
+        Destructive and irreversible: the row is derived from traffic and the
+        history cannot be recovered, so nothing here is undone.
+        """
+        resolved_target = _resolve_client_delete_service_target(hass, call)
+        try:
+            endpoint_manager = resolved_target.entry.runtime_data.managers.endpoint
+            await endpoint_manager.async_delete_clients(
+                resolved_target.targets,
+                delete_history=resolved_target.delete_history,
+            )
+        except (
+            ControlDApiAuthError,
+            ControlDApiConnectionError,
+            ControlDApiResponseError,
+            ValueError,
+        ) as err:
+            raise _ha_error(TRANS_KEY_DELETE_CLIENTS_FAILED) from err
 
     async def async_handle_set_option_state(call: ServiceCall) -> None:
         """Set one or more targeted Control D options across selected profiles."""
@@ -736,6 +1095,81 @@ async def async_register_services(hass: HomeAssistant) -> None:
             config_entry_id=resolved_target.entry.entry_id,
             catalog_type=resolved_target.catalog_type,
             profile_pks=resolved_target.profile_pks,
+            limit=call.data[SERVICE_FIELD_LIMIT],
+            search=call.data.get(SERVICE_FIELD_SEARCH),
+        )
+
+    async def async_handle_get_account_overview(call: ServiceCall) -> ServiceResponse:
+        """Return the account overview for one config entry scope."""
+        resolved_target = _resolve_entry_service_target(hass, call)
+        integration_manager = resolved_target.entry.runtime_data.managers.integration
+        return integration_manager.async_build_account_overview_response(
+            config_entry_id=resolved_target.entry.entry_id,
+        )
+
+    async def async_handle_get_inventory(call: ServiceCall) -> ServiceResponse:
+        """Return the account topology for one config entry scope."""
+        resolved_target = _resolve_entry_service_target(hass, call)
+        integration_manager = resolved_target.entry.runtime_data.managers.integration
+        return integration_manager.async_build_inventory_response(
+            config_entry_id=resolved_target.entry.entry_id,
+            detail=call.data[SERVICE_FIELD_DETAIL],
+            profile_ids=_resolve_read_profile_ids(resolved_target.entry, call),
+            endpoint_ids=_resolve_read_endpoint_ids(resolved_target.entry, call),
+            client_limit=call.data[SERVICE_FIELD_CLIENT_LIMIT],
+        )
+
+    async def async_handle_get_activity_log(call: ServiceCall) -> ServiceResponse:
+        """Return one page of per-record DNS activity for one config entry."""
+        resolved_target = _resolve_entry_service_target(hass, call)
+        integration_manager = resolved_target.entry.runtime_data.managers.integration
+        return await integration_manager.async_build_activity_log_response(
+            config_entry_id=resolved_target.entry.entry_id,
+            window=call.data[SERVICE_FIELD_WINDOW],
+            page=call.data[SERVICE_FIELD_PAGE],
+            page_size=call.data[SERVICE_FIELD_PAGE_SIZE],
+            sort_order=call.data[SERVICE_FIELD_SORT_ORDER],
+            search=call.data.get(SERVICE_FIELD_SEARCH),
+            query_action=call.data.get(SERVICE_FIELD_QUERY_ACTION),
+            trigger=call.data.get(SERVICE_FIELD_TRIGGER),
+            trigger_value=call.data.get(SERVICE_FIELD_TRIGGER_VALUE),
+            profile_id=_resolve_read_profile_id(resolved_target.entry, call),
+            endpoint_ids=tuple(_resolve_read_endpoint_ids(resolved_target.entry, call)),
+            client_id=call.data.get(SERVICE_FIELD_CLIENT_ID),
+            protocols=tuple(_ensure_list(call.data.get(SERVICE_FIELD_PROTOCOL))),
+            source_countries=tuple(
+                _ensure_list(call.data.get(SERVICE_FIELD_SOURCE_COUNTRY))
+            ),
+            destination_country=call.data.get(SERVICE_FIELD_DESTINATION_COUNTRY),
+            source_isp=call.data.get(SERVICE_FIELD_SOURCE_ISP),
+            destination_isp=call.data.get(SERVICE_FIELD_DESTINATION_ISP),
+            source_asn=call.data.get(SERVICE_FIELD_SOURCE_ASN),
+            status_code=call.data.get(SERVICE_FIELD_STATUS_CODE),
+            record_type=call.data.get(SERVICE_FIELD_RECORD_TYPE),
+        )
+
+    async def async_handle_test_domain(call: ServiceCall) -> ServiceResponse:
+        """Return the policy verdict for one domain on one endpoint."""
+        resolved_target = _resolve_entry_service_target(hass, call)
+        integration_manager = resolved_target.entry.runtime_data.managers.integration
+        endpoint_ids = _resolve_read_endpoint_ids(resolved_target.entry, call)
+        if len(endpoint_ids) != 1:
+            # The verdict is per-endpoint, so exactly one has to be named. Both
+            # selectors absent is the common case and gets its own key.
+            raise ServiceValidationError(
+                "Select exactly one Control D endpoint to test",
+                translation_domain=DOMAIN,
+                translation_key=(
+                    TRANS_KEY_ENDPOINT_TARGET_REQUIRED
+                    if not endpoint_ids
+                    else TRANS_KEY_ENDPOINT_TARGET_AMBIGUOUS
+                ),
+            )
+        return await integration_manager.async_build_domain_test_response(
+            config_entry_id=resolved_target.entry.entry_id,
+            endpoint_id=next(iter(endpoint_ids)),
+            domain=call.data[SERVICE_FIELD_DOMAIN],
+            record_type=call.data[SERVICE_FIELD_RECORD_TYPE],
         )
 
     for legacy_service in ("pause_profile", "resume_profile", "set_filter_enabled"):
@@ -743,91 +1177,152 @@ async def async_register_services(hass: HomeAssistant) -> None:
             hass.services.async_remove(DOMAIN, legacy_service)
 
     if not hass.services.has_service(DOMAIN, SERVICE_DISABLE_PROFILE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_DISABLE_PROFILE,
             async_handle_disable_profile,
             schema=DISABLE_PROFILE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_ENABLE_PROFILE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_ENABLE_PROFILE,
             async_handle_enable_profile,
             schema=ENABLE_PROFILE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_CLIENT_ALIAS):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_CLIENT_ALIAS,
             async_handle_set_client_alias,
             schema=SET_CLIENT_ALIAS_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_CLEAR_CLIENT_ALIAS):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_CLEAR_CLIENT_ALIAS,
             async_handle_clear_client_alias,
             schema=CLEAR_CLIENT_ALIAS_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_RENAME_ENDPOINT):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_RENAME_ENDPOINT,
             async_handle_rename_endpoint,
             schema=RENAME_ENDPOINT_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING,
             async_handle_set_endpoint_analytics_logging,
             schema=SET_ENDPOINT_ANALYTICS_LOGGING_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_FILTER_STATE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_FILTER_STATE,
             async_handle_set_filter_state,
             schema=SET_FILTER_STATE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_RULE_STATE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_RULE_STATE,
             async_handle_set_rule_state,
             schema=SET_RULE_STATE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_CREATE_RULE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_CREATE_RULE,
             async_handle_create_rule,
             schema=CREATE_RULE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_DELETE_RULE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_DELETE_RULE,
             async_handle_delete_rule,
             schema=DELETE_RULE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_SERVICE_STATE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_SERVICE_STATE,
             async_handle_set_service_state,
             schema=SET_SERVICE_STATE_SERVICE_SCHEMA,
         )
+    if not hass.services.has_service(DOMAIN, SERVICE_DELETE_SERVICE):
+        async_register_admin_service(
+            hass,
+            DOMAIN,
+            SERVICE_DELETE_SERVICE,
+            async_handle_delete_service,
+            schema=DELETE_SERVICE_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_DELETE_CLIENT):
+        async_register_admin_service(
+            hass,
+            DOMAIN,
+            SERVICE_DELETE_CLIENT,
+            async_handle_delete_client,
+            schema=DELETE_CLIENT_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_ENDPOINT_PROFILE):
+        async_register_admin_service(
+            hass,
+            DOMAIN,
+            SERVICE_SET_ENDPOINT_PROFILE,
+            async_handle_set_endpoint_profile,
+            schema=SET_ENDPOINT_PROFILE_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_ENDPOINT_DESCRIPTION):
+        async_register_admin_service(
+            hass,
+            DOMAIN,
+            SERVICE_SET_ENDPOINT_DESCRIPTION,
+            async_handle_set_endpoint_description,
+            schema=SET_ENDPOINT_DESCRIPTION_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_CREATE_ENDPOINT):
+        async_register_admin_service(
+            hass,
+            DOMAIN,
+            SERVICE_CREATE_ENDPOINT,
+            async_handle_create_endpoint,
+            schema=CREATE_ENDPOINT_SERVICE_SCHEMA,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_DELETE_ENDPOINT):
+        async_register_admin_service(
+            hass,
+            DOMAIN,
+            SERVICE_DELETE_ENDPOINT,
+            async_handle_delete_endpoint,
+            schema=DELETE_ENDPOINT_SERVICE_SCHEMA,
+        )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_OPTION_STATE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_OPTION_STATE,
             async_handle_set_option_state,
             schema=SET_OPTION_STATE_SERVICE_SCHEMA,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_SET_DEFAULT_RULE_STATE):
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             SERVICE_SET_DEFAULT_RULE_STATE,
             async_handle_set_default_rule_state,
@@ -839,6 +1334,38 @@ async def async_register_services(hass: HomeAssistant) -> None:
             SERVICE_GET_CATALOG,
             async_handle_get_catalog,
             schema=GET_CATALOG_SERVICE_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_GET_ACCOUNT_OVERVIEW):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_ACCOUNT_OVERVIEW,
+            async_handle_get_account_overview,
+            schema=GET_ACCOUNT_OVERVIEW_SERVICE_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_GET_INVENTORY):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_INVENTORY,
+            async_handle_get_inventory,
+            schema=GET_INVENTORY_SERVICE_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_GET_ACTIVITY_LOG):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GET_ACTIVITY_LOG,
+            async_handle_get_activity_log,
+            schema=GET_ACTIVITY_LOG_SERVICE_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_TEST_DOMAIN):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_TEST_DOMAIN,
+            async_handle_test_domain,
+            schema=TEST_DOMAIN_SERVICE_SCHEMA,
             supports_response=SupportsResponse.ONLY,
         )
 
@@ -872,6 +1399,8 @@ def _resolve_filter_service_target(
 def _resolve_client_alias_service_target(
     hass: HomeAssistant,
     call: ServiceCall,
+    *,
+    target_required_key: str = TRANS_KEY_CLIENT_ALIAS_TARGET_REQUIRED,
 ) -> ResolvedClientAliasServiceTarget:
     """Resolve one client-alias mutation target within one config entry."""
     explicit_entry_ids = set(_ensure_list(call.data.get(SERVICE_FIELD_CONFIG_ENTRY_ID)))
@@ -895,7 +1424,7 @@ def _resolve_client_alias_service_target(
         raise ServiceValidationError(
             "Select at least one Control D client target",
             translation_domain=DOMAIN,
-            translation_key=TRANS_KEY_CLIENT_ALIAS_TARGET_REQUIRED,
+            translation_key=target_required_key,
         )
 
     parent_endpoint_name = call.data.get(SERVICE_FIELD_PARENT_ENDPOINT_NAME)
@@ -904,7 +1433,12 @@ def _resolve_client_alias_service_target(
 
     for selector_kind, selector_value in endpoint_selector_values:
         try:
-            if selector_kind == SERVICE_FIELD_ENDPOINT_MAC:
+            if selector_kind == SERVICE_FIELD_CLIENT_ID:
+                target = endpoint_manager.resolve_client_alias_target(
+                    client_id=selector_value,
+                    parent_endpoint_name=parent_endpoint_name,
+                )
+            elif selector_kind == SERVICE_FIELD_ENDPOINT_MAC:
                 target = endpoint_manager.resolve_client_alias_target(
                     endpoint_mac=selector_value,
                     parent_endpoint_name=parent_endpoint_name,
@@ -943,6 +1477,26 @@ def _resolve_client_alias_service_target(
     )
 
 
+def _resolve_client_delete_service_target(
+    hass: HomeAssistant, call: ServiceCall
+) -> ResolvedClientDeleteServiceTarget:
+    """Resolve the client rows a destructive delete call addresses.
+
+    Reuses the client selectors exactly, so the identifiers a caller learned for
+    aliasing address the same row here.
+    """
+    resolved = _resolve_client_alias_service_target(
+        hass,
+        call,
+        target_required_key=TRANS_KEY_CLIENT_DELETE_TARGET_REQUIRED,
+    )
+    return ResolvedClientDeleteServiceTarget(
+        entry=resolved.entry,
+        targets=resolved.targets,
+        delete_history=bool(call.data.get(SERVICE_FIELD_DELETE_HISTORY, True)),
+    )
+
+
 def _resolve_catalog_service_target(
     hass: HomeAssistant, call: ServiceCall
 ) -> ResolvedCatalogServiceTarget:
@@ -963,13 +1517,68 @@ def _resolve_catalog_service_target(
     )
 
 
+def _resolve_entry_service_target(
+    hass: HomeAssistant, call: ServiceCall
+) -> ResolvedEntryServiceTarget:
+    """Resolve a read-only, entry-scoped request into one config entry."""
+    explicit_entry_ids = set(_ensure_list(call.data.get(SERVICE_FIELD_CONFIG_ENTRY_ID)))
+    config_entry_name = call.data.get(SERVICE_FIELD_CONFIG_ENTRY_NAME)
+    loaded_entries = {
+        entry.entry_id: entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if _entry_runtime(entry) is not None
+    }
+    entry = _resolve_loaded_entry(
+        hass,
+        entry_ids=explicit_entry_ids,
+        entry_name=(config_entry_name if isinstance(config_entry_name, str) else None),
+        loaded_entries=loaded_entries,
+        entity_ids=set(),
+        device_ids=set(),
+    )
+    return ResolvedEntryServiceTarget(entry=entry)
+
+
+def _resolve_endpoint_profile_pk(hass: HomeAssistant, call: ServiceCall) -> str | None:
+    """Resolve the primary profile a call enforces, by PK or by name.
+
+    Returns None when no primary profile was requested, which is different from
+    an empty selection: an endpoint can have its secondary changed without the
+    primary being restated.
+    """
+    if not _ensure_name_list(call.data.get(SERVICE_FIELD_PROFILE_ID)):
+        return None
+    resolved_target = _resolve_profile_service_target(
+        hass,
+        call,
+        allow_entity_ids=False,
+        allow_profile_names=True,
+        profile_device_field=SERVICE_FIELD_PROFILE_ID,
+        require_profile_selector=True,
+    )
+    profile_pks = sorted(resolved_target.profile_pks)
+    if len(profile_pks) != 1:
+        raise ServiceValidationError(
+            "Select exactly one Control D profile to enforce",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_ENDPOINT_PROFILE_SELECTION_REQUIRED,
+        )
+    return profile_pks[0]
+
+
 def _resolve_endpoint_service_target(
     hass: HomeAssistant,
     call: ServiceCall,
 ) -> ResolvedEndpointServiceTarget:
-    """Resolve one endpoint-rename target scope within one config entry."""
+    """Resolve one endpoint target scope within one config entry.
+
+    An endpoint may be addressed by ``device_id`` or by display name. Ids are
+    exact and unambiguous, so they take precedence; names are accepted because
+    they are what the dashboard shows.
+    """
     explicit_entry_ids = set(_ensure_list(call.data.get(SERVICE_FIELD_CONFIG_ENTRY_ID)))
     config_entry_name = call.data.get(SERVICE_FIELD_CONFIG_ENTRY_NAME)
+    requested_endpoint_ids = _ensure_name_list(call.data.get(SERVICE_FIELD_ENDPOINT_ID))
     requested_endpoint_names = _ensure_name_list(
         call.data.get(SERVICE_FIELD_ENDPOINT_NAME)
     )
@@ -987,7 +1596,7 @@ def _resolve_endpoint_service_target(
         device_ids=set(),
     )
 
-    if not requested_endpoint_names:
+    if not requested_endpoint_ids and not requested_endpoint_names:
         raise ServiceValidationError(
             "Select at least one Control D endpoint target",
             translation_domain=DOMAIN,
@@ -996,11 +1605,13 @@ def _resolve_endpoint_service_target(
 
     endpoint_manager = entry.runtime_data.managers.endpoint
     resolved_endpoints: dict[str, ControlDEndpointSummary] = {}
-    for requested_name in requested_endpoint_names:
+    # Ids first: an id can never be ambiguous, so it is the safer selector.
+    for selector_kwargs in (
+        *({"endpoint_id": value} for value in requested_endpoint_ids),
+        *({"endpoint_name": value} for value in requested_endpoint_names),
+    ):
         try:
-            endpoint = endpoint_manager.resolve_endpoint_target(
-                endpoint_name=requested_name,
-            )
+            endpoint = endpoint_manager.resolve_endpoint_target(**selector_kwargs)
         except ValueError as err:
             translation_key = (
                 TRANS_KEY_ENDPOINT_TARGET_AMBIGUOUS
@@ -1332,26 +1943,9 @@ async def _async_load_rules_for_resolution(
     profile_pks: frozenset[str],
 ) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
     """Load live rule-group and rule rows for targeted profiles."""
-    integration_manager = entry.runtime_data.managers.integration
-    profile_details = await asyncio.gather(
-        *(
-            entry.runtime_data.client.async_get_profile_detail(
-                profile_pk,
-                include_services=False,
-                include_rules=True,
-            )
-            for profile_pk in profile_pks
-        )
+    return await entry.runtime_data.managers.integration.async_load_live_rules(
+        profile_pks
     )
-
-    # pylint: disable=too-many-lines
-    return {
-        profile_pk: (
-            integration_manager.normalize_live_rule_groups(detail.groups),
-            integration_manager.normalize_live_rules(detail.groups, detail.rules),
-        )
-        for profile_pk, detail in zip(profile_pks, profile_details, strict=True)
-    }
 
 
 def _resolve_live_rule_group_pk(
@@ -1520,7 +2114,7 @@ def _normalize_field_option_value(value: str | int) -> str:
     return str(numeric_value)
 
 
-def _resolve_rule_service_target(
+async def _resolve_rule_service_target(
     hass: HomeAssistant, call: ServiceCall
 ) -> ResolvedRuleServiceTarget:
     """Resolve a rule mutation target across one or more profiles."""
@@ -1535,15 +2129,99 @@ def _resolve_rule_service_target(
     requested_rule_identities = _ensure_name_list(
         call.data.get(SERVICE_FIELD_RULE_IDENTITY)
     )
-    profile_rules = _resolve_selected_rule_identities(
-        resolved_profiles.entry,
-        resolved_profiles.profile_pks,
-        requested_rule_identities=requested_rule_identities,
-    )
+    rule_rows_by_profile: dict[str, dict[str, ControlDRule]] | None = None
+    try:
+        profile_rules = _resolve_selected_rule_identities(
+            resolved_profiles.entry,
+            resolved_profiles.profile_pks,
+            requested_rule_identities=requested_rule_identities,
+        )
+    except ServiceValidationError as err:
+        # A missing selector is a validation failure, not a resolution one, so it
+        # must not trigger a network fetch.
+        if not requested_rule_identities:
+            raise
+        # The registry only holds rules the profile exposes, while `get_catalog`
+        # reports every rule upstream. Resolving from a live fetch makes the two
+        # agree, so a rule the catalog reports is always actionable.
+        live_rules_by_profile = await _async_load_rules_for_resolution(
+            resolved_profiles.entry,
+            resolved_profiles.profile_pks,
+        )
+        rule_rows_by_profile = {
+            profile_pk: rows[1] for profile_pk, rows in live_rules_by_profile.items()
+        }
+        try:
+            profile_rules = _resolve_selected_rule_identities_from_rows(
+                rule_rows_by_profile,
+                resolved_profiles.profile_pks,
+                requested_rule_identities=requested_rule_identities,
+            )
+        except ServiceValidationError as live_err:
+            raise err from live_err
     return ResolvedRuleServiceTarget(
         entry=resolved_profiles.entry,
         profile_rules=profile_rules,
+        rule_rows_by_profile=rule_rows_by_profile,
     )
+
+
+def _resolve_selected_rule_identities_from_rows(
+    rules_by_profile: dict[str, dict[str, ControlDRule]],
+    profile_pks: frozenset[str],
+    *,
+    requested_rule_identities: list[str],
+) -> dict[str, frozenset[str]]:
+    """Resolve rule selectors from explicitly supplied normalized rows.
+
+    Mirrors `_resolve_selected_rule_identities`, but reads the given rows instead
+    of the registry. A rule is matched by full identity first and by bare
+    hostname second, so either form is accepted when unambiguous.
+    """
+    profile_rules: dict[str, frozenset[str]] = {}
+    for profile_pk in profile_pks:
+        rows = tuple(rules_by_profile.get(profile_pk, {}).values())
+        resolved: set[str] = set()
+        for requested in requested_rule_identities:
+            wanted = _normalize_name(requested)
+            identity_matches = [
+                rule_row.identity
+                for rule_row in rows
+                if _normalize_name(rule_row.identity) == wanted
+            ]
+            if len(identity_matches) == 1:
+                resolved.add(identity_matches[0])
+                continue
+            if len(identity_matches) > 1:
+                raise ServiceValidationError(
+                    "The selected Control D rule target is ambiguous",
+                    translation_domain=DOMAIN,
+                    translation_key=TRANS_KEY_RULE_NAME_AMBIGUOUS,
+                )
+            hostname_matches = [
+                rule_row.identity
+                for rule_row in rows
+                if _normalize_name(rule_row.rule_pk) == wanted
+            ]
+            if len(hostname_matches) == 1:
+                resolved.add(hostname_matches[0])
+                continue
+            if len(hostname_matches) > 1:
+                raise ServiceValidationError(
+                    "The selected Control D rule target is ambiguous",
+                    translation_domain=DOMAIN,
+                    translation_key=TRANS_KEY_RULE_NAME_AMBIGUOUS,
+                )
+            raise ServiceValidationError(
+                (
+                    "The selected Control D rule target could not be resolved for "
+                    "one or more targeted profiles"
+                ),
+                translation_domain=DOMAIN,
+                translation_key=TRANS_KEY_RULE_NAME_NOT_FOUND,
+            )
+        profile_rules[profile_pk] = frozenset(resolved)
+    return profile_rules
 
 
 async def _resolve_service_service_target(
@@ -1597,12 +2275,60 @@ async def _resolve_service_service_target(
                 requested_service_names=requested_service_names,
             )
         except ServiceValidationError as live_err:
-            raise err from live_err
+            # Control D returns only enabled services for a profile, so a profile
+            # with none yields no rows and the first service could never be
+            # enabled. Fall back to the global catalog, which is what the tool
+            # description already promises ("a service not currently listed on
+            # the profile can still be set, which adds it").
+            catalog_rows_by_profile = (
+                await _async_load_service_catalog_rows_for_resolution(
+                    resolved_profiles.entry,
+                    resolved_profiles.profile_pks,
+                )
+            )
+            try:
+                profile_services = _resolve_selected_service_pks_from_rows(
+                    catalog_rows_by_profile,
+                    resolved_profiles.profile_pks,
+                    requested_service_ids=requested_service_ids,
+                    requested_service_names=requested_service_names,
+                )
+            except ServiceValidationError:
+                raise err from live_err
+            return ResolvedServiceServiceTarget(
+                entry=resolved_profiles.entry,
+                profile_services=profile_services,
+                service_rows_by_profile=catalog_rows_by_profile,
+            )
         return ResolvedServiceServiceTarget(
             entry=resolved_profiles.entry,
             profile_services=profile_services,
             service_rows_by_profile=live_services_by_profile,
         )
+
+
+async def _async_load_service_catalog_rows_for_resolution(
+    entry: ControlDManagerConfigEntry,
+    profile_pks: frozenset[str],
+) -> dict[str, dict[str, ControlDService]]:
+    """Build service rows from the global catalog for targeted profiles.
+
+    Every catalog row is treated as available on each profile, so a service that
+    is not yet enabled can still be addressed by id or name.
+    """
+    integration_manager = entry.runtime_data.managers.integration
+    service_categories_payload = tuple(
+        await entry.runtime_data.client.async_get_service_categories()
+    )
+    service_catalog_payload = tuple(
+        await entry.runtime_data.client.async_get_service_catalog()
+    )
+    rows = integration_manager.build_live_service_rows(
+        service_catalog_payload,
+        service_categories_payload,
+        service_catalog_payload,
+    )
+    return dict.fromkeys(profile_pks, rows)
 
 
 async def _async_load_services_for_resolution(
@@ -1935,8 +2661,11 @@ def _resolve_profiles_from_device_ids(
                 translation_domain=DOMAIN,
                 translation_key=TRANS_KEY_PROFILE_TARGET_NOT_FOUND,
             )
-        if entry.entry_id not in device_entry.config_entries:
-            if set(device_entry.config_entries) & set(loaded_entries):
+        # A device belongs to exactly one config entry, so `config_entry_id` is
+        # the supported accessor; the deprecated `config_entries` set is not
+        # usable after Home Assistant 2027.10.
+        if device_entry.config_entry_id != entry.entry_id:
+            if device_entry.config_entry_id in loaded_entries:
                 raise ServiceValidationError(
                     "Profile targets must belong to the selected Control D "
                     "config entry",
@@ -2079,6 +2808,12 @@ def _selected_client_alias_selector_values(
 ) -> list[tuple[str, str]]:
     """Return one selected client-alias selector family using stable precedence."""
     selector_families: tuple[tuple[str, list[str]], ...] = (
+        # The client id is what the alias API keys on, so it takes precedence
+        # over the human-readable selectors below it.
+        (
+            SERVICE_FIELD_CLIENT_ID,
+            _ensure_name_list(call.data.get(SERVICE_FIELD_CLIENT_ID)),
+        ),
         (
             SERVICE_FIELD_ENDPOINT_MAC,
             _ensure_name_list(call.data.get(SERVICE_FIELD_ENDPOINT_MAC)),
@@ -2192,6 +2927,86 @@ def _resolve_profiles_from_names(
         )
 
     return targeted_profiles
+
+
+def _resolve_read_profile_ids(
+    entry: ControlDManagerConfigEntry, call: ServiceCall
+) -> frozenset[str]:
+    """Return the profile PKs a read targets, resolving names when given.
+
+    Reads took only a PK, so a caller who knew the profile by name had to look
+    the PK up first. Names resolve through the same helper the write services
+    use, which reports an unknown or ambiguous name rather than quietly
+    widening the scope to every profile.
+    """
+    explicit_ids = frozenset(_ensure_name_list(call.data.get(SERVICE_FIELD_PROFILE_ID)))
+    if explicit_ids:
+        return explicit_ids
+    names = _ensure_name_list(call.data.get(SERVICE_FIELD_PROFILE_NAME))
+    if not names:
+        return frozenset()
+    return frozenset(_resolve_profiles_from_names(entry, names))
+
+
+def _resolve_read_profile_id(
+    entry: ControlDManagerConfigEntry, call: ServiceCall
+) -> str | None:
+    """Return the one profile a single-profile read targets, by id or name.
+
+    The activity log is scoped to at most one profile, so a name that resolves
+    to several is an error rather than an arbitrary pick.
+    """
+    explicit_id = call.data.get(SERVICE_FIELD_PROFILE_ID)
+    if isinstance(explicit_id, str) and explicit_id:
+        return explicit_id
+    resolved = _resolve_read_profile_ids(entry, call)
+    if not resolved:
+        return None
+    if len(resolved) > 1:
+        raise ServiceValidationError(
+            "Select exactly one Control D profile for this read",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_PROFILE_TARGET_AMBIGUOUS,
+        )
+    return next(iter(resolved))
+
+
+def _resolve_read_endpoint_ids(
+    entry: ControlDManagerConfigEntry, call: ServiceCall
+) -> frozenset[str]:
+    """Return the endpoint device ids a read targets, resolving names when given.
+
+    Same reasoning as the profile helper: an endpoint name is what the dashboard
+    shows, so refusing it forced a lookup first. A name that matches nothing or
+    more than one endpoint is reported as a service error.
+    """
+    explicit_ids = frozenset(
+        _ensure_name_list(call.data.get(SERVICE_FIELD_ENDPOINT_ID))
+    )
+    if explicit_ids:
+        return explicit_ids
+    names = _ensure_name_list(call.data.get(SERVICE_FIELD_ENDPOINT_NAME))
+    if not names:
+        return frozenset()
+    endpoint_manager = entry.runtime_data.managers.endpoint
+    resolved: set[str] = set()
+    for name in names:
+        try:
+            resolved.add(
+                endpoint_manager.resolve_endpoint_target(endpoint_name=name).device_id
+            )
+        except ValueError as err:
+            translation_key = (
+                TRANS_KEY_ENDPOINT_TARGET_AMBIGUOUS
+                if "Ambiguous" in str(err)
+                else TRANS_KEY_ENDPOINT_TARGET_NOT_FOUND
+            )
+            raise ServiceValidationError(
+                f"Endpoint name {name!r} did not resolve to exactly one endpoint",
+                translation_domain=DOMAIN,
+                translation_key=translation_key,
+            ) from err
+    return frozenset(resolved)
 
 
 def _entry_runtime(entry: ConfigEntry) -> ControlDManagerRuntime | None:

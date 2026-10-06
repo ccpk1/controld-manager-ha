@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from aiohttp import ClientError, ClientSession
 
 from ..models import (
     ControlDAccountAnalytics,
+    ControlDActivityLogPage,
+    ControlDDnsVerdict,
     ControlDInventoryPayload,
     ControlDProfileDetailPayload,
     ControlDUser,
@@ -18,14 +20,20 @@ from ..models import (
 from .exceptions import (
     ControlDApiAuthError,
     ControlDApiConnectionError,
+    ControlDApiMaintenanceError,
+    ControlDApiRateLimitError,
     ControlDApiResponseError,
 )
 
 DEFAULT_BASE_URL = "https://api.controld.com"
+DNS_VERDICT_BASE_URL = "https://dns.controld.com"
 ACTION_BLOCKED = 0
 ACTION_BYPASSED = 1
 ACTION_REDIRECTED = 2
 ACTION_REDIRECTED_LOCAL = 3
+
+# A REFUSED DNS response is how Control D signals a blocked lookup.
+DNS_RCODE_REFUSED = 5
 
 type AnalyticsScopeParams = Mapping[str, str | list[str]]
 
@@ -59,9 +67,9 @@ class ControlDAPIClient:
                 or self._optional_string(user_payload.get("email"))
                 or self._optional_string(user_payload.get("username"))
             ),
-            last_active=self._optional_string(user_payload.get("last_active")),
+            last_active=self._optional_int_value(user_payload.get("last_active")),
             stats_endpoint=self._extract_stats_endpoint(user_payload),
-            status=self._optional_string(user_payload.get("status")),
+            status=self._optional_int_value(user_payload.get("status")),
             safe_countries=safe_countries,
         )
 
@@ -148,6 +156,154 @@ class ControlDAPIClient:
             )
         return items
 
+    async def async_get_activity_log(
+        self,
+        stats_endpoint: str,
+        *,
+        start_time: datetime,
+        end_time: datetime,
+        search_question: str | None = None,
+        action: int | None = None,
+        trigger: str | None = None,
+        trigger_value: str | None = None,
+        endpoint_ids: Sequence[str] | None = None,
+        profile_id: str | None = None,
+        client_id: str | None = None,
+        protocols: Sequence[str] | None = None,
+        source_countries: Sequence[str] | None = None,
+        destination_country: str | None = None,
+        source_isp: str | None = None,
+        destination_isp: str | None = None,
+        source_asn: str | None = None,
+        destination_asn: str | None = None,
+        spoof_target: str | None = None,
+        status_code: int | None = None,
+        rr_type: str | None = None,
+        page: int = 0,
+        page_size: int = 100,
+        sort_order: str = "desc",
+    ) -> ControlDActivityLogPage:
+        """Fetch one page of per-record DNS activity, newest first."""
+        params: dict[str, Any] = {
+            **self._analytics_time_params(start_time, end_time),
+            "page": str(page),
+            "pageSize": str(page_size),
+            "sortOrder": sort_order,
+        }
+        optional_params: dict[str, Any] = {
+            "searchQuestion": search_question,
+            "trigger": trigger,
+            "triggerValue": trigger_value,
+            "profileId": profile_id,
+            "clientId": client_id,
+            "dstCountry": destination_country,
+            "srcIsp": source_isp,
+            "dstIsp": destination_isp,
+            "srcAsn": source_asn,
+            "dstAsn": destination_asn,
+            "spoofTarget": spoof_target,
+            "rrType": rr_type,
+        }
+        params.update(
+            {key: value for key, value in optional_params.items() if value is not None}
+        )
+        if action is not None:
+            params["action"] = str(action)
+        if status_code is not None:
+            params["statusCode"] = str(status_code)
+        if endpoint_ids:
+            params["endpointId[]"] = list(endpoint_ids)
+        if protocols:
+            params["protocol[]"] = list(protocols)
+        if source_countries:
+            params["srcCountry[]"] = list(source_countries)
+
+        payload = await self._async_get_external_json(
+            f"{self._analytics_base_url(stats_endpoint)}/v2/activity-log",
+            params=params,
+        )
+        body = self._extract_body_mapping(payload)
+        queries = body.get("queries")
+        if not isinstance(queries, list):
+            raise ControlDApiResponseError(
+                "Control D activity log response is missing the expected 'queries' list"
+            )
+        meta = body.get("meta")
+        meta_mapping = meta if isinstance(meta, dict) else {}
+        return ControlDActivityLogPage(
+            records=tuple(self._normalize_mapping_rows(queries)),
+            page=self._optional_int(meta_mapping.get("page"), page),
+            page_size=self._optional_int(meta_mapping.get("pageSize"), page_size),
+        )
+
+    async def async_get_dns_verdict(
+        self,
+        device_id: str,
+        domain: str,
+        *,
+        record_type: str = "A",
+    ) -> ControlDDnsVerdict:
+        """Return the policy verdict for one domain on one endpoint.
+
+        A REFUSED response (``RCODE`` 5) is a successful block verdict, not a
+        failure, so it is reported as data rather than raised.
+        """
+        payload = await self._async_request_url(
+            "GET",
+            f"{DNS_VERDICT_BASE_URL}/{device_id}",
+            params={
+                "name": domain,
+                "type": record_type,
+                "controld": "1",
+                "no_log": "1",
+            },
+            headers={"Accept": "application/dns+json"},
+        )
+        if not isinstance(payload, dict):
+            raise ControlDApiResponseError(
+                "Control D DNS verdict response must be a mapping"
+            )
+
+        rcode = self._optional_int(payload.get("RCODE"), 0)
+        verdict_container = payload.get("controld")
+        verdict = (
+            verdict_container.get("verdict")
+            if isinstance(verdict_container, dict)
+            else None
+        )
+        verdict_mapping = verdict if isinstance(verdict, dict) else {}
+
+        return ControlDDnsVerdict(
+            domain=domain,
+            record_type=record_type,
+            rcode=rcode,
+            is_blocked=rcode == DNS_RCODE_REFUSED,
+            profile_pk=self._optional_string(verdict_mapping.get("profileID")),
+            source=self._optional_string(verdict_mapping.get("verdictSource")),
+            action=(
+                int(verdict_mapping["verdictAction"])
+                if isinstance(verdict_mapping.get("verdictAction"), str)
+                and verdict_mapping["verdictAction"].lstrip("-").isdigit()
+                else None
+            ),
+            match=self._optional_string(verdict_mapping.get("verdictMatch")),
+            answers=self._extract_dns_answers(payload.get("answerRRs")),
+        )
+
+    @classmethod
+    def _extract_dns_answers(cls, answer_rrs: Any) -> tuple[str, ...]:
+        """Extract the answer rdata values from a DNS-over-JSON response."""
+        if not isinstance(answer_rrs, list):
+            return ()
+        answers: list[str] = []
+        for row in answer_rrs:
+            if not isinstance(row, dict):
+                continue
+            for key, value in row.items():
+                if key.startswith("rdata") and isinstance(value, str):
+                    answers.append(value)
+        return tuple(answers)
+
     async def async_set_endpoint_alias(
         self,
         stats_endpoint: str,
@@ -155,13 +311,15 @@ class ControlDAPIClient:
         device_id: str,
         client_id: str,
         alias: str,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Set one analytics client alias on the analytics host."""
-        await self._async_request_url(
-            "POST",
-            f"{self._analytics_base_url(stats_endpoint)}/client/alias",
-            payload=alias,
-            params={"deviceId": device_id, "clientId": client_id},
+        return self._optional_body_mapping(
+            await self._async_request_url(
+                "POST",
+                f"{self._analytics_base_url(stats_endpoint)}/client/alias",
+                payload=alias,
+                params={"deviceId": device_id, "clientId": client_id},
+            )
         )
 
     async def async_clear_endpoint_alias(
@@ -170,32 +328,196 @@ class ControlDAPIClient:
         *,
         device_id: str,
         client_id: str,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Clear one analytics client alias on the analytics host."""
-        await self._async_request_url(
-            "DELETE",
-            f"{self._analytics_base_url(stats_endpoint)}/client/alias",
-            payload=None,
-            params={"deviceId": device_id, "clientId": client_id},
+        return self._optional_body_mapping(
+            await self._async_request_url(
+                "DELETE",
+                f"{self._analytics_base_url(stats_endpoint)}/client/alias",
+                payload=None,
+                params={"deviceId": device_id, "clientId": client_id},
+            )
         )
+
+    async def _async_delete_analytics_clients(
+        self,
+        stats_endpoint: str,
+        path: str,
+        *,
+        parent_endpoint_ids: Sequence[str],
+        client_ids: Sequence[str],
+    ) -> dict[str, Any] | None:
+        """Delete client rows or their query history on the analytics host.
+
+        Both verbs take the same body: the parent endpoints and the client ids
+        to remove. The row delete reports what it removed, while the history
+        delete reports only success.
+        """
+        return self._optional_body_mapping(
+            await self._async_request_url(
+                "DELETE",
+                f"{self._analytics_base_url(stats_endpoint)}{path}",
+                payload={
+                    "endpointIds": list(parent_endpoint_ids),
+                    "clientIds": list(client_ids),
+                },
+            )
+        )
+
+    async def async_delete_analytics_clients(
+        self,
+        stats_endpoint: str,
+        *,
+        parent_endpoint_ids: Sequence[str],
+        client_ids: Sequence[str],
+    ) -> dict[str, Any] | None:
+        """Delete analytics client rows, returning what the API removed."""
+        return await self._async_delete_analytics_clients(
+            stats_endpoint,
+            "/v2/client",
+            parent_endpoint_ids=parent_endpoint_ids,
+            client_ids=client_ids,
+        )
+
+    async def async_delete_analytics_client_history(
+        self,
+        stats_endpoint: str,
+        *,
+        parent_endpoint_ids: Sequence[str],
+        client_ids: Sequence[str],
+    ) -> dict[str, Any] | None:
+        """Delete the stored query history of analytics client rows."""
+        return await self._async_delete_analytics_clients(
+            stats_endpoint,
+            "/v2/activity-log",
+            parent_endpoint_ids=parent_endpoint_ids,
+            client_ids=client_ids,
+        )
+
+    async def async_get_redirect_locations(self) -> tuple[dict[str, Any], ...]:
+        """Return the redirect locations this account may target.
+
+        Each entry carries the 3-letter `PK` that a redirect's `via` takes, plus
+        the city and country names that make it choosable. This is the list
+        behind the dashboard's location picker, and it is account-wide rather
+        than profile-scoped.
+        """
+        payload = await self._async_get_json("/proxies")
+        body = self._extract_body_mapping(payload)
+        proxies = body.get("proxies")
+        if not isinstance(proxies, list):
+            raise ControlDApiResponseError(
+                "Control D proxies response is missing the expected 'proxies' list"
+            )
+        return tuple(row for row in proxies if isinstance(row, dict))
 
     async def async_rename_endpoint(
         self,
         device_id: str,
         *,
         name: str,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Rename one Control D endpoint using the validated devices contract."""
-        await self._async_request("PUT", f"/devices/{device_id}", {"name": name})
+        return self._optional_body_mapping(
+            await self._async_request("PUT", f"/devices/{device_id}", {"name": name})
+        )
 
     async def async_set_endpoint_analytics_logging(
         self,
         device_id: str,
         *,
         stats: int,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Update one endpoint analytics logging level using the devices contract."""
-        await self._async_request("PUT", f"/devices/{device_id}", {"stats": stats})
+        return self._optional_body_mapping(
+            await self._async_request("PUT", f"/devices/{device_id}", {"stats": stats})
+        )
+
+    async def async_set_endpoint_profile(
+        self,
+        device_id: str,
+        *,
+        profile_pk: str,
+        secondary: bool,
+    ) -> dict[str, Any] | None:
+        """Attach a primary or secondary profile to one endpoint.
+
+        The write keys are `profile_id` and `profile_id2` — suffixed — while the
+        read keys on the same row are `profile` and `profile2`. A key the verb
+        does not act on returns 200 and changes nothing, so the suffixed names
+        matter.
+        """
+        field = "profile_id2" if secondary else "profile_id"
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT", f"/devices/{device_id}", {field: profile_pk}
+            )
+        )
+
+    async def async_clear_endpoint_secondary_profile(
+        self,
+        device_id: str,
+    ) -> dict[str, Any] | None:
+        """Detach the secondary profile from one endpoint.
+
+        The integer `-1` is the API's clear sentinel for the secondary slot. The
+        primary profile cannot be cleared this way: it rejects `-1` with a 400,
+        because an endpoint must always enforce one profile.
+        """
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT", f"/devices/{device_id}", {"profile_id2": -1}
+            )
+        )
+
+    async def async_create_endpoint(
+        self,
+        *,
+        name: str,
+        profile_pk: str,
+        icon: str | None = None,
+        desc: str | None = None,
+        stats: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Create one endpoint, returning the row the API created.
+
+        `profile_id` is required rather than optional: every endpoint must
+        enforce one profile, so the API rejects a create that omits it. The name
+        must be unique across the account.
+        """
+        payload: dict[str, Any] = {"name": name, "profile_id": profile_pk}
+        if icon is not None:
+            payload["icon"] = icon
+        if desc is not None:
+            payload["desc"] = desc
+        if stats is not None:
+            payload["stats"] = stats
+        return self._optional_body_mapping(
+            await self._async_request("POST", "/devices", payload)
+        )
+
+    async def async_delete_endpoint(self, device_id: str) -> dict[str, Any] | None:
+        """Delete one endpoint and everything recorded against it."""
+        return self._optional_body_mapping(
+            await self._async_request("DELETE", f"/devices/{device_id}")
+        )
+
+    async def async_set_endpoint_description(
+        self,
+        device_id: str,
+        *,
+        description: str,
+    ) -> dict[str, Any] | None:
+        """Set the free-text note stored on one endpoint.
+
+        An empty string clears it: the API drops the field from the row rather
+        than keeping an empty value.
+        """
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT", f"/devices/{device_id}", {"desc": description}
+            )
+        )
 
     @classmethod
     def extract_stats_endpoint(cls, payload: dict[str, Any]) -> str | None:
@@ -441,10 +763,12 @@ class ControlDAPIClient:
 
     async def async_set_profile_disable_until(
         self, profile_pk: str, disable_ttl: int
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Disable or enable a profile using the documented disable-until contract."""
-        await self._async_request(
-            "PUT", f"/profiles/{profile_pk}", {"disable_ttl": disable_ttl}
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT", f"/profiles/{profile_pk}", {"disable_ttl": disable_ttl}
+            )
         )
 
     async def async_set_profile_filter(
@@ -455,13 +779,15 @@ class ControlDAPIClient:
         enabled: bool,
         action_do: int,
         level_slug: str | None,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Update one profile filter using the browser-verified filter contract."""
         payload: dict[str, Any] = {"status": int(enabled), "do": action_do}
         if level_slug is not None:
             payload["lvl"] = level_slug
-        await self._async_request(
-            "PUT", f"/profiles/{profile_pk}/filters/filter/{filter_pk}", payload
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT", f"/profiles/{profile_pk}/filters/filter/{filter_pk}", payload
+            )
         )
 
     async def async_set_profile_service(
@@ -473,17 +799,35 @@ class ControlDAPIClient:
         action_do: int,
         via: str | None = None,
         via_v6: str | None = None,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Update one profile service row using the current action model."""
         payload: dict[str, Any] = {"do": action_do, "status": int(enabled)}
         if via is not None:
             payload["via"] = via
         if via_v6 is not None:
             payload["via_v6"] = via_v6
-        await self._async_request(
-            "PUT",
-            f"/profiles/{profile_pk}/services/{service_pk}",
-            payload,
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT",
+                f"/profiles/{profile_pk}/services/{service_pk}",
+                payload,
+            )
+        )
+
+    async def async_delete_profile_service(
+        self,
+        profile_pk: str,
+        service_pk: str,
+    ) -> dict[str, Any] | None:
+        """Remove one profile service row using the unconfigure contract.
+
+        This is distinct from setting the service to `status: 0`, which only
+        switches the row off and leaves it on the profile.
+        """
+        return self._optional_body_mapping(
+            await self._async_request(
+                "DELETE", f"/profiles/{profile_pk}/services/{service_pk}"
+            )
         )
 
     async def async_set_profile_rule(
@@ -496,7 +840,7 @@ class ControlDAPIClient:
         group_pk: str | None,
         ttl: int | None,
         comment: str | None = None,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Update one profile rule using the current action model."""
         payload: dict[str, Any] = {"do": action_do, "status": int(enabled)}
         if group_pk is not None:
@@ -505,8 +849,34 @@ class ControlDAPIClient:
             payload["ttl"] = ttl
         if comment is not None:
             payload["comment"] = comment
-        await self._async_request(
-            "PUT", f"/profiles/{profile_pk}/rules/{rule_pk}", payload
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT", f"/profiles/{profile_pk}/rules/{rule_pk}", payload
+            )
+        )
+
+    async def async_set_profile_rule_enabled(
+        self,
+        profile_pk: str,
+        rule_pk: str,
+        *,
+        enabled: bool,
+    ) -> dict[str, Any] | None:
+        """Toggle one profile rule without restating its action.
+
+        Control D preserves the rule's existing configuration for a status-only
+        update, which is what makes this the correct way to toggle. Restating the
+        action instead is rejected for a redirect rule, because a redirect action
+        carries a target that a bare action value does not: sending
+        `{"do": 2, "status": 0}` returns `400 40003 Invalid rule action was
+        provided`, while `{"status": 0}` succeeds and leaves the redirect intact.
+        """
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT",
+                f"/profiles/{profile_pk}/rules/{rule_pk}",
+                {"status": int(enabled)},
+            )
         )
 
     async def async_update_profile_rule_rich(
@@ -521,7 +891,7 @@ class ControlDAPIClient:
         ttl: int | None,
         via: str | None = None,
         via_v6: str | None = None,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Update one profile rule using the rich hostname-based contract."""
         payload: dict[str, Any] = {
             "do": action_do,
@@ -538,7 +908,9 @@ class ControlDAPIClient:
             payload["via_v6"] = via_v6
         if ttl is not None:
             payload["ttl"] = ttl
-        await self._async_request("PUT", f"/profiles/{profile_pk}/rules", payload)
+        return self._optional_body_mapping(
+            await self._async_request("PUT", f"/profiles/{profile_pk}/rules", payload)
+        )
 
     async def async_create_profile_rules(
         self,
@@ -552,7 +924,7 @@ class ControlDAPIClient:
         ttl: int | None,
         via: str | None = None,
         via_v6: str | None = None,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Create one or more profile rules using the browser-backed contract."""
         payload: dict[str, Any] = {
             "do": action_do,
@@ -569,18 +941,22 @@ class ControlDAPIClient:
             payload["via_v6"] = via_v6
         if ttl is not None:
             payload["ttl"] = ttl
-        await self._async_request("POST", f"/profiles/{profile_pk}/rules", payload)
+        return self._optional_body_mapping(
+            await self._async_request("POST", f"/profiles/{profile_pk}/rules", payload)
+        )
 
     async def async_delete_profile_rules(
         self,
         profile_pk: str,
         hostnames: list[str],
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Delete one or more profile rules using the hostname-list contract."""
-        await self._async_request(
-            "DELETE",
-            f"/profiles/{profile_pk}/rules",
-            {"hostnames": hostnames},
+        return self._optional_body_mapping(
+            await self._async_request(
+                "DELETE",
+                f"/profiles/{profile_pk}/rules",
+                {"hostnames": hostnames},
+            )
         )
 
     async def async_set_profile_group(
@@ -591,7 +967,7 @@ class ControlDAPIClient:
         name: str,
         enabled: bool,
         action_do: int | None,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Update one profile rule folder using the browser-backed group contract."""
         payload: dict[str, Any] = {
             "name": name,
@@ -601,8 +977,10 @@ class ControlDAPIClient:
         }
         if action_do is not None:
             payload["do"] = action_do
-        await self._async_request(
-            "PUT", f"/profiles/{profile_pk}/groups/{group_pk}", payload
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT", f"/profiles/{profile_pk}/groups/{group_pk}", payload
+            )
         )
 
     async def async_set_profile_option(
@@ -612,13 +990,15 @@ class ControlDAPIClient:
         *,
         enabled: bool,
         value: str | None = None,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Update one profile option using the browser-verified option contract."""
         payload: dict[str, Any] = {"status": int(enabled)}
         if value is not None:
             payload["value"] = value
-        await self._async_request(
-            "PUT", f"/profiles/{profile_pk}/options/{option_pk}", payload
+        return self._optional_body_mapping(
+            await self._async_request(
+                "PUT", f"/profiles/{profile_pk}/options/{option_pk}", payload
+            )
         )
 
     async def async_set_profile_default_rule(
@@ -627,12 +1007,14 @@ class ControlDAPIClient:
         *,
         action_do: int,
         via: str | None = None,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Update one profile default rule using the browser-verified contract."""
         payload: dict[str, Any] = {"do": action_do, "status": 1}
         if via is not None:
             payload["via"] = via
-        await self._async_request("PUT", f"/profiles/{profile_pk}/default", payload)
+        return self._optional_body_mapping(
+            await self._async_request("PUT", f"/profiles/{profile_pk}/default", payload)
+        )
 
     async def _async_get_json(self, path: str) -> Any:
         """Perform a GET request and decode JSON safely."""
@@ -658,14 +1040,26 @@ class ControlDAPIClient:
         payload: dict[str, Any] | str | None = None,
         *,
         params: dict[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> Any:
         """Perform an HTTP request against a fully qualified URL."""
+        request_headers = (
+            self._headers if headers is None else {**self._headers, **headers}
+        )
         try:
             async with self._session.request(
-                method, url, headers=self._headers, json=payload, params=params
+                method, url, headers=request_headers, json=payload, params=params
             ) as response:
                 if response.status in (401, 403):
                     raise ControlDApiAuthError("Control D authentication failed")
+                if response.status == 429:
+                    raise ControlDApiRateLimitError(
+                        "Control D rate limited the request"
+                    )
+                if response.status == 503:
+                    raise ControlDApiMaintenanceError(
+                        "Control D is in maintenance mode"
+                    )
                 if response.status >= 400:
                     raise ControlDApiResponseError(
                         f"Control D returned unexpected status {response.status}"
@@ -732,6 +1126,55 @@ class ControlDAPIClient:
     def _optional_string(value: Any) -> str | None:
         """Return an optional string field from a payload."""
         return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def _optional_int_value(value: Any) -> int | None:
+        """Return an optional integer field from a payload.
+
+        Control D returns several documented fields as integers even when their
+        names read like strings, so a string-only parse silently drops them.
+        Booleans are rejected because they are not the documented type.
+        """
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.lstrip("-").isdigit():
+            return int(value)
+        return None
+
+    @staticmethod
+    def _optional_int(value: Any, default: int) -> int:
+        """Return an optional integer field from a payload."""
+        if isinstance(value, bool):
+            return default
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.lstrip("-").isdigit():
+            return int(value)
+        return default
+
+    @classmethod
+    def _optional_body_mapping(cls, payload: Any) -> dict[str, Any] | None:
+        """Return a normalized response body mapping when one is present."""
+        if not isinstance(payload, dict):
+            return None
+        body = payload.get("body")
+        if isinstance(body, dict):
+            return cast(dict[str, Any], body)
+        return None
+
+    @classmethod
+    def _normalize_mapping_rows(cls, rows: list[Any]) -> list[dict[str, Any]]:
+        """Normalize a list of records into mapping rows."""
+        normalized_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ControlDApiResponseError(
+                    "Control D response records must contain only mappings"
+                )
+            normalized_rows.append(row)
+        return normalized_rows
 
     @classmethod
     def _extract_stats_endpoint(cls, payload: dict[str, Any]) -> str | None:

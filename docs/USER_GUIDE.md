@@ -174,6 +174,9 @@ This form controls the active refresh cadence.
 The integration uses one polling path for inventory, profile detail, endpoint
 activity, and analytics refresh. Separate polling controls are not exposed.
 
+This form also carries the AI assistant (MCP) tool access setting described in
+AI assistants and MCP tools.
+
 ## Diagnostics and availability
 
 Home Assistant diagnostics for a Control D config entry include redacted entry
@@ -527,20 +530,43 @@ last activity time.
 
 The integration registers these Home Assistant services:
 
+- `controld_manager.create_endpoint`
 - `controld_manager.create_rule`
+- `controld_manager.delete_client`
+- `controld_manager.delete_endpoint`
 - `controld_manager.delete_rule`
+- `controld_manager.delete_service`
 - `controld_manager.disable_profile`
 - `controld_manager.enable_profile`
+- `controld_manager.get_account_overview`
+- `controld_manager.get_activity_log`
+- `controld_manager.get_catalog` (its `catalog_type` accepts `filters`,
+`services`, `rules`, `profile_options`, `default_rule`, and
+`redirect_locations`; the last is account-wide and lists the redirect
+destinations a redirect rule or service may target)
+- `controld_manager.get_inventory`
 - `controld_manager.set_client_alias`
 - `controld_manager.clear_client_alias`
 - `controld_manager.rename_endpoint`
 - `controld_manager.set_endpoint_analytics_logging`
+- `controld_manager.set_endpoint_description`
+- `controld_manager.set_endpoint_profile`
 - `controld_manager.set_default_rule_state`
 - `controld_manager.set_filter_state`
 - `controld_manager.set_option_state`
 - `controld_manager.set_rule_state`
 - `controld_manager.set_service_state`
-- `controld_manager.get_catalog`
+- `controld_manager.test_domain`
+
+The `get_*` and `test_domain` services are read-only response services. They do
+not change anything and return their data as a service response, which is
+intended for use from automations, scripts, and AI assistant tools rather than
+from the Home Assistant user interface.
+
+Every other service in that list changes Control D policy, so it requires an
+**administrator**. A non-admin user calling one of them is rejected. Automations
+and scripts are unaffected, because the check only applies when a user is
+attached to the call.
 
 ### Client alias services
 
@@ -628,6 +654,123 @@ Manual examples:
 	`config_entry_id: "a1b2c3d4e5f6g7h8i9j0"`
 	`endpoint_name: ["Cabin Tablet"]`
 	`mode: "Some"`
+
+### Endpoint profile service
+
+`controld_manager.set_endpoint_profile` attaches the profile an endpoint enforces,
+and optionally a second one. This is what moves a device between policies.
+
+- select targets with `endpoint_id` (preferred; ids are unique) or
+    `endpoint_name`
+- `profile_id` sets the **primary** profile, and accepts a profile id or name
+- `profile_id2` sets the **secondary** profile
+- `clear_profile2: true` detaches the secondary, leaving only the primary
+- the primary **cannot be cleared**: every endpoint always enforces exactly one
+    profile, and Control D rejects an attempt to empty the primary. To make an
+    endpoint permissive, assign a permissive profile instead
+- when two profiles are attached the rule engine **merges** them before matching
+    rather than applying them in order, so a custom rule in the secondary can
+    override a filter in the primary. That is how a shared baseline plus a
+    device-specific policy is built
+- changing a profile changes what the endpoint blocks, so confirm the target
+
+Manual examples:
+
+- move one endpoint onto a different policy:
+        `endpoint_id: ["461wtt4eyr"]`
+        `profile_id: "962691chipwa5"`
+- enforce a shared baseline as well, without changing the primary:
+        `endpoint_id: ["461wtt4eyr"]`
+        `profile_id2: "886818chik7jg"`
+- detach the secondary again:
+        `endpoint_id: ["461wtt4eyr"]`
+        `clear_profile2: true`
+
+### Endpoint description service
+
+`controld_manager.set_endpoint_description` sets the free-text note an endpoint
+carries, and an **empty string clears it**.
+
+- select targets with `endpoint_id` (preferred) or `endpoint_name`
+- the note changes no behaviour; it is for recording what a device is or why it
+    is configured a certain way
+- the current value is reported by `get_inventory` under `advanced.description`
+
+### Create endpoint service
+
+`controld_manager.create_endpoint` adds one endpoint, which is a DNS resolver that
+enforces a profile.
+
+- `endpoint_name` is required and must be **unique**; Control D rejects a
+    duplicate
+- `profile_id` is required, because an endpoint always enforces exactly one
+    profile
+- `description` and `icon` are optional, as is `mode` for the initial analytics
+    logging level
+- the new endpoint's id is assigned by Control D and is only known after the call
+- a new endpoint reports **Pending** until it first sends queries, which is
+    normal and clears on its own
+
+### Delete endpoint service
+
+`controld_manager.delete_endpoint` permanently removes one or more endpoints.
+
+**This is destructive and cannot be undone.** Deleting an endpoint removes the
+resolver itself and the records kept against it, so anything resolving through it
+stops being filtered. Deleting a router endpoint is the widest case: it enforces a
+profile for a whole network segment, so every device behind it loses that policy
+at once.
+
+- select targets with `endpoint_id` (preferred) or `endpoint_name`
+- if you only want to stop filtering for a while, assign a permissive profile
+    with `set_endpoint_profile` instead — the endpoint and its history stay intact
+- requires an **administrator**
+
+### Delete client service
+
+`controld_manager.delete_client` permanently removes client rows, and by default
+their stored query history with them.
+
+Read this before using it, because the effect is usually not what it sounds like:
+
+- a client row exists because Control D **observed** that client's traffic, so it
+    is derived rather than configured. For an ordinary client the row **comes
+    back** the next time the device is online, so the removal is not durable
+- the only things about a client that outlive its traffic are its **alias** and a
+    **policy assignment**, and this service changes neither
+- where deletion does stick is a client that will never recur. A device using a
+    **rotating private MAC** is the everyday case: each rotation arrives under a
+    new address and creates its own row that can never be seen again
+- it is therefore a **history-hygiene** tool, not a device-retirement tool, and
+    on a network with rotating private MACs it is a recurring chore rather than a
+    one-off fix
+
+- select targets with `client_id` (preferred; it is the only selector guaranteed
+    to match one client), or by MAC, hostname, name, or IP
+- a MAC or a hostname such as `watch` can match a long list, so confirm the set
+    with `get_inventory` first
+- `delete_history: false` removes only the rows and keeps their history
+- requires an **administrator**
+
+### Delete service
+
+`controld_manager.delete_service` removes a configured service from a profile
+entirely, so the profile no longer carries a row for it.
+
+This is **not** the same as setting the service to Off with
+`controld_manager.set_service_state`:
+
+- **Off** switches the service off but leaves it configured on the profile, and
+	you can switch it back on at any time.
+- **Delete** removes the configuration, so using the service again means adding
+	it back.
+
+Prefer Off when you only want to stop a service applying, because it keeps the
+configuration. Delete only when the service should not remain configured.
+
+Targeting follows the same rules as the other services: select a profile by ID or
+name, and a service by ID or name. Deleting is reversible, because setting the
+service again on the profile adds it back.
 
 ### Enable and disable profile services
 
@@ -1015,6 +1158,8 @@ copyable catalog for one of these Control D data families:
 - `services`
 - `rules`
 - `profile_options`
+- `default_rule`
+- `redirect_locations`
 
 Targeting rules:
 
@@ -1025,11 +1170,16 @@ Targeting rules:
 	selected config entry scope
 - `config_entry_id` and `config_entry_name` remain optional multi-entry
 	disambiguators, with `config_entry_id` taking precedence
-
-The service response includes:
-
+- `search` is optional and filters the catalog to rows whose own name or id
+	contains the text, ignoring case. Use it to find one named entry: the service
+	catalog holds over a thousand rows while `limit` caps at 500, so without a
+	search a named service cannot be located. Put the name in the search box, for
+	example `apple`, rather than trying to page through the list
+- `profile_name` is optional and lets you scope the catalog without knowing the
+  profile PK. `profile_id` wins if you supply both
 - `profiles` for the selected scope
 - typed `items` for the requested catalog family
+- `item_count`, which reports how many rows matched after any `search`
 - a plain-text `text` block that is easy to copy into service calls or notes
 
 Manual example:
@@ -1037,6 +1187,114 @@ Manual example:
 - return the available service catalog for one managed profile:
 	`catalog_type: services`
 	`profile_name: ["Primary"]`
+
+- find one named service in a catalog too large to list:
+	`catalog_type: services`
+	`search: apple`
+
+### Selecting profiles and endpoints by name
+
+Every service that acts on a profile or an endpoint, and every read that can be
+scoped to one, accepts either the Control D id or the display name:
+
+| Object | By id | By name |
+| --- | --- | --- |
+| Profile | `profile_id` | `profile_name` |
+| Endpoint | `endpoint_id` | `endpoint_name` |
+| Client | `client_id` | `endpoint_mac`, `endpoint_hostname`, `endpoint_ip` |
+| Filter | `filter_id` | `filter_name` |
+| Service | `service_id` | `service_name` |
+| Option | `option_id` | `option_name` |
+| Rule group | `rule_group_id` | `rule_group_name` |
+
+Names are convenient but not unique, so:
+
+- An explicit id always wins when both are supplied.
+- A name that matches nothing is an error, not an empty result.
+- A name that matches more than one object is an error, not an arbitrary pick.
+  Rename the duplicate or use the id.
+
+The one exception is `create_endpoint`, where `endpoint_name` is the name of the
+new endpoint to create rather than a way to select an existing one.
+
+### Account overview service
+
+`controld_manager.get_account_overview` is a read-only response service that
+returns high-level account counts and block statistics for the selected Control D
+scope, in one call.
+
+Targeting rules:
+
+- `config_entry_id` and `config_entry_name` are optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+
+### Inventory service
+
+`controld_manager.get_inventory` is a read-only response service that returns the
+Control D account topology: profiles and endpoints, plus clients at full detail.
+
+Fields:
+
+- `detail: summary` (default) returns identifying fields only
+- `detail: full` adds per-row detail and includes clients
+- `client_limit` caps how many clients are returned per endpoint. Default `100`,
+	range 1 to 500
+- `profile_id` and `endpoint_id` optionally narrow the result to one profile or
+	one endpoint
+- `config_entry_id` and `config_entry_name` are optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+
+Clients require DNS-over-HTTPS relay from the endpoint to be visible.
+
+### Activity log service
+
+`controld_manager.get_activity_log` is a read-only response service that returns
+individual DNS queries for a recent window, including what caused each action.
+This is record-level data, not aggregates.
+
+Fields:
+
+- `window` selects the lookback window: `15m`, `1h` (default), `6h`, `24h`,
+	`7d`, or `30d`
+- `search` is a free-text search over the records
+- `query_action` filters by outcome: `blocked`, `bypassed`, `redirected`, or
+	`failed`
+- `trigger` filters by what caused the action: `default`, `grule`, `filter`,
+	`service`, `custom`, or `rebind`
+- `trigger_value` narrows to a specific trigger target
+- `profile_id`, `endpoint_id`, and `client_id` narrow the scope
+- `protocol`, `source_country`, `destination_country`, `source_isp`, `source_asn`,
+	`status_code`, and `record_type` filter on record attributes
+- `page` (default `0`) and `page_size` (default `50`, range 1 to 500) page through
+	a larger result
+- `sort_order` is `desc` (default) or `asc`
+
+Results are capped and paged. A capped result is never presented as complete, and
+no total is claimed because the surface does not provide one.
+
+Retention is a user setting in your Control D account and is not readable by the
+integration. An empty result can mean no matching traffic, a window older than
+your retention, or logging being disabled. Those cases cannot be told apart.
+
+This is the service to use for why a domain was blocked, because each record
+carries the trigger that caused the action.
+
+### Domain test service
+
+`controld_manager.test_domain` is a read-only response service that reports the
+policy verdict for one domain on one endpoint, without waiting for that traffic
+to occur.
+
+Fields:
+
+- `endpoint_id` is required, from the inventory
+- `domain` is required
+- `record_type` is optional and defaults to `A`
+- `config_entry_id` and `config_entry_name` are optional multi-entry
+	disambiguators, with `config_entry_id` taking precedence
+
+The response names the verdict and the source that produced it, so it answers why
+a domain would be blocked. The lookup does not add a record to your activity log.
 
 ## Runtime behavior
 
@@ -1047,6 +1305,114 @@ That runtime data is refreshed on poll and reused by entities, managers, and
 service handlers while Home Assistant is running. It is not intended to be
 persistent state across Home Assistant restarts.
 
+## AI assistants and MCP tools
+
+Home Assistant can hand this integration's data to a connected AI assistant or
+MCP client, such as the Home Assistant voice assistant pipeline or a desktop MCP
+client. The integration exposes a set of tools the assistant can call to read
+your Control D configuration and, if you allow it, to change it.
+
+### Requirements
+
+This feature needs **Home Assistant Core 2026.10 or newer**. On older versions
+the integration still works normally; it simply registers no tools and the
+setting described below is not shown in the options flow.
+
+### The access tiers
+
+One option, AI assistant (MCP) tool access, decides what the assistant can
+reach. It is independent of the profile exposure settings above: exposing nothing
+to Home Assistant entities does not restrict an assistant, and vice versa.
+
+| Tier | What an assistant can do |
+| --- | --- |
+| Off | Nothing. No tools are registered. |
+| Summary only (default) | Read account-wide counts and block statistics, plus one row per profile with the profile's name, endpoint count, paused state, and block counts. |
+| Read only | Read everything: profiles, endpoints, clients, filters, services, options, rules, the activity log, and DNS lookups for a specific domain. |
+| Read and control | Everything above, plus reversible changes such as enabling or disabling a profile, filter, service, option, or rule, and renaming endpoints and clients. |
+| Full | Everything above, plus destructive actions. Today this means deleting custom rules. |
+
+The default is Summary only. An assistant cannot reach a tier you did not select,
+including through a tool that names a lower tier: a control tool reports that the
+configured tier does not permit the action rather than performing it.
+
+### What each tier sends
+
+Every tier above Off sends profile names, because the account overview lists one
+row per profile. Tiers above Summary only additionally send identifying detail to
+whichever model the assistant uses. That includes:
+
+- endpoint names and endpoint hardware identifiers
+- client names and IP addresses
+- domains and destination addresses from the activity log
+
+Summary only is the narrowest tier. It sends counts and the per-profile row
+described above, and stops there: no endpoint or client detail, and no
+query-level analytics.
+
+**Changing anything also requires an administrator.** Every write service is
+registered as an admin-only service, so a non-admin user is rejected by the
+service itself, independent of the tier. Automations and scripts are unaffected,
+because the admin check only applies when a user is attached to the call.
+
+Treat Read and control and Full as consequential tiers: the assistant can change
+real policy, and a mistake affects every device on the affected profile. Prefer
+timed changes and leave the tier at Summary only or Off unless you specifically
+want the assistant to make changes.
+
+### Enabling it
+
+1. Open the integration options and choose Integration settings.
+2. Set AI assistant (MCP) tool access to the tier you want.
+3. Save, then reload the integration so the tools re-register.
+
+Reducing the tier takes effect on the same reload. Removed tools are no longer
+advertised to the assistant.
+
+### What it can answer
+
+The tools are grouped by how a person asks, and orientation tools are available
+at every tier above Off:
+
+- an account overview with per-profile counts
+- an inventory of profiles, endpoints, clients, filters, services, options, and
+  rules
+- recent activity, including which rule or filter blocked a request and why
+- a DNS lookup for a single domain on a single endpoint, which does not add a
+  record to your activity log
+- the available filters, services, options, and rule folders on a profile
+
+A common question is why a domain was blocked. The assistant answers it by
+looking the domain up, then reading the activity log for that domain, then
+reading the policy that matched.
+
+### Retention
+
+Activity log and analytics retention is a **user setting in your Control D
+account**, and the integration cannot read its current value. The integration
+reports the documented maximums: about 33 days for the activity log and up to
+about a year for aggregated statistics. Your account may keep less, and activity
+logging may be turned off entirely.
+
+An empty activity result therefore does not prove there was no traffic. It can
+mean no matching traffic, a window older than your retention, or logging being
+disabled, and the integration cannot tell these apart. Extend the window before
+concluding that nothing happened.
+
+### Cost and size
+
+There is no caching layer. A typical page of 100 activity records is roughly
+47 KB, so read tools default to a short window and a small page size, and the
+assistant is expected to narrow the query rather than pull everything. A capped
+result is always labeled as capped; the integration never reports a truncated
+list as complete and never claims a total it does not have.
+
+### Related documentation
+
+`docs/MCP_TOOL_REFERENCE.md` documents the full tool surface, response shapes,
+and annotations. `docs/ARCHITECTURE.md` describes the layer rules the tool layer
+follows.
+
 ## Limitations
 
 - endpoint discovery still treats the Control D devices inventory as the
@@ -1056,6 +1422,15 @@ persistent state across Home Assistant restarts.
 - profile analytics and endpoint analytics refresh intervals are configured, but
 	the integration centers runtime behavior on the configuration inventory
 	refresh path
+- assistant tools report an action as applied even when it was already in that
+	state for endpoint analytics logging only, because the runtime inventory
+	does not carry each endpoint's current logging level. Every other control
+	tool checks first and reports already_in_state
+- assistant tools offer no undo for endpoint analytics logging changes or for
+	deleting a custom rule. Deleting is permanent, and the endpoint logging level
+	is not readable, so there is no previous value to restore
+- an assistant undo is a list of calls, one per affected target, because a
+	change that spans several targets usually needs several calls to reverse
 
 ## Troubleshooting
 
@@ -1081,3 +1456,10 @@ persistent state across Home Assistant restarts.
 	state for newly created entities and basic cleanup when exposure is removed,
 	but manual registry changes may still require you to re-enable or disable
 	entities yourself.
+- If no assistant tools appear, check that Home Assistant is 2026.10 or newer
+	and that AI assistant (MCP) tool access is not set to Off. After changing the
+	tier, reload the integration.
+- If an assistant reports that a change is not permitted, the configured tier is
+	lower than the tool the assistant tried to use. Raise the tier and reload.
+- If an assistant reports no activity for an endpoint, verify that endpoint's
+	analytics logging is not set to None before treating the result as no traffic.

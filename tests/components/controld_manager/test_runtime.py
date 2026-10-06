@@ -41,7 +41,9 @@ from custom_components.controld_manager.managers import (
 )
 from custom_components.controld_manager.models import (
     ControlDAccountAnalytics,
+    ControlDAttachedProfile,
     ControlDClientAliasTarget,
+    ControlDEndpointSummary,
     ControlDInventoryPayload,
     ControlDOptions,
     ControlDProfileDetailPayload,
@@ -280,6 +282,7 @@ def test_integration_manager_builds_normalized_registry() -> None:
     assert registry.endpoints["router-1"].associated_client_count == 1
     assert registry.endpoints["device-1"].associated_client_count == 0
     assert registry.endpoints["device-1"].parent_device_id == "router-1"
+    assert registry.endpoints["device-1"].parent_client_id is None
     assert registry.endpoint_inventory.discovered_endpoint_count == 2
     assert registry.endpoint_inventory.router_client_count == 1
     assert registry.endpoint_inventory.protected_endpoint_count == 3
@@ -359,6 +362,7 @@ def test_integration_manager_builds_client_alias_targets() -> None:
         client_ip_address="192.168.202.244",
         client_mac_address="50:eb:71:b6:78:3a",
     )
+    assert registry.endpoints["device-1"].parent_client_id == "2476a6ca95d7"
 
 
 def test_integration_manager_builds_analytics_only_client_alias_targets() -> None:
@@ -550,6 +554,52 @@ def test_endpoint_manager_rejects_ambiguous_client_alias_targets() -> None:
             parent_endpoint_name="Firewalla-VLAN60",
         ).client_id
         == "client-1"
+    )
+
+
+def test_endpoint_manager_resolves_a_client_id_shared_mac_pair_unambiguously() -> None:
+    """Two clients under one endpoint share a MAC, so only the client id selects one."""
+    endpoint_manager = EndpointManager()
+    shared = "3c:5c:c4:07:7c:a3"
+
+    def _target(client_id: str) -> ControlDClientAliasTarget:
+        return ControlDClientAliasTarget(
+            target_key=build_client_alias_target_key("router-1", client_id),
+            source_kind="analytics_client",
+            endpoint_device_id=None,
+            endpoint_pk=None,
+            endpoint_name=None,
+            owning_profile_pk=None,
+            parent_endpoint_device_id="router-1",
+            parent_endpoint_name="Firewalla-VLAN60",
+            client_id=client_id,
+            client_hostname="KadensSpyPhone",
+            client_mac_address=shared,
+        )
+
+    runtime = cast(
+        Any,
+        SimpleNamespace(
+            registry=SimpleNamespace(
+                client_alias_targets={
+                    build_client_alias_target_key("router-1", "04070f91bf7d"): (
+                        _target("04070f91bf7d")
+                    ),
+                    build_client_alias_target_key("router-1", "d18cc9582f25"): (
+                        _target("d18cc9582f25")
+                    ),
+                }
+            )
+        ),
+    )
+    endpoint_manager.attach_runtime(runtime)
+
+    with pytest.raises(ValueError, match="Ambiguous"):
+        endpoint_manager.resolve_client_alias_target(endpoint_mac=shared)
+
+    assert (
+        endpoint_manager.resolve_client_alias_target(client_id="d18cc9582f25").client_id
+        == "d18cc9582f25"
     )
 
 
@@ -1988,3 +2038,259 @@ async def test_entity_manager_skips_remove_for_unattached_entity(hass) -> None:
 
     unattached_entity.async_remove.assert_not_awaited()
     assert entity_manager._registered_platforms["switch"].live_entities == {}
+
+
+def _client_delete_runtime(
+    targets: dict[str, ControlDClientAliasTarget],
+    *,
+    deleted_count: int,
+) -> SimpleNamespace:
+    """Return a runtime stub whose client records the destructive deletes.
+
+    The stubbed methods return what the real client methods return: the unwrapped
+    `body`, not the outer envelope.
+    """
+    return SimpleNamespace(
+        client=SimpleNamespace(
+            async_delete_analytics_clients=AsyncMock(
+                return_value={"deletedCount": deleted_count, "deletedClients": []}
+            ),
+            async_delete_analytics_client_history=AsyncMock(
+                return_value={"success": True}
+            ),
+        ),
+        registry=SimpleNamespace(
+            user=SimpleNamespace(stats_endpoint="america"),
+            client_alias_targets=dict(targets),
+        ),
+        active_coordinator=SimpleNamespace(schedule_write_verification=lambda: None),
+    )
+
+
+def _delete_target(parent: str, client_id: str) -> ControlDClientAliasTarget:
+    """Return one analytics-only client alias target under a parent endpoint."""
+    return ControlDClientAliasTarget(
+        target_key=build_client_alias_target_key(parent, client_id),
+        source_kind="analytics_client",
+        endpoint_device_id=None,
+        endpoint_pk=None,
+        endpoint_name=None,
+        owning_profile_pk=None,
+        parent_endpoint_device_id=parent,
+        parent_endpoint_name="Firewalla-VLAN60",
+        client_id=client_id,
+    )
+
+
+async def test_endpoint_manager_deletes_clients_grouped_by_parent() -> None:
+    """One verb call per parent, the API's own count returned, rows dropped.
+
+    The verb takes a parent with many client ids, so grouping keeps the call count
+    at the number of parents instead of the number of clients.
+    """
+    first = _delete_target("router-1", "c-1")
+    second = _delete_target("router-1", "c-2")
+    third = _delete_target("router-2", "c-3")
+    runtime = _client_delete_runtime(
+        {target.target_key: target for target in (first, second, third)},
+        deleted_count=2,
+    )
+    endpoint_manager = EndpointManager()
+    endpoint_manager.attach_runtime(cast(Any, runtime))
+
+    deleted = await endpoint_manager.async_delete_clients(
+        (first, second, third), delete_history=True
+    )
+
+    assert deleted == 4  # two parents x deletedCount 2
+    assert runtime.client.async_delete_analytics_clients.await_count == 2
+    assert runtime.client.async_delete_analytics_client_history.await_count == 2
+    assert runtime.registry.client_alias_targets == {}
+    assert runtime.client.async_delete_analytics_clients.await_args_list[0].kwargs[
+        "client_ids"
+    ] == ["c-1", "c-2"]
+
+
+async def test_endpoint_manager_keeps_history_when_asked_to() -> None:
+    """delete_history=False removes the rows and leaves the history alone."""
+    target = _delete_target("router-1", "c-1")
+    runtime = _client_delete_runtime({target.target_key: target}, deleted_count=1)
+    endpoint_manager = EndpointManager()
+    endpoint_manager.attach_runtime(cast(Any, runtime))
+
+    deleted = await endpoint_manager.async_delete_clients(
+        (target,), delete_history=False
+    )
+
+    assert deleted == 1
+    runtime.client.async_delete_analytics_clients.assert_awaited_once()
+    runtime.client.async_delete_analytics_client_history.assert_not_awaited()
+    assert runtime.registry.client_alias_targets == {}
+
+
+def _profile_write_runtime(
+    endpoint: ControlDEndpointSummary,
+) -> SimpleNamespace:
+    """Return a runtime stub whose registry holds one endpoint."""
+    return SimpleNamespace(
+        client=SimpleNamespace(
+            async_set_endpoint_profile=AsyncMock(return_value=None),
+            async_clear_endpoint_secondary_profile=AsyncMock(return_value=None),
+        ),
+        registry=SimpleNamespace(
+            user=SimpleNamespace(stats_endpoint="america"),
+            endpoints={endpoint.device_id: endpoint},
+            profiles={},
+        ),
+        active_coordinator=SimpleNamespace(schedule_write_verification=lambda: None),
+    )
+
+
+async def test_a_profile_write_updates_the_registry_immediately() -> None:
+    """A following call must read the value this one just wrote.
+
+    The pre-check, the no-op check, and the undo all read the runtime registry,
+    so leaving it stale until the next refresh makes a back-to-back write report
+    state that is no longer true -- and derive an undo from it.
+    """
+    endpoint = ControlDEndpointSummary(
+        device_id="ep-1",
+        endpoint_pk="ep-1",
+        name="Endpoint-Test",
+        attached_profiles=(ControlDAttachedProfile(profile_pk="primary-a"),),
+    )
+    runtime = _profile_write_runtime(endpoint)
+    manager = EndpointManager()
+    manager.attach_runtime(cast(Any, runtime))
+
+    # Attach a secondary.
+    await manager.async_set_endpoint_profiles(
+        (endpoint,), profile_pk=None, profile2_pk="secondary-b", clear_profile2=False
+    )
+    assert runtime.registry.endpoints["ep-1"].secondary_profile_pk == "secondary-b"
+
+    # Replace it, reading the registry as the next tool call would. The value
+    # must be the one just written, not the one from before the first write.
+    current = runtime.registry.endpoints["ep-1"]
+    assert current.secondary_profile_pk == "secondary-b"
+    await manager.async_set_endpoint_profiles(
+        (current,), profile_pk=None, profile2_pk="secondary-c", clear_profile2=False
+    )
+    assert runtime.registry.endpoints["ep-1"].secondary_profile_pk == "secondary-c"
+
+    # Clearing removes it, and the primary is untouched throughout.
+    await manager.async_set_endpoint_profiles(
+        (runtime.registry.endpoints["ep-1"],),
+        profile_pk=None,
+        profile2_pk=None,
+        clear_profile2=True,
+    )
+    cleared = runtime.registry.endpoints["ep-1"]
+    assert cleared.secondary_profile_pk is None
+    assert cleared.owning_profile_pk == "primary-a"
+
+
+async def test_a_primary_profile_write_updates_the_registry_immediately() -> None:
+    """A primary change is reflected without waiting for the refresh."""
+    endpoint = ControlDEndpointSummary(
+        device_id="ep-2",
+        endpoint_pk="ep-2",
+        name="Endpoint-Test",
+        attached_profiles=(ControlDAttachedProfile(profile_pk="primary-a"),),
+    )
+    runtime = _profile_write_runtime(endpoint)
+    manager = EndpointManager()
+    manager.attach_runtime(cast(Any, runtime))
+
+    await manager.async_set_endpoint_profiles(
+        (endpoint,), profile_pk="primary-b", profile2_pk=None, clear_profile2=False
+    )
+
+    assert runtime.registry.endpoints["ep-2"].owning_profile_pk == "primary-b"
+
+
+async def test_a_description_write_updates_the_registry_immediately() -> None:
+    """The new note is readable by the next call rather than after a refresh."""
+    endpoint = ControlDEndpointSummary(
+        device_id="ep-3",
+        endpoint_pk="ep-3",
+        name="Endpoint-Test",
+        attached_profiles=(ControlDAttachedProfile(profile_pk="primary-a"),),
+        description="before",
+    )
+    runtime = SimpleNamespace(
+        client=SimpleNamespace(
+            async_set_endpoint_description=AsyncMock(return_value=None)
+        ),
+        registry=SimpleNamespace(endpoints={endpoint.device_id: endpoint}),
+        active_coordinator=SimpleNamespace(schedule_write_verification=lambda: None),
+    )
+    manager = EndpointManager()
+    manager.attach_runtime(cast(Any, runtime))
+
+    await manager.async_set_endpoint_descriptions((endpoint,), "after")
+    assert runtime.registry.endpoints["ep-3"].description == "after"
+
+    # An empty note clears it, matching what the API stores.
+    await manager.async_set_endpoint_descriptions(
+        (runtime.registry.endpoints["ep-3"],), ""
+    )
+    assert runtime.registry.endpoints["ep-3"].description is None
+
+
+async def test_a_primary_write_keeps_the_secondary_and_the_list_agreeing() -> None:
+    """The enforced-profile list is the one stored fact, so it cannot drift.
+
+    `owning_profile_pk` and `secondary_profile_pk` are read from that list, so a
+    write has to move the list itself. Updating only the scalars left it stale,
+    which made one endpoint row report two different primaries and made
+    profile-filtered reads miss the profile that was just attached.
+    """
+    endpoint = ControlDEndpointSummary(
+        device_id="ep-4",
+        endpoint_pk="ep-4",
+        name="Endpoint-Test",
+        attached_profiles=(
+            ControlDAttachedProfile(profile_pk="primary-a"),
+            ControlDAttachedProfile(profile_pk="secondary-a"),
+        ),
+    )
+    runtime = _profile_write_runtime(endpoint)
+    manager = EndpointManager()
+    manager.attach_runtime(cast(Any, runtime))
+
+    await manager.async_set_endpoint_profiles(
+        (endpoint,), profile_pk="primary-b", profile2_pk=None, clear_profile2=False
+    )
+
+    written = runtime.registry.endpoints["ep-4"]
+    assert written.owning_profile_pk == "primary-b"
+    # Replacing the primary must not disturb the second slot.
+    assert written.secondary_profile_pk == "secondary-a"
+    assert [entry.profile_pk for entry in written.attached_profiles] == [
+        "primary-b",
+        "secondary-a",
+    ]
+
+
+async def test_a_profile_name_is_resolved_from_the_registry() -> None:
+    """The list carries names too, so a row needs no second lookup to show one."""
+    endpoint = ControlDEndpointSummary(
+        device_id="ep-5",
+        endpoint_pk="ep-5",
+        name="Endpoint-Test",
+        attached_profiles=(ControlDAttachedProfile(profile_pk="primary-a"),),
+    )
+    runtime = _profile_write_runtime(endpoint)
+    runtime.registry.profiles = {
+        "primary-b": SimpleNamespace(profile_pk="primary-b", name="Kids")
+    }
+    manager = EndpointManager()
+    manager.attach_runtime(cast(Any, runtime))
+
+    await manager.async_set_endpoint_profiles(
+        (endpoint,), profile_pk="primary-b", profile2_pk=None, clear_profile2=False
+    )
+
+    written = runtime.registry.endpoints["ep-5"]
+    assert written.attached_profiles[0].name == "Kids"

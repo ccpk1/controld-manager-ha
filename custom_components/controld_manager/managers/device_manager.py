@@ -71,6 +71,16 @@ class DeviceManager(BaseManager):
         """Return the currently managed profile identifiers."""
         return set(self._profile_device_ids)
 
+    @property
+    def profile_device_ids(self) -> dict[str, str]:
+        """Return the Control D profile PK to Home Assistant device id map.
+
+        The profile services target a Home Assistant device id, while the
+        Control D API and every read surface use the profile PK. Callers that are
+        handed a PK need this map to address a profile through those services.
+        """
+        return dict(self._profile_device_ids)
+
     def profile_identifier(self, profile_pk: str) -> tuple[str, str]:
         """Return the profile device identifier."""
         return (DOMAIN, f"instance::{self.runtime.instance_id}::profile::{profile_pk}")

@@ -7,9 +7,17 @@ import logging
 import re
 from typing import Any
 
+from homeassistant.util import dt as dt_util
 from homeassistant.util.json import JsonValueType
 
+from ..const import (
+    ACTIVITY_ACTION_CODES,
+    ACTIVITY_ACTION_LABELS,
+    DETAIL_FULL,
+    VERDICT_SOURCE_LABELS,
+)
 from ..models import (
+    ControlDAccountAnalytics,
     ControlDDefaultRule,
     ControlDFilter,
     ControlDFilterLevel,
@@ -25,6 +33,8 @@ from ..models import (
     ControlDUser,
     build_rule_identity,
 )
+from ..utils.time_window import window_to_timedelta
+from ..utils.truncation import build_limit_meta, build_page_meta
 from .base_manager import BaseManager
 from .device_manager import DeviceManager
 from .endpoint_manager import EndpointManager
@@ -32,6 +42,45 @@ from .entity_manager import EntityManager
 from .profile_manager import ProfileManager
 
 LOGGER = logging.getLogger(__name__)
+
+# Catalog rows match on their own names and ids. The profile columns are
+# excluded so that searching for a service cannot match through a profile name
+# and return every row on that profile.
+_CATALOG_SEARCH_EXCLUDED_KEYS = frozenset({"profile_id", "profile_name"})
+
+# An endpoint enforces its primary profile in the first slot and its optional
+# second in the next. Beyond that Control D defines nothing, so any further entry
+# is reported as an additional enforced profile rather than given a wrong name.
+_PROFILE_SLOTS: tuple[str, ...] = ("primary", "secondary")
+
+
+def _profile_slot(index: int) -> str:
+    """Return the slot name for one enforced profile by its position."""
+    if index < len(_PROFILE_SLOTS):
+        return _PROFILE_SLOTS[index]
+    return "additional"
+
+
+def _filter_catalog_items(
+    items: list[JsonValueType], search: str
+) -> list[JsonValueType]:
+    """Return the catalog rows whose own values contain `search`."""
+    needle = search.casefold()
+    matched: list[JsonValueType] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if any(
+            needle in str(value).casefold()
+            for key, value in item.items()
+            if key not in _CATALOG_SEARCH_EXCLUDED_KEYS
+        ):
+            matched.append(item)
+    return matched
+
+
+class ControlDIntegrationError(Exception):
+    """Raised when a required runtime input for a read payload is unavailable."""
 
 
 class IntegrationManager(BaseManager):
@@ -279,12 +328,22 @@ class IntegrationManager(BaseManager):
         config_entry_id: str,
         catalog_type: str,
         profile_pks: frozenset[str],
+        limit: int,
+        search: str | None = None,
     ) -> dict[str, JsonValueType]:
-        """Build one service response payload for a catalog request."""
+        """Build one service response payload for a catalog request.
+
+        `search` exists because a catalog can be far larger than any one page:
+        the service catalog alone runs past a thousand rows while `limit` caps
+        at 500, so without a filter a named service is simply unreachable.
+        """
         profile_rows: list[JsonValueType] = [
             {
                 "profile_id": profile_pk,
-                "profile_name": self.runtime.registry.profiles[profile_pk].name,
+                # Names resolve through the one helper rather than a direct
+                # registry read, so the envelope and the rows below it cannot
+                # disagree about what a profile is called.
+                "profile_name": self._profile_name(profile_pk),
             }
             for profile_pk in self._sorted_profile_pks(profile_pks)
             if profile_pk in self.runtime.registry.profiles
@@ -296,16 +355,451 @@ class IntegrationManager(BaseManager):
             items, text = await self._async_build_service_catalog(profile_pks)
         elif catalog_type == "rules":
             items, text = await self._async_build_rule_catalog(profile_pks)
+        elif catalog_type == "default_rule":
+            items, text = self._build_default_rule_catalog(profile_pks)
+        elif catalog_type == "redirect_locations":
+            items, text = await self._async_build_redirect_location_catalog()
         else:
             items, text = self._build_profile_option_catalog(profile_pks)
+
+        if search:
+            items = _filter_catalog_items(items, search)
 
         return {
             "catalog_type": catalog_type,
             "config_entry_id": config_entry_id,
             "profiles": profile_rows,
-            "items": items,
+            "item_count": len(items),
+            **build_limit_meta(limit, len(items)),
+            "items": items[:limit],
             "text": text,
         }
+
+    def async_build_account_overview_response(
+        self,
+        *,
+        config_entry_id: str,
+    ) -> dict[str, JsonValueType]:
+        """Build the account overview payload.
+
+        Every count here comes from the same registry accessors the account and
+        profile entities use, so the overview can never disagree with a sensor.
+        """
+        registry = self.runtime.registry
+        return {
+            "config_entry_id": config_entry_id,
+            "account": {
+                "region": registry.user.stats_endpoint if registry.user else None,
+                # Control D's 0/1 account flag: 1 enabled, 0 disabled. This is the
+                # same enablement integer the API uses for filters, services,
+                # options, and restrictions, and reads back as 1 on a live
+                # account. The vendor defines no richer code set for accounts.
+                "status": registry.user.status if registry.user else None,
+                "profile_count": registry.profile_count,
+                "endpoint_count": registry.endpoint_count,
+                "discovered_endpoint_count": registry.discovered_endpoint_count,
+                "router_client_count": registry.router_client_count,
+                "analytics": self._serialize_account_analytics(
+                    registry.account_analytics
+                ),
+            },
+            "profiles": self._build_profile_overview_rows(),
+        }
+
+    def _serialize_account_analytics(
+        self, analytics: ControlDAccountAnalytics | None
+    ) -> dict[str, JsonValueType]:
+        """Serialize one analytics window without datetimes."""
+        if analytics is None:
+            return {}
+        return {
+            "total_queries": analytics.total_queries,
+            "blocked_queries": analytics.blocked_queries,
+            "bypassed_queries": analytics.bypassed_queries,
+            "redirected_queries": analytics.redirected_queries,
+            "blocked_queries_ratio": analytics.blocked_queries_ratio,
+            "window_start": (
+                analytics.start_time.isoformat() if analytics.start_time else None
+            ),
+            "window_end": (
+                analytics.end_time.isoformat() if analytics.end_time else None
+            ),
+        }
+
+    def _build_profile_overview_rows(self) -> list[JsonValueType]:
+        """Build one overview row per profile.
+
+        Counts use the same registry accessors as the profile entities, and the
+        analytics values come from the same ``profile_analytics_by_profile``
+        mapping the profile analytics sensors read.
+        """
+        registry = self.runtime.registry
+        rows: list[JsonValueType] = []
+        for profile_pk in self._sorted_profile_pks(frozenset(registry.profiles)):
+            profile = registry.profiles[profile_pk]
+            analytics = registry.profile_analytics_by_profile.get(profile_pk)
+            rows.append(
+                {
+                    "profile_id": profile_pk,
+                    "profile_name": profile.name,
+                    "endpoint_count": (
+                        registry.protected_endpoint_count_for_profile(profile_pk)
+                    ),
+                    "paused": profile.paused_until is not None,
+                    "blocked_queries": (
+                        analytics.blocked_queries if analytics else None
+                    ),
+                    "bypassed_queries": (
+                        analytics.bypassed_queries if analytics else None
+                    ),
+                    "redirected_queries": (
+                        analytics.redirected_queries if analytics else None
+                    ),
+                }
+            )
+        return rows
+
+    def async_build_inventory_response(
+        self,
+        *,
+        config_entry_id: str,
+        detail: str,
+        profile_ids: frozenset[str],
+        endpoint_ids: frozenset[str],
+        client_limit: int,
+    ) -> dict[str, JsonValueType]:
+        """Build the account topology payload.
+
+        Profiles own endpoints. An endpoint is a top-level Control D protected
+        row; a client is something seen under an endpoint. A client that has been
+        turned into its own standalone Device appears in both lists: as an
+        endpoint with its own profile, and as a client of the parent, which is
+        what ``is_standalone_endpoint`` marks.
+
+        Counts come from the same registry accessors the account and profile
+        entities use, so this can never disagree with a sensor.
+        """
+        registry = self.runtime.registry
+        selected_profiles = self._selected_profile_pks(profile_ids)
+
+        profile_rows: list[JsonValueType] = [
+            {
+                "profile_id": profile_pk,
+                "profile_name": registry.profiles[profile_pk].name,
+                "paused": registry.profiles[profile_pk].paused_until is not None,
+                "endpoint_count": registry.protected_endpoint_count_for_profile(
+                    profile_pk
+                ),
+            }
+            for profile_pk in selected_profiles
+        ]
+
+        endpoint_rows = self._build_inventory_endpoint_rows(
+            profile_ids, endpoint_ids, selected_profiles
+        )
+        response: dict[str, JsonValueType] = {
+            "config_entry_id": config_entry_id,
+            "detail": detail,
+            "profiles": profile_rows,
+            "endpoints": endpoint_rows,
+        }
+
+        if detail == DETAIL_FULL:
+            clients, truncated = self._build_inventory_client_rows(
+                profile_ids, endpoint_ids, selected_profiles, client_limit
+            )
+            response["clients"] = clients
+            response["client_limit"] = client_limit
+            response["clients_truncated"] = truncated
+        return response
+
+    def _selected_profile_pks(self, profile_ids: frozenset[str]) -> list[str]:
+        """Return sorted profile ids, narrowed to an explicit selection if given."""
+        all_profile_pks = self._sorted_profile_pks(
+            frozenset(self.runtime.registry.profiles)
+        )
+        if not profile_ids:
+            return all_profile_pks
+        return [
+            profile_pk for profile_pk in all_profile_pks if profile_pk in profile_ids
+        ]
+
+    def _build_inventory_endpoint_rows(
+        self,
+        profile_ids: frozenset[str],
+        endpoint_ids: frozenset[str],
+        selected_profiles: list[str],
+    ) -> list[JsonValueType]:
+        """Build one row per endpoint, filtered by profile and endpoint selection."""
+        registry = self.runtime.registry
+        selected_profile_set = set(selected_profiles)
+        rows: list[JsonValueType] = []
+        for device_id in sorted(registry.endpoints):
+            endpoint = registry.endpoints[device_id]
+            if endpoint_ids and device_id not in endpoint_ids:
+                continue
+            attached_ids = {item.profile_pk for item in endpoint.attached_profiles}
+            if profile_ids and not attached_ids & selected_profile_set:
+                continue
+            rows.append(
+                {
+                    "role": "endpoint",
+                    "is_endpoint": True,
+                    "device_id": device_id,
+                    "name": endpoint.name,
+                    # The profiles this endpoint enforces, in Control D's own
+                    # order, with the slot named. An endpoint may enforce two and
+                    # the rule engine merges them, so both apply. This is one
+                    # list rather than a primary/secondary pair plus a copy of
+                    # the list, which is what let the two disagree before.
+                    "enforced_profiles": [
+                        {
+                            "profile_id": item.profile_pk,
+                            "profile_name": self._profile_name(item.profile_pk),
+                            "slot": _profile_slot(index),
+                        }
+                        for index, item in enumerate(endpoint.attached_profiles)
+                    ],
+                    "associated_client_count": endpoint.associated_client_count,
+                    "parent_device_id": endpoint.parent_device_id,
+                    # Set when this device is also a client under another
+                    # endpoint. Aliasing uses the client identity, and the parent
+                    # endpoint alone is not enough to address it.
+                    "parent_client_id": endpoint.parent_client_id,
+                    "last_active": self._serialize_datetime(endpoint.last_active),
+                    # The endpoint's Advanced Settings, named as the dashboard
+                    # names them. Each is false when Control D omits the field,
+                    # which is how it reports a feature that is switched off.
+                    "advanced": {
+                        "description": endpoint.description,
+                        "icon": endpoint.icon,
+                        "authorize_by_secure_dns": endpoint.authorize_by_secure_dns,
+                        "require_authorized_ips": endpoint.require_authorized_ips,
+                        "legacy_dns": {
+                            "enabled": endpoint.legacy_dns_enabled,
+                            "resolver": endpoint.legacy_dns_resolver,
+                        },
+                        "authorize_by_dynamic_dns": {
+                            "enabled": endpoint.dynamic_dns_enabled,
+                            "hostname": endpoint.dynamic_dns_hostname,
+                        },
+                        "expose_ip_via_dns": {
+                            "enabled": endpoint.expose_ip_enabled,
+                            "host": endpoint.expose_ip_host,
+                        },
+                        # Only whether a PIN is set is reported; the PIN is a
+                        # credential and is never read back.
+                        "prevent_deactivation": {
+                            "enabled": endpoint.prevent_deactivation_enabled,
+                        },
+                    },
+                }
+            )
+        return rows
+
+    def _build_inventory_client_rows(
+        self,
+        profile_ids: frozenset[str],
+        endpoint_ids: frozenset[str],
+        selected_profiles: list[str],
+        client_limit: int,
+    ) -> tuple[list[JsonValueType], bool]:
+        """Build one row per client, capped, reporting whether the cap was hit."""
+        registry = self.runtime.registry
+        selected_profile_set = set(selected_profiles)
+        rows: list[JsonValueType] = []
+        truncated = False
+        for target in sorted(
+            registry.client_alias_targets.values(), key=lambda item: item.target_key
+        ):
+            if endpoint_ids and target.parent_endpoint_device_id not in endpoint_ids:
+                continue
+            if profile_ids and target.owning_profile_pk not in selected_profile_set:
+                continue
+            if len(rows) >= client_limit:
+                truncated = True
+                break
+            rows.append(
+                {
+                    "role": "client",
+                    "is_endpoint": False,
+                    "client_id": target.client_id,
+                    "parent_endpoint_id": target.parent_endpoint_device_id,
+                    "parent_endpoint_name": target.parent_endpoint_name,
+                    "alias": target.client_alias,
+                    "hostname": target.client_hostname,
+                    "mac_address": target.client_mac_address,
+                    "ip_address": target.client_ip_address,
+                    # Recency is how a caller picks a live device out of the
+                    # stale rows Control D keeps for decommissioned addresses.
+                    "last_active": self._serialize_datetime(target.client_last_active),
+                    # A client that became its own standalone Device is an
+                    # endpoint too; one that did not follows its parent's profile.
+                    "is_standalone_endpoint": target.endpoint_device_id is not None,
+                    "own_endpoint_id": target.endpoint_device_id,
+                    "own_endpoint_name": target.endpoint_name,
+                    "owning_profile_id": target.owning_profile_pk,
+                }
+            )
+        return rows, truncated
+
+    def _profile_name(self, profile_pk: str | None) -> str | None:
+        """Return a profile display name when the profile is known."""
+        if profile_pk is None:
+            return None
+        profile = self.runtime.registry.profiles.get(profile_pk)
+        return profile.name if profile else None
+
+    @staticmethod
+    def _serialize_datetime(value: Any) -> str | None:
+        """Serialize an optional datetime without leaking a datetime object."""
+        return value.isoformat() if hasattr(value, "isoformat") else None
+
+    def _enrich_activity_record(
+        self, record: dict[str, Any]
+    ) -> dict[str, JsonValueType]:
+        """Return one activity record with the verdict and the device named.
+
+        The raw `action` codes are not contiguous and one is negative, so a
+        record read on its own cannot be interpreted without a label. The
+        vendor sends `endpointName` empty, so it is filled from the inventory
+        already held; a name the vendor did send is left alone, and the endpoint
+        id is never touched because it is always authoritative.
+        """
+        action = record.get("action")
+        endpoint_id = record.get("endpointId")
+        endpoint = (
+            self.runtime.registry.endpoints.get(endpoint_id)
+            if isinstance(endpoint_id, str)
+            else None
+        )
+        vendor_name = record.get("endpointName")
+        return {
+            **record,
+            "action_label": (
+                ACTIVITY_ACTION_LABELS.get(action) if isinstance(action, int) else None
+            ),
+            "endpointName": vendor_name
+            or (endpoint.name if endpoint is not None else "")
+            or "",
+        }
+
+    async def async_build_activity_log_response(
+        self,
+        *,
+        config_entry_id: str,
+        window: str,
+        page: int,
+        page_size: int,
+        sort_order: str,
+        search: str | None = None,
+        query_action: str | None = None,
+        trigger: str | None = None,
+        trigger_value: str | None = None,
+        profile_id: str | None = None,
+        endpoint_ids: tuple[str, ...] = (),
+        client_id: str | None = None,
+        protocols: tuple[str, ...] = (),
+        source_countries: tuple[str, ...] = (),
+        destination_country: str | None = None,
+        source_isp: str | None = None,
+        destination_isp: str | None = None,
+        source_asn: str | None = None,
+        destination_asn: str | None = None,
+        status_code: int | None = None,
+        record_type: str | None = None,
+    ) -> dict[str, JsonValueType]:
+        """Build one page of per-record DNS activity.
+
+        The window is relative and short by default. The activity log is a
+        recent-window surface, so an empty page may mean no matching traffic, an
+        expired window, or logging being off, and the response cannot tell those
+        apart; callers must not present emptiness as certainty.
+        """
+        stats_endpoint = self._require_stats_endpoint()
+        end_time = dt_util.utcnow()
+        start_time = end_time - window_to_timedelta(window)
+
+        result = await self.runtime.client.async_get_activity_log(
+            stats_endpoint,
+            start_time=start_time,
+            end_time=end_time,
+            search_question=search,
+            action=(
+                ACTIVITY_ACTION_CODES[query_action]
+                if query_action is not None
+                else None
+            ),
+            trigger=trigger,
+            trigger_value=trigger_value,
+            endpoint_ids=list(endpoint_ids) or None,
+            profile_id=profile_id,
+            client_id=client_id,
+            protocols=list(protocols) or None,
+            source_countries=list(source_countries) or None,
+            destination_country=destination_country,
+            source_isp=source_isp,
+            destination_isp=destination_isp,
+            source_asn=source_asn,
+            destination_asn=destination_asn,
+            status_code=status_code,
+            rr_type=record_type,
+            page=page,
+            page_size=page_size,
+            sort_order=sort_order,
+        )
+
+        return {
+            "config_entry_id": config_entry_id,
+            "window": window,
+            "window_start": start_time.isoformat(),
+            "window_end": end_time.isoformat(),
+            **build_page_meta(page, page_size, len(result.records)),
+            "records": [
+                self._enrich_activity_record(record) for record in result.records
+            ],
+        }
+
+    async def async_build_domain_test_response(
+        self,
+        *,
+        config_entry_id: str,
+        endpoint_id: str,
+        domain: str,
+        record_type: str,
+    ) -> dict[str, JsonValueType]:
+        """Build the policy verdict for one domain on one endpoint."""
+        verdict = await self.runtime.client.async_get_dns_verdict(
+            endpoint_id, domain, record_type=record_type
+        )
+        return {
+            "config_entry_id": config_entry_id,
+            "endpoint_id": endpoint_id,
+            "domain": verdict.domain,
+            "record_type": verdict.record_type,
+            "rcode": verdict.rcode,
+            "is_blocked": verdict.is_blocked,
+            "profile_id": verdict.profile_pk,
+            "profile_name": self._profile_name(verdict.profile_pk),
+            "source": verdict.source,
+            "source_label": (
+                VERDICT_SOURCE_LABELS.get(verdict.source, verdict.source)
+                if verdict.source is not None
+                else None
+            ),
+            "action": verdict.action,
+            "match": verdict.match,
+            "answers": list(verdict.answers),
+        }
+
+    def _require_stats_endpoint(self) -> str:
+        """Return the analytics region token, raising when it is unavailable."""
+        user = self.runtime.registry.user
+        if user is None or user.stats_endpoint is None:
+            raise ControlDIntegrationError(
+                "The Control D analytics region is not known yet"
+            )
+        return user.stats_endpoint
 
     def build_live_service_rows(
         self,
@@ -363,6 +857,75 @@ class IntegrationManager(BaseManager):
     ) -> dict[str, ControlDRule]:
         """Return normalized rule rows for read-only live resolution."""
         return self._normalize_rules(groups_payload, rules_payload)
+
+    async def async_load_live_rules(
+        self,
+        profile_pks: frozenset[str],
+    ) -> dict[str, tuple[dict[str, ControlDRuleGroup], dict[str, ControlDRule]]]:
+        """Fetch and normalize live rule groups and rules for the given profiles.
+
+        The registry only holds rules a profile exposes, so anything that needs
+        to reason about a rule the profile does not expose — resolving a write,
+        reading the state before one, or building the undo — has to fetch. One
+        implementation keeps those paths from disagreeing, and returning the
+        groups alongside the rules avoids a second request for the callers that
+        need both.
+        """
+        if not profile_pks:
+            return {}
+        details = await asyncio.gather(
+            *(
+                self.runtime.client.async_get_profile_detail(
+                    profile_pk,
+                    include_services=False,
+                    include_rules=True,
+                )
+                for profile_pk in profile_pks
+            )
+        )
+        return {
+            profile_pk: (
+                self._normalize_rule_groups(tuple(detail.groups)),
+                self._normalize_rules(tuple(detail.groups), tuple(detail.rules)),
+            )
+            for profile_pk, detail in zip(profile_pks, details, strict=True)
+        }
+
+    async def _async_build_redirect_location_catalog(
+        self,
+    ) -> tuple[list[JsonValueType], str]:
+        """Build the redirect-location catalog items and copyable text.
+
+        Account-wide rather than profile-scoped: the usable location set is the
+        same whichever profile is being edited, so this is the one catalog that
+        ignores `profile_pks`.
+        """
+        locations = await self.runtime.client.async_get_redirect_locations()
+        items: list[JsonValueType] = []
+        lines: list[str] = []
+        for row in locations:
+            code = row.get("PK")
+            if not isinstance(code, str) or not code:
+                continue
+            city = row.get("city")
+            country_name = row.get("country_name")
+            label = (
+                ", ".join(
+                    part for part in (city, country_name) if isinstance(part, str)
+                )
+                or code
+            )
+            items.append(
+                {
+                    "location_code": code,
+                    "city": city,
+                    "country": row.get("country"),
+                    "country_name": country_name,
+                    "label": label,
+                }
+            )
+            lines.append(f"{code}, {label}")
+        return items, "\n".join(lines)
 
     async def _async_build_service_catalog(
         self, profile_pks: frozenset[str]
@@ -456,6 +1019,8 @@ class IntegrationManager(BaseManager):
                         "group_id": group_row.group_pk,
                         "name": group_row.name,
                         "current_mode": group_row.current_mode,
+                        # Where a redirect folder sends the rules inside it.
+                        "redirect_target": group_row.redirect_target,
                     }
                 )
                 text_lines.append(f"group:{group_row.group_pk}, {group_row.name}")
@@ -471,11 +1036,40 @@ class IntegrationManager(BaseManager):
                         "group_id": rule_row.group_pk,
                         "group_name": rule_row.group_name,
                         "action": rule_row.action_key,
+                        # Where a redirected rule sends traffic. Absent for a
+                        # block or bypass rule, which has no destination.
+                        "redirect_target": rule_row.redirect_target,
                         "enabled": rule_row.enabled,
                         "comment": rule_row.comment,
                     }
                 )
                 text_lines.append(f"{rule_row.identity}, {rule_row.rule_pk}")
+        return items, "\n".join(text_lines)
+
+    def _build_default_rule_catalog(
+        self, profile_pks: frozenset[str]
+    ) -> tuple[list[JsonValueType], str]:
+        """Build the per-profile default-rule catalog and copyable text."""
+        items: list[JsonValueType] = []
+        text_lines: list[str] = []
+        for profile_pk in self._sorted_profile_pks(profile_pks):
+            profile = self.runtime.registry.profiles[profile_pk]
+            default_rule = self.runtime.registry.default_rules_by_profile.get(
+                profile_pk
+            )
+            if default_rule is None:
+                continue
+            items.append(
+                {
+                    "profile_id": profile_pk,
+                    "profile_name": profile.name,
+                    "enabled": default_rule.enabled,
+                    "current_mode": default_rule.current_mode,
+                    "action_do": default_rule.action_do,
+                    "via": default_rule.via,
+                }
+            )
+            text_lines.append(f"{profile.name}: {default_rule.current_mode}")
         return items, "\n".join(text_lines)
 
     def _build_profile_option_catalog(
@@ -505,6 +1099,10 @@ class IntegrationManager(BaseManager):
                         "option_type": option_row.option_type,
                         "entity_kind": option_row.entity_kind,
                         "current_value": option_row.current_select_option,
+                        # The accepted `value` labels, so a caller can pick a
+                        # supported one instead of guessing. Empty for a toggle,
+                        # which is set through `enabled` rather than `value`.
+                        "choices": [choice.label for choice in option_row.choices],
                     }
                 )
                 text_lines.append(f"{option_row.option_pk}, {option_row.title}")
@@ -547,7 +1145,6 @@ class IntegrationManager(BaseManager):
                 description=IntegrationManager._optional_string(
                     payload.get("description")
                 ),
-                count=int(payload.get("count", 0) or 0),
             )
         return categories
 
@@ -827,6 +1424,10 @@ class IntegrationManager(BaseManager):
                 comment=IntegrationManager._optional_string(payload.get("comment"))
                 or "",
                 ttl=(int(action["ttl"]) if "ttl" in action else None),
+                # Captured for reading and for an undo. A toggle still writes a
+                # status-only payload and never restates these.
+                via=IntegrationManager._optional_string(action.get("via")),
+                via_v6=IntegrationManager._optional_string(action.get("via_v6")),
             )
         return rules
 
@@ -844,6 +1445,10 @@ class IntegrationManager(BaseManager):
                 name=IntegrationManager._require_string(payload, "group"),
                 enabled=bool(action.get("status", 0)) and "do" in action,
                 action_do=(int(action["do"]) if "do" in action else None),
+                # Captured for reading, so a redirect folder can report where it
+                # sends traffic instead of just saying "redirect".
+                via=IntegrationManager._optional_string(action.get("via")),
+                via_v6=IntegrationManager._optional_string(action.get("via_v6")),
             )
         return groups
 
@@ -948,13 +1553,29 @@ class IntegrationManager(BaseManager):
         return ControlDUser(
             instance_id=instance_id,
             account_pk=account_pk,
-            last_active=IntegrationManager._optional_string(
+            last_active=IntegrationManager._optional_int_value(
                 user_payload.get("last_active")
             ),
             stats_endpoint=IntegrationManager._extract_stats_endpoint(user_payload),
-            status=IntegrationManager._optional_string(user_payload.get("status")),
+            status=IntegrationManager._optional_int_value(user_payload.get("status")),
             safe_countries=safe_countries,
         )
+
+    @staticmethod
+    def _optional_int_value(value: Any) -> int | None:
+        """Return an optional integer field from a payload.
+
+        Control D returns several documented fields as integers even when their
+        names read like strings, so a string-only parse silently drops them.
+        Booleans are rejected because they are not the documented type.
+        """
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.lstrip("-").isdigit():
+            return int(value)
+        return None
 
     @staticmethod
     def _extract_stats_endpoint(payload: dict[str, Any]) -> str | None:

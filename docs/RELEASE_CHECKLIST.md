@@ -60,6 +60,29 @@ Checklist:
 - [ ] Use a plain SemVer Git tag matching `manifest.json`, such as `0.1.0`.
 - [ ] Publish a short release summary in the GitHub release body.
 - [ ] Do not rely on a separate generated changelog system for the first release line.
+- [ ] **For a pre-release, mark the GitHub release as a pre-release.** This is the
+      only mechanism that distinguishes it: HACS has no `prerelease` key in
+      `hacs.json`, so it reads the flag from the release itself. Without it a beta
+      is offered to every user as if it were stable.
+
+### Publishing a pre-release
+
+A pre-release tag keeps SemVer semantics and needs no config change beyond the
+flag above.
+
+- Tag and `manifest.json` both carry the pre-release, for example `2.0.0-beta.1`.
+  `AwesomeVersion`, which Home Assistant and HACS both use, orders these correctly:
+  the beta sorts above the previous stable release, below the eventual `2.0.0`, and
+  below a later `2.0.0-beta.2`.
+- `pyproject.toml` may use the same string. PEP 440 normalizes `2.0.0-beta.1` to
+  `2.0.0b1`, so the non-canonical spelling is kept only so the string a maintainer
+  reads matches the other two surfaces exactly.
+- **Testers need `Show beta versions` enabled in HACS**, or the pre-release is
+  hidden from them even though the release exists. Say so wherever the beta is
+  announced, because it is not discoverable from the integration itself.
+- `hide_default_branch` stays `true` during a pre-release. Leaving it false would
+  offer untagged `main`, which during a beta is neither the released code nor a
+  supported revision.
 
 ## 8. Rollback readiness
 

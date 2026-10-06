@@ -290,6 +290,433 @@ Implementation consequence:
 - if the integration exposes endpoint analytics settings later, the user-facing
   values should map to the proven UI semantics `None`, `Some`, and `Full`
 
+### Client rows can be deleted, and deletion also purges their query history
+
+This corrects an earlier assumption that client rows were read-only observations
+with no upstream delete. They can be removed, individually or in bulk, through a
+bulk verb on the analytics host. The contract came from captured web-UI traffic
+and was then confirmed directly against the live API.
+
+Observed UI requests (the UI fires both, then re-reads the client list):
+
+- `DELETE https://<stats>.analytics.controld.com/v2/client`
+  - body: `{"endpointIds":["<parent endpoint device_id>"],"clientIds":["<client id>", ...]}`
+  - addressed by the same two identifiers the alias write uses: the parent
+    endpoint's `device_id` and the client's `clientId`
+  - `clientIds` is an array, so this is a bulk operation
+- `DELETE https://<stats>.analytics.controld.com/v2/activity-log`
+  - same body shape
+  - removes the clients' stored query history, which is why the UI sends it
+    alongside the row delete
+- `GET /v2/client?endpointId=<parent endpoint>` follows, to refresh the list
+
+Verified live on 2026-10-05 against the development account:
+
+- `DELETE /v2/client` with a non-existent `clientId` returned HTTP 200 and
+  `{"success":true,"body":{"deletedCount":0,"deletedClients":[]}}`
+- `DELETE /v2/activity-log` with the same body returned HTTP 200 and
+  `{"success":true}`
+- the client count for the parent endpoint was unchanged afterwards, so the
+  probe deleted nothing
+- corroboration that real deletions take effect and that this integration reads
+  the result: the account's aliasable client total fell from 397 to 393 across
+  four clients deleted through the UI, and our own read path reported the new
+  total exactly
+
+Implementation consequence:
+
+- deletion is **destructive and not reversible**: re-creating the row is not
+  possible, and a stale row for a device that will not return does not come back
+  on its own
+- deleting the row without also calling `/v2/activity-log` leaves the stored
+  query history behind, which is why a faithful implementation has to do both or
+  say which one it did
+- the response carries `deletedCount` and `deletedClients`, so a caller can be
+  told exactly what was removed rather than being told a request succeeded
+- this is a distinct fourth delete family alongside rules, services, and client
+  aliases, and it is the only one that destroys traffic history, so it must not
+  be conflated with `clear_client_alias`
+- **deletion is not durable for an ordinary client.** A client row exists
+  because Control D observed that client's traffic; it is derived state, not
+  configuration. If the same client identity is seen again the row is
+  re-created, so deleting it clears history and nothing more — the row returns
+  the next time the device is online. Only an alias, or a policy assignment that
+  promotes the client to an endpoint, outlives the traffic. This is the
+  difference between "removes this row" and "stops this client from existing",
+  and the UI delete does the former
+- the exception is an identity that will not be seen again, and rotating private
+  MACs are the everyday example on this account. Because a rotated MAC is never
+  reused, deleting those rows does persist — but it does not stop the churn,
+  since the next connection adds a fresh row
+- **implemented** as the `delete_client` service and the `delete_client` LLM tool,
+  registered only in the Full tier because there is no undo. It reuses the client
+  selectors already used for aliases and prefers `client_id`; groups the requested
+  clients by parent endpoint so one verb call covers a parent and many clients;
+  and purges the history unless `delete_history` is false. The API's own
+  `deletedCount` is what the action result reports, so a caller is told how many
+  rows were actually removed rather than merely that the request succeeded
+
+### Endpoint write surface: what the API accepts, and what it ignores
+
+The documented `GET /devices` row shape advertises far more than the write verb
+honours, and the write verb reports success either way. Probed against a live
+endpoint on 2026-10-05, reverting each change.
+
+**Write keys differ from read keys, and unknown keys are silently ignored.** This
+is the most expensive thing to get wrong on this surface, and it produced a false
+conclusion.
+
+`PUT /devices/{device_id}` returns `200 ok` for keys it does not act on, so a
+wrong key name is indistinguishable from a successful write by status code alone.
+The fields it honours each reject a bad value, which is what makes them
+identifiable:
+
+- `name` — rejected on a duplicate
+- `stats` — rejected outside `0|1|2` (`"stats must be one of Array([0]=>0...)"`)
+- `desc`
+- `status` — `0` disables, `1` enables
+- `learn_ip`
+- `restricted`
+- **`profile_id`** and **`profile_id2`** — the profile write keys
+
+Note the suffix: the **write** keys are `profile_id` and `profile_id2`, while the
+**read** keys on the same row are `profile` and `profile2`. Setting `profile_id2`
+to a profile PK attaches the secondary profile; setting it to the integer `-1`
+clears it. Verified live on 2026-10-05: `{"profile_id2": "<PK>"}` made `profile2`
+appear as `7580 Default Profile`, `{"profile_id2": -1}` cleared it back to
+`null`, and `profile` was untouched throughout.
+
+**The false conclusion this produced, recorded so it is not repeated.** Probing
+`profile2` as a *write* key returned `200 ok` and changed nothing, across four
+payload shapes. From that I concluded profile assignment was unavailable through
+the API. It is available; the key name was wrong, and the silent-ignore behaviour
+made a wrong name look like an absent feature. **A `200` with no observed change
+is not evidence of a missing capability — it is evidence of a malformed request.**
+Every mutation the Control D web client performs goes through this API, and the
+undocumented parts are capturable from a browser session; the correct response to
+a silent no-op is to capture the real request, never to infer a limit.
+
+### Endpoint creation and deletion
+
+Both exist, are captured from the web client, and are implemented as the
+`create_endpoint` (control tier) and `delete_endpoint` (destructive tier)
+services and tools.
+
+- **Create**: `POST /devices` with `{"name", "profile_id", "icon", "desc",
+  "stats"}` — `icon` is a slug such as `desktop-linux`, and `profile_id` is the
+  primary profile to attach
+- **Delete**: `DELETE /devices/{device_id}` — a fake id returns
+  `404 40401 "No such device"`, a real handler's business response
+
+Create semantics, verified live on 2026-10-05 against a throwaway endpoint that
+was deleted afterwards:
+
+- `profile_id` is **required**, not optional: omitting it returns `400
+  "profile_id is required"` — the same invariant as the primary slot below
+- the name must be unique: a duplicate returns `400 "A device with this name
+  already exists"`
+- the response body carries the new `device_id`, which is the only way to learn
+  it, because Control D assigns it
+- a newly created endpoint reports `status: 0` with no `last_activity`, which is
+  how the `status` meaning below was settled
+
+Implementation consequence:
+
+- the create tool cannot name its own undo by id, because the id does not exist
+  before the write. The undo is therefore `delete_endpoint` addressed by
+  **name**, which the uniqueness rule makes unambiguous. This is the one place a
+  name is a safe selector on endpoints
+- delete takes `device_id` and removes the endpoint, its resolver identity, and
+  the records kept against it, so it is registered only in the destructive tier
+  with no undo
+
+### An endpoint must always enforce exactly one primary profile
+
+This is a **platform invariant**, not merely a validation rule on one verb, and
+it was confirmed in two places:
+
+- the web portal will not let the primary profile be removed from an endpoint,
+  because there is no "no profile" state to save it into
+- `PUT /devices/{device_id}` with `{"profile_id": -1}` returns **`400`**, while
+  the same `-1` sent as `{"profile_id2": -1}` succeeds and detaches the secondary
+
+So the primary slot can be changed but never emptied: every endpoint always
+enforces at least one profile, and an endpoint with no primary is not a state the
+platform has. The secondary is genuinely optional, which is why it has a clear
+sentinel and the primary does not.
+
+Implementation consequence:
+
+- a primary-profile service must require a profile rather than offering a clear,
+  and the distinguishing case is the secondary
+- "remove all profiles from this endpoint" is not a satisfiable request; the
+  closest real operation is to assign a permissive profile, which is a policy
+  decision rather than a detach
+
+### Endpoint Advanced Settings: read fields and write keys
+
+The dashboard's **Advanced Settings** panel on an endpoint maps to these fields.
+**The write keys are flattened and differ from the read fields**, which is the
+single most important thing to know here.
+
+| Dashboard label | Read field | Write key(s) | Clear |
+| --- | --- | --- | --- |
+| Legacy DNS | `legacy_ipv4` `{resolver, status}` | `legacy_ipv4_status` | `0` |
+| Authorize by Secure DNS | `learn_ip` `0`/`1` | `learn_ip` | `0` |
+| Authorize by Dynamic DNS | `ddns` `{status, subdomain, hostname, record}` | `ddns_status`, `ddns_subdomain` | `ddns_status: 0` |
+| Expose IP via DNS | `ddns_ext` `{status, host}` | `ddns_ext_status`, `ddns_ext_host` | — |
+| Require Authorized IPs | `restricted` `0`/`1` | `restricted` | `0` |
+| Prevent Deactivation | `deactivation_pin` | `deactivation_pin` | `-1` |
+| (description) | `desc` | `desc` | `""` |
+
+Two shapes explain why earlier probes failed: the read side is **nested**
+(`legacy_ipv4.resolver`) while the write side is **flat**
+(`legacy_ipv4_status`), and the write key is not merely a flattened read key
+(`legacy_ipv4_status`, not `legacy_ipv4`). Sending the nested object as a write
+returns `200 ok` and changes nothing.
+
+Verified live on 2026-10-05, each reverted afterwards:
+
+- `legacy_ipv4_status: 1` assigned a real resolver and the row gained
+  `legacy_ipv4: {resolver: 76.76.2.144, status: 1}`; `legacy_ipv4_status: 0`
+  removed the field
+- `ddns_status: 1` + `ddns_subdomain: "cd-probe-sub"` created the record and the
+  row gained `ddns: {status: 1, subdomain: cd-probe-sub, hostname:
+  cd-probe-sub.controld.xyz, ...}`; `ddns_status: 0` removed it
+- `learn_ip: 1` → `0` toggled cleanly
+- `deactivation_pin: 1234` set the field; **`deactivation_pin: -1` cleared it**,
+  and an empty string is rejected. Only whether a PIN is set is ever reported —
+  the PIN itself is a credential and must not be read back or stored
+- `desc` set and cleared: an empty string removes the field
+
+### `PUT /devices/{device_id}` is atomic: one bad field discards the batch
+
+A batch that mixed six advanced settings was rejected wholesale with
+`400 40003 "This DDNS hostname is invalid"`, and **nothing was applied** — not
+even the four fields that were individually valid. Re-tested with the exact
+payload: still `400`, and every one of the six settings remained unset.
+
+So a multi-field write is all-or-nothing. The likely cause in that case is
+`ddns_ext_host`, which has to be a hostname Control D can validate because it
+publishes a DNS record; a placeholder is rejected.
+
+Implementation consequence:
+
+- a caller must not assume that grouping settings into one request makes them
+  atomic *successes*. A single invalid value silently discards the rest, which
+  looks from the dashboard like "the settings did not persist"
+- this is why a write that reports `200` must still be verified by reading the
+  value back, and why one rejected field needs reporting per-field rather than as
+  a single failure
+- `400 40003` is the validation code; it is distinct from the silent-ignore
+  behaviour on unknown keys, and the two together mean a `200` proves nothing and
+  a non-`200` may have discarded unrelated fields
+
+### `status` is a four-state field, and `0` is not "disabled"
+
+The dashboard labels the states, and the write verb accepts all four and persists
+them, all read back exactly:
+
+| `status` | Dashboard | Meaning |
+| --- | --- | --- |
+| `1` | Active | Enforcing |
+| `2` | Soft disabled | Paused, but still resolvable |
+| `3` | Hard disabled | Fully disabled |
+| `0` | Pending | Not yet seen, or no activity recorded |
+
+`0` appears on an endpoint that has never sent traffic — including a freshly
+created one — so it reads as **Pending**: the endpoint exists but has not been
+seen yet. The user-facing disable states are `2` and `3`, and **`status` is
+forceable, not merely activity-derived**: it accepts `1|2|3` and keeps them. This
+is a control this integration does not expose yet.
+
+Use the dashboard's word for it. Reporting `0` as "disabled" would be wrong — a
+pending endpoint is not disabled, it is new — and reporting it as "unknown"
+loses the distinction from `2` and `3`.
+
+A Pending endpoint accumulates under `status: 0` (`Pending` in the dashboard)
+while it has no activity: `ccpk-gaming-pc-wifi` and a freshly created endpoint
+both show `0` with
+no `last_activity`, `ip_count: 0`, and no clients. That is the state a new
+endpoint starts in.
+
+Fields in the documented row shape that are absent from every row on this
+account, so they are optional rather than guaranteed: `desc`, `restricted`,
+`profile2` (11 of 19), `parent_device` (11 of 19), `clients` (7 of 19), `ddns`,
+`ddns_ext`, `legacy_ipv4`.
+
+### Redirect destinations come from `GET /proxies`
+
+A redirect rule, service, or default rule takes a `via`/`redirect_target` that must
+be a location the account can actually use. The list is `GET /proxies`, and it is
+account-wide rather than profile-scoped.
+
+Observed on 2026-10-05:
+
+- `proxies`: **107** entries, each with a unique 3-letter `PK` (the value a
+  redirect takes), plus `city`, `country`, `country_name`, `gps_lat`, `gps_long`,
+  and a `uid` such as `Albania:Tirana`
+- `countries`: **247** entries pairing `country` and `country_name`, which is a
+  lookup helper rather than the list itself
+- the `PK` is unique across all 107, so it is a safe argument, but it is opaque:
+  `TIA` and `WFR` are not choosable without their city and country
+
+Implementation consequence:
+
+- expose both halves, because neither is sufficient alone: the `PK` is the
+  argument and the city/country is what makes it choosable
+- this closes D43. It is reachable as `get_catalog` with
+  `catalog_type: 'redirect_locations'`, which reuses the existing catalog
+  contract (limit, truncation, copyable text) rather than adding a tool
+- the response is not profile-scoped, so `profile_id` is ignored for this type
+
+### Home Assistant's LLM tool contract: confirmed platform facts
+
+Verified against Core 2026.10 source and the developer blog on 2026-10-05.
+
+**Probatio replaced voluptuous as the validation engine, but custom integrations
+are explicitly expected to keep `vol`.** `llm.Tool.parameters` is declared
+`probatio.Schema`, and Core installs the alias itself in `homeassistant/__init__.py`:
+
+```python
+from probatio.compat import install_as_voluptuous
+
+# Probatio replaces voluptuous as the validation engine. Custom integrations and a
+# few dependencies still import voluptuous directly, so alias it to probatio in
+# sys.modules before anything imports it.
+install_as_voluptuous()
+```
+
+Core's own comment names custom integrations as the reason the alias exists. The
+release blog ("Probatio is our validation engine", 2026-09-30) says the same in
+plain terms:
+
+> `import voluptuous as vol` still works: Home Assistant aliases the name in
+> `sys.modules` at startup, so the import resolves to Probatio. **Custom
+> integrations need no changes.** … Core itself has moved to importing Probatio
+> directly, and `import voluptuous` is now banned there by a lint rule. **That ban
+> applies to our own source. Your integration can keep the old import for as long
+> as you like.**
+
+The ban's scope is visible in Core's `pyproject.toml`: `include = ["homeassistant*"]`
+combined with `[tool.ruff.lint.flake8-tidy-imports.banned-api] "voluptuous".msg`.
+It covers Core's own source tree only, and therefore does not reach
+`custom_components/`.
+
+**This means the two choices are behaviourally identical here.** At runtime
+`vol.Schema` *is* `probatio.Schema`, because the alias resolves before this
+integration's modules import. Migrating `config_flow.py` and `services.py` from
+`vol` to `probatio` would change no behaviour at all.
+
+**So why do the tool modules import probatio?** Because Home Assistant's documented
+LLM tool example uses `probatio.Schema`, and following the documented example for
+new code is better than leaning on a compatibility alias. It is a preference, not
+a requirement, and it is **not** a reason to migrate existing working schemas.
+
+**One real, modest cost of staying on `vol`.** `pyproject.toml` overrides mypy with
+`follow_imports = "skip"` for `voluptuous.*`, because mypy resolves the real
+voluptuous package and its schema types are not identical to probatio's. Schemas
+written as `vol.Schema` therefore get no type checking. Migrating to `probatio` and
+deleting that override would restore coverage — the only substantive argument for
+the change, and not a compliance argument.
+
+**`llm.py` is a reserved platform filename.** The `llm` integration discovers an
+`<integration>/llm.py` platform and calls `async_get_tools` on it, resolving the
+module as `{domain}.{platform_name}` — so `llm` specifically. A file *or a package*
+named `llm` is therefore claimed by Core and must not be used for anything else.
+This integration owns a full API through `llm.async_register_api` instead, which is
+the other supported pattern, and its module is named `llm_api.py` to stay clear of
+the platform name.
+
+**`ToolResult`, `annotations`, and `integration` are all required now.** A tool
+returns `llm.ToolResult(data=..., error=...)`; returning a plain dict is deprecated
+and stops working in 2027.11. Every tool must set `integration`, or a custom
+integration logs a warning until 2027.10 and then stops working. Annotations matter
+because **the defaults describe the least safe case** — `read_only=False`,
+`destructive=True`, `idempotent=False`, `open_world=True` — so a tool that declares
+nothing is treated as writing, destructive, and reaching outside Home Assistant.
+All 24 tools here declare all four explicitly.
+
+**Tool names must be prefixed with the integration domain.** Core checks
+`tool.name.startswith(f"{domain}__")` and reports violations, breaking in 2027.3.
+Our `controld_manager__<verb>` naming complies, and the debug log added in `fccd0a2`
+records the registered surface at build time.
+
+### `open_world` has two definitions, and only one is operative
+
+The field is defined twice, by two first parties, and they do not say the same
+thing. This is the likely source of any conflicting information about it.
+
+The MCP SDK (`mcp/types.py`) is the normative source for the hint:
+
+> If true, this tool may interact with an "open world" of external entities. If
+> false, the tool's domain of interaction is closed. For example, the world of a
+> web search tool is open, whereas that of a memory tool is not. Default: true
+
+Home Assistant restates it in its own terms in `/docs/core/llm/`:
+
+> `open_world` | The tool reaches outside Home Assistant. Defaults to `True`.
+
+Those test different things. MCP's axis is bounded versus unbounded external
+entities; HA's is inside HA versus outside HA, which is broader and is the one
+that matters here.
+
+Both sources agree the field is only a hint. The SDK says so outright — *"all
+properties in ToolAnnotations are hints. They are not guaranteed to provide a
+faithful description of tool behavior"* — and the MCP specification adds that
+clients "MUST consider tool annotations to be untrusted unless they come from
+trusted servers".
+
+**Home Assistant never acts on the annotations.** Every `.annotations` reference
+in `homeassistant/` is either an assignment or the single read in
+`components/mcp_server/server.py`, which copies the four fields onto the MCP
+`types.ToolAnnotations`. Nothing in `conversation/`, the chat log, or the Assist
+pipeline consults them. So on the Assist path the field is inert, and the only
+consumer is the MCP client.
+
+**Home Assistant's own tools are all `open_world=False`** — `assist_satellite`,
+`calendar`, `climate`, `fan`, `homeassistant`, `humidifier`, `intent`,
+`lawn_mower`, `light`, `llm`, `media_player`, `todo`, and `vacuum` — because they
+act on local state. The one exception is KNX, which draws the line at the bus:
+
+```python
+_READ_ONLY = llm.ToolAnnotations(
+    read_only=True, destructive=False, idempotent=True, open_world=False
+)
+_BUS_PROBE = llm.ToolAnnotations(
+    read_only=False, destructive=False, idempotent=True, open_world=True
+)
+_BUS_WRITE = llm.ToolAnnotations(
+    read_only=False, destructive=True, idempotent=False, open_world=True
+)
+```
+
+KNX reads its local project with `False` and marks anything that transmits onto
+the bus `True`, which is the discriminator HA's own code applies. A bus is far
+less external than a cloud API.
+
+All 24 tools here call `api.controld.com`, so all 24 declare `open_world=True`.
+The opposite claim — that a cloud call is contained inside Home Assistant — is
+exactly the inaccuracy the least-safe defaults exist to prevent.
+
+### The deletes declare `idempotent=False`
+
+`delete_rule`, `delete_client`, and `delete_endpoint` are not idempotent, and
+neither is `delete_service` in the sense that matters. Home Assistant marks every
+one of its own removals the same way: `intent._REPEATS`,
+`todo.INTENT_LIST_REMOVE_ITEM`, and `media_player._CUMULATIVE` are all
+`destructive=True, idempotent=False`.
+
+The strict MCP reading could support `True`, since a second delete leaves the
+environment unchanged. But HA chose `False` for every removal, and a tool that
+diverges from that is a review finding rather than an improvement.
+
+**Two creates are consistent, by two different routes.** `create_rule` declares
+`idempotent=False` because its description states that creating the same rule
+twice creates two rules. `create_endpoint` declares `idempotent=True` because its
+description states that the name is unique across the account and the API rejects
+a duplicate. Each matches the duplicate behaviour its description documents.
+
 ### Duplicate endpoint names are a real problem
 
 Display names are not safe identifiers.
@@ -623,10 +1050,53 @@ Observed on `GET /users`:
 - `sso`
 - `safe_countries`
 
+**Field types matter here.** The published OpenAPI schema for `GET /users` declares
+`status`, `last_active`, `twofa`, `proxy_access`, and `email_status` as
+**`integer`**, and lists `status` as **required**. The example payload shows
+`"status": 1`. Only `email`, `date`, and `PK` are strings. A live capture confirms
+the types and shows the payload carries many more fields than the schema lists
+(`auth_methods`, `has_usable_password`, `max_devices`, `max_profiles`,
+`res_proxy_access`, `tailnet`, `tutorials`, and others).
+
+This bit us: `status` and `last_active` were both parsed with a string-only
+helper, so a required documented field was **silently discarded** on every
+refresh and surfaced as `null`. The test fixture supplied `status="1"` as a
+string, which matched the broken parser and hid the defect until a live check.
+Any other `/users` field added later must be checked for its declared type before
+the default string parse is applied.
+
+**What `status` means.** Control D uses `status` as a generic 0/1 enablement
+integer across the API, not as free-form code:
+
+- filter, service, and option writes send `{"status": 1}` to enable and
+  `{"status": 0}` to disable
+- rule enable/disable is the same shape, with payloads as small as `{"status":1}`
+- the restrictions reference documents disabling as *"equivalent to PUT on this
+  path with `status=0`"*
+- a live `GET /devices` capture over 19 endpoints returned only `0` and `1`
+  (18 endpoints `1`, one `0`)
+
+So on the account, `status = 1` means enabled and `status = 0` means disabled. A
+live capture reads `1` on this account. The vendor does not define a richer code
+set for the account field, so it is carried as an integer and never turned into a
+label.
+
+**Not the same as the dashboard's device Status.** The published *Status* page
+describes a **four-state device/endpoint setting** — Pending, Active, Soft
+Disabled, Hard Disabled — driven by a Device Setting in the dashboard. The API's
+`status` field collapses that to the 0/1 flag above; a live capture shows no
+endpoint reading 2 or 3. The integration currently derives endpoint status from
+the activity timestamp (`last_activity`) and does **not** read the device `status`
+field, so the four-state distinction is not surfaced anywhere. That is a
+candidate improvement, not a defect: `last_activity` alone cannot separate Soft
+from Hard Disabled, so a future endpoint sensor could use `status` to distinguish
+"no longer enforcing policy" from "not resolving at all".
+
 Implementation guidance:
 
 - `stats_endpoint` should be retained as meaningful instance metadata
-- `last_active` is useful for diagnostics and possibly instance metadata, but should not be treated as a critical dependency
+- `last_active` is a Unix epoch (integer) and is currently parsed but not consumed by any entity or payload
+- `status` is a 0/1 enablement flag, exposed as an integer; it is also carried on the Status sensor attribute
 
 ### Billing metadata
 
@@ -669,6 +1139,7 @@ Observed families include:
 - `v2/statistic/count/question`
 - `v2/statistic/count/srcCountry`
 - `v2/client`
+- `v2/activity-log` (per-record; see the Activity Log findings)
 
 Common traits:
 
@@ -702,6 +1173,18 @@ Observed definitions:
 - `2` = redirected by IP
 - `3` = redirected by Location
 - `spoofTarget` is the redirect destination and may be an IP, domain, or IATA code
+
+The published reference also defines the trigger and protocol enums, and all
+values are accepted live:
+
+- `trigger`: `default`, `grule` (global Control D rule), `filter`, `service`,
+  `custom`, `rebind`
+- `protocol`: `legacy`, `doh`, `dot`, `doh3`, `doq`
+
+`custom` attributes a block to one of the user's own rules; `grule` and `rebind`
+have no equivalent in the `triggerValue` breakdown endpoint, which accepts only
+`filter` and `service`. `legacy` is unencrypted DNS and is the useful signal for
+"is this client still using plain DNS".
 
 Settled interpretation:
 
@@ -798,6 +1281,44 @@ Settled interpretation:
 
 - direct `triggerValue[]` query inputs do not yet appear safe to derive from guessed UI labels or partial slug knowledge
 - ranked output values and direct query input values should be treated as separate contracts until proven otherwise
+- **now refined:** the aggregate `triggerValue` endpoint is where this holds; the
+  per-record Activity Log carries `trigger` + `triggerValue` on each record and
+  does not require a round-trip guess at all (see below). The aggregate caveat
+  stands for ranked breakdown inputs.
+
+### Activity Log is the per-record surface (33-day)
+
+The Activity Log (`v2/activity-log`) returns individual DNS query records and is
+the only surface that carries the block cause on the record itself. Each record
+includes `question`, `action`, `trigger`, `triggerValue`, `endpointId`, `clientId`,
+`profileId`, `rrType`, `protocol`, `statusCode`, `sourceGeoip`, and `answers`.
+It accepts the full filter set (search, action, trigger, endpoint, profile,
+protocol, country, ISP, ASN, statusCode, rrType, spoofTarget) with
+`page`/`pageSize`, and is the surface behind the dashboard's own activity view
+and domain search. It retains **33 days only**. Full contract in the Activity Log
+API findings.
+
+### Analytics retention is bounded and configurable
+
+- Activity Log retains 33 days; the Statistics family retains up to 365 days
+- these are **maximums**; users may choose shorter retention, or disable logging
+  entirely, so a deployment may have far less history or none
+- an empty result is ambiguous: "no matching traffic", "expired past retention",
+  or "logging disabled" cannot be told apart from the response alone
+
+### Domain verdict endpoint answers single-domain questions
+
+`https://dns.controld.com/<device_id>?name=<domain>&type=A&controld=1&no_log=1`
+returns a `controld.verdict` (`verdictSource`, `verdictAction`, `verdictMatch`)
+for one endpoint and one domain. `verdictSource` uses its own vocabulary (`bl`,
+`rules`, `svc`, `default`) that must be mapped to the `trigger` enum. This is the
+cheapest troubleshooting read and should be sent with `no_log=1`.
+
+### Client correlation and write responses
+
+- `v2/client` `body.items` is keyed by `device_id`, so analytics client telemetry
+  joins to endpoints; keys for removed endpoints must be tolerated
+- write calls return the affected object, which the runtime currently discards
 
 ## Top-card and security-overview derivations
 
@@ -953,7 +1474,7 @@ These are the remaining gaps that are worth resolving before or during implement
 - how should the runtime normalize attached-profile sibling fields beyond the current `profile` and `profile2` cases
 - how should the first implementation refresh groups be named and bounded
 - how exactly should parent-child endpoint metadata surface in v1
-- how do `v2/client` identifiers correlate, if at all, to `/devices` identifiers
+- ~~how do `v2/client` identifiers correlate, if at all, to `/devices` identifiers~~ — **resolved:** `v2/client` `items` is keyed by `device_id`; see the Client identifier correlation findings
 - which exact analytics queries and filters back the dashboard totals for each action bucket
 - what exact query backs the full blocked-card total
 - what exact denominator does `Benign Blocks` use when phishing or other security categories are present outside the visible ranked rows
@@ -969,9 +1490,12 @@ These are the most useful remaining captures, in descending order of value:
 
 1. One blocked or bypassed sample that proves the exact blocked-card or bypassed-card total query.
 2. One sample where phishing is non-zero so `Benign Blocks` can be validated against both excluded security categories.
-3. One sample that correlates a `/devices` endpoint to a `v2/client` analytics item.
+3. ~~One sample that correlates a `/devices` endpoint to a `v2/client` analytics item.~~ — **done:** `v2/client` `items` is keyed by `device_id` (see the Client identifier correlation findings).
 4. One sample that shows whether organization scenarios expose `profile3` or another attached-profile variant.
 5. One sample that confirms how bypassed and redirected views map through the analytics endpoints.
+6. One Activity Log sample for a `trigger=custom` block and a `trigger=grule` or `trigger=rebind` action so the full per-record trigger vocabulary is captured.
+7. One DNS verdict sample per `verdictSource` value so the `verdictSource` -> `trigger` mapping is complete.
+8. One write-response capture for a profile/filter/service/rule mutation (not just `/devices`) so the action-result envelope can be shaped from real write payloads.
 
 ## Purpose
 
@@ -1741,6 +2265,227 @@ Engineering consequence:
 - `malware` is not equivalent to the ranked `ai_malware` value in the observed contract
 - the repository should not assume it can round-trip human-friendly labels or guessed slugs back into filter analytics queries without verification
 
+## Activity Log API findings
+
+The Activity Log is the per-record DNS query surface. It is the only endpoint that
+carries the block reason on the record itself, so it is the primary troubleshooting
+read and the source of detail the ranked breakdowns cannot give.
+
+### Observed request shape
+
+- host: the same regional analytics host as the statistics family
+- path: `/v2/activity-log`
+- envelope: `{"success": true, "body": {"meta": {...}, "queries": [...]}}`
+- `body.meta` carries `page` and `pageSize` and **no total count**
+- confirmed query parameters:
+  - `startTime`, `endTime`
+  - `searchQuestion` (substring match on `question`)
+  - `action`
+  - `trigger`, `triggerValue`
+  - `endpointId` or repeated `endpointId[]`
+  - `profileId`
+  - `protocol[]`
+  - `srcCountry[]`, `dstCountry`
+  - `srcIsp`, `dstIsp`, `srcAsn`, `dstAsn`
+  - `spoofTarget`
+  - `statusCode`
+  - `rrType`
+  - `page`, `pageSize`, `sortOrder`
+
+### Observed response shape
+
+Each `body.queries[]` record carries:
+
+- `timestamp`
+- `userId`
+- `endpointId` (`endpointName` is present but empty in every observed record)
+- `clientId`
+- `profileId`
+- `question`
+- `rrType`, `statusCode`, `protocol`
+- `action`, `trigger`, `triggerValue`
+- `sourceIp`, `sourceGeoip` (`countryCode`, `city`, `isp`, `asn`)
+- `answers[]` (destination side; `[{ips, geoip{countryCode, city, isp, asn}}]`,
+  often null)
+
+Unlike the ranked breakdown output, one record answers domain, cause, endpoint,
+profile, client, protocol, and source and destination geography together.
+
+### Confirmed semantics and gotchas
+
+- `searchQuestion` is a substring match, not a full-domain match
+- a domain search spans all profiles by default (confirmed across five profiles)
+- filters combine (search + trigger + triggerValue + endpointId narrow together)
+- `protocol[]` and `srcCountry[]` are honoured; a bogus value returns zero records
+- `dstCountry` is honoured here; it returns zero on the Statistics family
+- `statusCode` is the rcode filter; `rcode` is silently ignored
+- `clientId` requires a co-present `endpointId` and returns 400 alone
+- `endpointName` is unreliable; resolve names from `/devices`
+- `pageSize` max is 500, and deep pages return older records
+- a page can return fewer rows than `pageSize` without signalling the end, so a
+  short page should be treated as end-of-data rather than proof that more exists
+- `sortOrder` defaults to newest-first; `asc` works
+
+### Enums
+
+Full documented enum, all accepted live:
+
+- `action`: `-1` failed, `0` blocked, `1` bypassed, `2` redirected by IP, `3`
+  redirected by Location
+- `trigger`: `default`, `grule` (global Control D rule), `filter`, `service`,
+  `custom`, `rebind`
+- `protocol`: `legacy`, `doh`, `dot`, `doh3`, `doq`
+
+`custom` is the only surface that attributes a block to one of the user's own
+rules. `grule` and `rebind` have no equivalent in the Statistics `triggerValue`
+endpoint, which accepts only `filter` and `service`.
+
+### Engineering consequence
+
+- the Activity Log closes the block-reason gap: `trigger` + `triggerValue` on the
+  record is the cause, so "why was this blocked" no longer needs a ranked-then-
+  guessed workaround
+- it is a recent-window surface, so it backs troubleshooting and on-demand tooling
+  rather than long-range analytics
+- a page is roughly 47 KB per 100 records, so callers should request a bounded
+  window and page size rather than pulling the firehose
+
+## Analytics retention findings
+
+Retention differs by surface, and the values below are the longest a user may have
+enabled.
+
+- **Activity Log: 33 days.** Confirmed by a hard boundary: a window entirely older
+  than 33 days returns zero records, while recent windows return data. The
+  published reference states the same limit.
+- **Statistics (`count`, `question`, `triggerValue`, `srcCountry`): up to 365
+  days.** Aggregate counts plateau at the retention horizon rather than erroring.
+- **Dimension caveat.** The published reference states that columns marked "no"
+  (`protocol`, `statusCode`, `rrType`, `srcAsn`, `dstAsn`) are not filterable or
+  groupable for data older than 33 days, while the "year" columns (`question`,
+  `triggerValue`, `srcCountry`, `dstCountry`, `srcIsp`, `dstIsp`, `action`,
+  `trigger`, `endpointId`, `clientId`, `profileId`) remain usable.
+- **These are maximums.** Users can select shorter retention, or disable logging
+  entirely, so a given deployment may have far less history, or none.
+
+Engineering consequence:
+
+- a tool must not assume history exists; it should state the window it queried and
+  be explicit when a surface returned no records
+- long-range reporting belongs on the Statistics family; the Activity Log cannot
+  answer it
+- an empty Activity Log result is ambiguous - "no matching traffic", "older than
+  retention", or "logging disabled" - and the response alone cannot distinguish
+  them
+
+### Analytics has no controllable time series
+
+The published reference describes the Statistics API as "pre-aggregated data with
+varying granularity", which reads as a controllable series parameter. Live
+probing shows it is not one: `granularity`, `interval`, `groupBy`, `period`, and
+`resolution` are all ignored and return the same single aggregate, and no
+`/v2/statistic/count/series` route exists. A count-family call returns one number
+for the requested window; there is no per-bucket series to request. Detecting a
+spike therefore requires diffing successive windows, not a series query.
+
+### Analytics maintenance mode
+
+When analytics is in maintenance mode the API returns `503` with error code
+`50303`. The client currently maps every status `>= 400` to a generic response
+error, so maintenance is indistinguishable from a real failure unless that code
+is handled explicitly.
+
+## Client identifier correlation findings
+
+The long-open question of how `v2/client` item identifiers relate to `/devices` is
+now answered for the observed account:
+
+- `/v2/client` `body.items` is keyed by the same `device_id` namespace as
+  `GET /devices` (17 of 29 keys matched a current `device_id` exactly)
+- the non-matching keys are not a different namespace: they are endpoints retained
+  in analytics after they disappeared from `/devices` (for example the earlier
+  `22dda9b8r7q` sample endpoint)
+- within an endpoint, the `clients` map is keyed by `clientId`, which matches the
+  `clientId` on Activity Log records
+
+Engineering consequence:
+
+- analytics client telemetry can be joined to endpoint entities by `device_id`
+- the join must tolerate stale keys that no current endpoint owns, so it is
+  enrichment over (not a source of) endpoint inventory
+- this closes the earlier "not yet proven" and "New uncertainty narrowed by this
+  sample" caveats
+
+## DNS verdict (domain test) endpoint findings
+
+Control D exposes a per-endpoint DNS resolver that returns the policy verdict for a
+single domain, which is what the dashboard uses for its own domain test.
+
+### Observed request shape
+
+- host: `https://dns.controld.com`
+- path: `/<endpointId>`, where the id is the `GET /devices` `device_id`
+- query:
+  - `name` (domain under test)
+  - `type` (default `A`)
+  - `controld=1`
+  - `no_log=1`
+- the per-endpoint resolver URL is also published on the device payload as
+  `resolvers.doh`, so it can be read rather than constructed
+
+### Observed response shape
+
+- a standard DNS-over-JSON response (`RCODE`, `QNAME`, `answerRRs`, ...)
+- `controld.verdict` carries `profileID`, `verdictSource`, `verdictAction`,
+  `verdictMatch`
+- `verdictAction` uses the analytics action enum (`0` blocked, `1` bypassed)
+- `verdictMatch` is the matched service, filter, or rule value, or `0` for the
+  default rule
+- `RCODE` `0` is a normal answer; `RCODE` `5` (REFUSED) corresponds to a block
+- `controld.verdict` is absent or empty when no policy decision matched (a plain
+  passthrough or NXDOMAIN), so absence is not itself "allowed"
+
+### `verdictSource` does not use the `trigger` vocabulary
+
+`verdictSource` uses its own labels and needs a mapping layer:
+
+- `bl` -> blocklist filter (`trigger` `filter`)
+- `rules` -> custom rule (`trigger` `custom`)
+- `svc` -> service (`trigger` `service`)
+- `default` -> default rule (`trigger` `default`)
+
+### Engineering consequence
+
+- this is the cheapest troubleshooting call: one request answers "would this
+  device block this domain, and why" without reading the Activity Log
+- it is scoped to one endpoint and one domain per call, so it complements rather
+  than replaces the Activity Log queries
+- `no_log=1` should be used for diagnostics so the test does not create activity
+  records
+- in the observed environment the endpoint resolved without an `Authorization`
+  header, so a tool must not assume the request is authenticated
+
+## Write responses are returned but currently discarded
+
+The runtime treats write calls as fire-and-forget. The upstream API does not: a
+write returns the affected object.
+
+Observed sample: an idempotent `PUT /devices/{device_id}` (re-sending the current
+`stats` value) returned the full updated device object, including `PK`,
+`device_id`, `name`, `status`, `stats`, `client_count`, `learn_ip`, `icon`,
+`resolvers` (`doh`, `dot`, `v6`), `profile`, `profile2`, and `parent_device`
+(`device_id`, `client_id`).
+
+Engineering consequence:
+
+- every client write method currently discards the parsed response; the response is
+  already produced inside the shared request helper, so capturing it is a return
+  contract change rather than new transport work
+- capturing the response enables an optimistic action result without a follow-up
+  read, and is the natural basis for an action-result envelope
+- write responses expose fields that do not appear on the write call itself, such
+  as the per-endpoint resolver URLs and the `parent_device` link
+
 ## Dashboard-backed API discovery findings
 
 Updated interpretation:
@@ -2353,12 +3098,18 @@ These findings are strong enough to convert several planning topics from theory 
 - `triggerValue` supports multiple ranked breakdown surfaces, including filters and services, and those surfaces can appear both with and without `profileId`
 - endpoint-scoped analytics are now proven strongly enough to support derivation of at least `Encrypted DNS` and `Home Country Traffic` directly from count ratios
 - `Benign Blocks` is now likely derivable from blocked filter-category composition rather than requiring a separate dedicated summary endpoint
+- the Activity Log is the correct per-record troubleshooting surface, and its `trigger` + `triggerValue` is the authoritative block cause
+- the Activity Log (33 days) and the Statistics family (up to 365 days) must be treated as two surfaces with different retention, and a tool must state which it used
+- analytics retention is a user setting and may be shorter than, or disabled from, these maximums
+- `v2/client` `items` is keyed by `device_id`, so analytics client telemetry joins to endpoints by that key
+- the DNS verdict endpoint is the correct single-domain test surface, and its `verdictSource` vocabulary needs a mapping to `trigger`
+- write responses are available and should be captured rather than discarded
 
 ### Not yet ready to treat as closed decisions
 
 - how to generalize the normalizer beyond the currently observed `profile` and `profile2` shape for possible organization cases
 - how parent-child endpoint visibility should influence discovery and presentation when Firewalla child clients are not independently listed until explicitly assigned
-- how the analytics `/v2/client` item identifiers correlate to `/devices` identifiers
+- ~~how the analytics `/v2/client` item identifiers correlate to `/devices` identifiers~~ - **resolved:** keyed by `device_id` (see the Client identifier correlation findings)
 - how `action` values map to dashboard views such as blocked, bypassed, and redirected for `v2/statistic/count/triggerValue`
 - whether the internal analytics `value` slugs have a stable published mapping to the dashboard labels or need repository-owned translation logic
 - how `srcCountry[]` affects totals and whether the dashboard always scopes statistics by one or more country filters
@@ -2393,7 +3144,7 @@ These findings are strong enough to convert several planning topics from theory 
 3. Decide whether parent-child endpoint relationships should surface only as attributes in v1 or also influence later display organization.
 4. Formalize the typed persisted identity contract for selected rules and grouped rules.
 5. Verify how grouped-rule display labels should combine folder semantics, folder names, and rule targets while keeping entity names concise.
-6. Correlate one `v2/client` analytics item to a known `GET /devices` endpoint so the repository can decide whether analytics client telemetry is attachable to endpoint entities or should remain diagnostics-only.
+6. ~~Correlate one `v2/client` analytics item to a known `GET /devices` endpoint so the repository can decide whether analytics client telemetry is attachable to endpoint entities or should remain diagnostics-only.~~ - **done:** keyed by `device_id` (see the Client identifier correlation findings).
 7. Capture matching `v2/statistic/count/triggerValue` samples for blocked, bypassed, and redirected views so the repository can lock the `action` mapping and decide whether these counts become sensors, attributes, or diagnostics only.
 8. Capture the dashboard requests for the `Total`, `Bypassed`, and `Redirected` cards so the repository can determine whether `v2/statistic/count` and related endpoints need additional parameters such as `srcCountry[]` or action filters to match the visible summary cards exactly.
 9. Capture the dashboard requests for the domains panel in blocked, bypassed, and redirected views so the repository can decide whether `v2/statistic/count/question` belongs in diagnostics, capped sensor attributes, or a later on-demand surface.
@@ -2404,3 +3155,6 @@ These findings are strong enough to convert several planning topics from theory 
 14. Capture one more `GET /profiles/{profile_id}/options` sample where a known toggle is off and one dropdown is unset so the repository can determine the semantics of missing entries in the sparse state list.
 15. Capture one sparse-state sample where `ecs_subnet` is absent so the repository can close the `Off` versus `No ECS` interpretation on the read path.
 16. Capture the same enable and read behavior for `ttl_spff` and `ttl_pass` so the repository can confirm whether all TTL options share the numeric-field contract now proven for `ttl_blck`.
+17. Capture the per-record `trigger` vocabulary (`custom`, `grule`, `rebind`) from the Activity Log so the block-cause model is complete.
+18. Capture the DNS verdict `verdictSource` values against a known filter, rule, service, and default action so the `verdictSource` -> `trigger` mapping is closed.
+19. Capture a write response from a profile, filter, service, or rule mutation so the action-result envelope is shaped from real write payloads rather than the assumption that writes return nothing.
