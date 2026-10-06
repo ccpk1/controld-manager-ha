@@ -484,7 +484,9 @@ GET_INVENTORY_SERVICE_SCHEMA = vol.Schema(
             DETAIL_LEVELS
         ),
         vol.Optional(SERVICE_FIELD_PROFILE_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_PROFILE_NAME): vol.Any(cv.string, [cv.string]),
         vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
         vol.Optional(SERVICE_FIELD_CLIENT_LIMIT, default=100): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=500)
         ),
@@ -502,7 +504,9 @@ GET_ACTIVITY_LOG_SERVICE_SCHEMA = vol.Schema(
         vol.Optional(SERVICE_FIELD_TRIGGER): vol.In(ACTIVITY_TRIGGERS),
         vol.Optional(SERVICE_FIELD_TRIGGER_VALUE): cv.string,
         vol.Optional(SERVICE_FIELD_PROFILE_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_PROFILE_NAME): vol.Any(cv.string, [cv.string]),
         vol.Optional(SERVICE_FIELD_ENDPOINT_ID): vol.Any(cv.string, [cv.string]),
+        vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): vol.Any(cv.string, [cv.string]),
         vol.Optional(SERVICE_FIELD_CLIENT_ID): cv.string,
         vol.Optional(SERVICE_FIELD_PROTOCOL): vol.Any(cv.string, [cv.string]),
         vol.Optional(SERVICE_FIELD_SOURCE_COUNTRY): vol.Any(cv.string, [cv.string]),
@@ -525,7 +529,8 @@ GET_ACTIVITY_LOG_SERVICE_SCHEMA = vol.Schema(
 
 TEST_DOMAIN_SERVICE_SCHEMA = vol.Schema(
     {
-        vol.Required(SERVICE_FIELD_ENDPOINT_ID): cv.string,
+        vol.Optional(SERVICE_FIELD_ENDPOINT_ID): cv.string,
+        vol.Optional(SERVICE_FIELD_ENDPOINT_NAME): cv.string,
         vol.Required(SERVICE_FIELD_DOMAIN): cv.string,
         vol.Optional(SERVICE_FIELD_RECORD_TYPE, default="A"): vol.In(DNS_RECORD_TYPES),
         **_PROFILE_SERVICE_ENTRY_TARGET_FIELDS,
@@ -1109,12 +1114,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
         return integration_manager.async_build_inventory_response(
             config_entry_id=resolved_target.entry.entry_id,
             detail=call.data[SERVICE_FIELD_DETAIL],
-            profile_ids=frozenset(
-                _ensure_list(call.data.get(SERVICE_FIELD_PROFILE_ID))
-            ),
-            endpoint_ids=frozenset(
-                _ensure_list(call.data.get(SERVICE_FIELD_ENDPOINT_ID))
-            ),
+            profile_ids=_resolve_read_profile_ids(resolved_target.entry, call),
+            endpoint_ids=_resolve_read_endpoint_ids(resolved_target.entry, call),
             client_limit=call.data[SERVICE_FIELD_CLIENT_LIMIT],
         )
 
@@ -1132,8 +1133,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
             query_action=call.data.get(SERVICE_FIELD_QUERY_ACTION),
             trigger=call.data.get(SERVICE_FIELD_TRIGGER),
             trigger_value=call.data.get(SERVICE_FIELD_TRIGGER_VALUE),
-            profile_id=call.data.get(SERVICE_FIELD_PROFILE_ID),
-            endpoint_ids=tuple(_ensure_list(call.data.get(SERVICE_FIELD_ENDPOINT_ID))),
+            profile_id=_resolve_read_profile_id(resolved_target.entry, call),
+            endpoint_ids=tuple(_resolve_read_endpoint_ids(resolved_target.entry, call)),
             client_id=call.data.get(SERVICE_FIELD_CLIENT_ID),
             protocols=tuple(_ensure_list(call.data.get(SERVICE_FIELD_PROTOCOL))),
             source_countries=tuple(
@@ -1151,9 +1152,22 @@ async def async_register_services(hass: HomeAssistant) -> None:
         """Return the policy verdict for one domain on one endpoint."""
         resolved_target = _resolve_entry_service_target(hass, call)
         integration_manager = resolved_target.entry.runtime_data.managers.integration
+        endpoint_ids = _resolve_read_endpoint_ids(resolved_target.entry, call)
+        if len(endpoint_ids) != 1:
+            # The verdict is per-endpoint, so exactly one has to be named. Both
+            # selectors absent is the common case and gets its own key.
+            raise ServiceValidationError(
+                "Select exactly one Control D endpoint to test",
+                translation_domain=DOMAIN,
+                translation_key=(
+                    TRANS_KEY_ENDPOINT_TARGET_REQUIRED
+                    if not endpoint_ids
+                    else TRANS_KEY_ENDPOINT_TARGET_AMBIGUOUS
+                ),
+            )
         return await integration_manager.async_build_domain_test_response(
             config_entry_id=resolved_target.entry.entry_id,
-            endpoint_id=call.data[SERVICE_FIELD_ENDPOINT_ID],
+            endpoint_id=next(iter(endpoint_ids)),
             domain=call.data[SERVICE_FIELD_DOMAIN],
             record_type=call.data[SERVICE_FIELD_RECORD_TYPE],
         )
@@ -2913,6 +2927,86 @@ def _resolve_profiles_from_names(
         )
 
     return targeted_profiles
+
+
+def _resolve_read_profile_ids(
+    entry: ControlDManagerConfigEntry, call: ServiceCall
+) -> frozenset[str]:
+    """Return the profile PKs a read targets, resolving names when given.
+
+    Reads took only a PK, so a caller who knew the profile by name had to look
+    the PK up first. Names resolve through the same helper the write services
+    use, which reports an unknown or ambiguous name rather than quietly
+    widening the scope to every profile.
+    """
+    explicit_ids = frozenset(_ensure_name_list(call.data.get(SERVICE_FIELD_PROFILE_ID)))
+    if explicit_ids:
+        return explicit_ids
+    names = _ensure_name_list(call.data.get(SERVICE_FIELD_PROFILE_NAME))
+    if not names:
+        return frozenset()
+    return frozenset(_resolve_profiles_from_names(entry, names))
+
+
+def _resolve_read_profile_id(
+    entry: ControlDManagerConfigEntry, call: ServiceCall
+) -> str | None:
+    """Return the one profile a single-profile read targets, by id or name.
+
+    The activity log is scoped to at most one profile, so a name that resolves
+    to several is an error rather than an arbitrary pick.
+    """
+    explicit_id = call.data.get(SERVICE_FIELD_PROFILE_ID)
+    if isinstance(explicit_id, str) and explicit_id:
+        return explicit_id
+    resolved = _resolve_read_profile_ids(entry, call)
+    if not resolved:
+        return None
+    if len(resolved) > 1:
+        raise ServiceValidationError(
+            "Select exactly one Control D profile for this read",
+            translation_domain=DOMAIN,
+            translation_key=TRANS_KEY_PROFILE_TARGET_AMBIGUOUS,
+        )
+    return next(iter(resolved))
+
+
+def _resolve_read_endpoint_ids(
+    entry: ControlDManagerConfigEntry, call: ServiceCall
+) -> frozenset[str]:
+    """Return the endpoint device ids a read targets, resolving names when given.
+
+    Same reasoning as the profile helper: an endpoint name is what the dashboard
+    shows, so refusing it forced a lookup first. A name that matches nothing or
+    more than one endpoint is reported as a service error.
+    """
+    explicit_ids = frozenset(
+        _ensure_name_list(call.data.get(SERVICE_FIELD_ENDPOINT_ID))
+    )
+    if explicit_ids:
+        return explicit_ids
+    names = _ensure_name_list(call.data.get(SERVICE_FIELD_ENDPOINT_NAME))
+    if not names:
+        return frozenset()
+    endpoint_manager = entry.runtime_data.managers.endpoint
+    resolved: set[str] = set()
+    for name in names:
+        try:
+            resolved.add(
+                endpoint_manager.resolve_endpoint_target(endpoint_name=name).device_id
+            )
+        except ValueError as err:
+            translation_key = (
+                TRANS_KEY_ENDPOINT_TARGET_AMBIGUOUS
+                if "Ambiguous" in str(err)
+                else TRANS_KEY_ENDPOINT_TARGET_NOT_FOUND
+            )
+            raise ServiceValidationError(
+                f"Endpoint name {name!r} did not resolve to exactly one endpoint",
+                translation_domain=DOMAIN,
+                translation_key=translation_key,
+            ) from err
+    return frozenset(resolved)
 
 
 def _entry_runtime(entry: ConfigEntry) -> ControlDManagerRuntime | None:

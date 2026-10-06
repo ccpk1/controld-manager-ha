@@ -617,6 +617,14 @@ Every tool documented below uses this exact shape, in this order:
 
 ## Gotchas the tool schemas must encode
 
+- **Selecting a profile or an endpoint** — every tool that acts on one, and every
+  read that can be scoped to one, accepts either the id or the display name.
+  Prefer the id: names are not unique, and a name matching more than one target
+  is refused with `endpoint_target_ambiguous` or `profile_target_ambiguous`
+  rather than resolved arbitrarily. An explicit id wins when both are supplied.
+  The one deliberate exception is `create_endpoint`, where `endpoint_name` is the
+  name of the endpoint to *create*, not a selector — resolving it against the
+  inventory would reject every creation, so the resolution is opt-in per tool.
 - `statusCode`, **not** `rcode` (`rcode` is silently ignored).
 - `clientId` requires a co-present `endpointId`.
 - Activity Log `pageSize` max is 500; deep pages return older records, and a page

@@ -36,10 +36,12 @@ from .const import (
     SERVICE_FIELD_DETAIL,
     SERVICE_FIELD_DOMAIN,
     SERVICE_FIELD_ENDPOINT_ID,
+    SERVICE_FIELD_ENDPOINT_NAME,
     SERVICE_FIELD_LIMIT,
     SERVICE_FIELD_PAGE,
     SERVICE_FIELD_PAGE_SIZE,
     SERVICE_FIELD_PROFILE_ID,
+    SERVICE_FIELD_PROFILE_NAME,
     SERVICE_FIELD_PROTOCOL,
     SERVICE_FIELD_QUERY_ACTION,
     SERVICE_FIELD_RECORD_TYPE,
@@ -256,10 +258,31 @@ class GetInventoryTool(_ControlDReadTool):
                 ),
             ): probatio.Any(str, [str]),
             probatio.Optional(
+                SERVICE_FIELD_PROFILE_NAME,
+                description=(
+                    "Optional. One Control D profile name, or a list of them, "
+                    "as an alternative to `profile_id`. Names are not unique, "
+                    "so an unknown or ambiguous name is an error rather than a "
+                    "silently widened scope. `profile_id` wins when both are "
+                    "given."
+                ),
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
                     "Optional. One endpoint device_id, or a list of them, to "
                     "narrow the result. Omit to include every endpoint."
+                ),
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_NAME,
+                description=(
+                    "Optional. One endpoint display name, or a list of them, "
+                    "from get_inventory, as an alternative to `endpoint_id`. "
+                    "This is the field to use when you know the device by name. "
+                    "Names are not unique, so an unknown or ambiguous name is "
+                    "an error rather than a silently widened scope. "
+                    "`endpoint_id` wins when both are given."
                 ),
             ): probatio.Any(str, [str]),
             probatio.Optional(
@@ -386,11 +409,29 @@ class GetActivityLogTool(_ControlDReadTool):
                 ),
             ): str,
             probatio.Optional(
+                SERVICE_FIELD_PROFILE_NAME,
+                description=(
+                    "Optional. One profile name, as an alternative to "
+                    "`profile_id`. A name that matches more than one profile is "
+                    "an error, because this read covers at most one profile."
+                ),
+            ): str,
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
                     "Optional. One or more endpoint device_ids (from "
                     "get_inventory) to scope the result. Provide a list to cover "
                     "several endpoints at once."
+                ),
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_NAME,
+                description=(
+                    "Optional. One or more endpoint display names (from "
+                    "get_inventory), as an alternative to `endpoint_id`. Use "
+                    "this when you know the device by name. An unknown or "
+                    "ambiguous name is an error rather than a silently widened "
+                    "scope."
                 ),
             ): probatio.Any(str, [str]),
             probatio.Optional(
@@ -507,12 +548,13 @@ class TestDomainTool(_ControlDReadTool):
     )
     parameters = probatio.Schema(
         {
-            probatio.Required(
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
-                    "Required. The endpoint device_id to test, from "
+                    "Optional. The endpoint device_id to test, from "
                     "get_inventory. The verdict depends on which endpoint asks, "
-                    "because each endpoint enforces its own profile."
+                    "because each endpoint enforces its own profile. Provide "
+                    "this or `endpoint_name`."
                 ),
             ): str,
             probatio.Required(
@@ -522,6 +564,14 @@ class TestDomainTool(_ControlDReadTool):
                     "Use a bare domain, not a URL."
                 ),
             ): str,
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_NAME,
+                description=(
+                    "Optional. The endpoint display name to test, from "
+                    "get_inventory, as an alternative to `endpoint_id`. Exactly "
+                    "one endpoint must be named in total."
+                ),
+            ): probatio.Any(str, [str]),
             probatio.Optional(
                 SERVICE_FIELD_RECORD_TYPE,
                 default="A",
@@ -589,6 +639,14 @@ class GetCatalogTool(_ControlDReadTool):
                     "Optional. One or more profile ids (from "
                     "get_account_overview) to scope the catalog. Strongly "
                     "recommended; without it the result covers every profile."
+                ),
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_PROFILE_NAME,
+                description=(
+                    "Optional. One profile name, or a list of them, as an "
+                    "alternative to `profile_id`. `profile_id` wins when both "
+                    "are given."
                 ),
             ): probatio.Any(str, [str]),
             probatio.Optional(

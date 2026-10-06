@@ -430,25 +430,28 @@ async def test_a_missing_required_argument_is_a_clean_error(
 
 
 async def test_every_tool_declares_a_probatio_schema(hass: HomeAssistant) -> None:
-    """Tool schemas must be `probatio.Schema`, which is what HA declares.
+    """Tool schemas must be probatio validators, not voluptuous ones.
 
     `llm.Tool.parameters` is annotated `probatio.Schema`, and probatio replaced
     voluptuous as the validation engine in Core 2026.10. Importing voluptuous
     still resolves at runtime because HA aliases it to probatio in `sys.modules`,
     so a wrong import is invisible until something type-checks it. This asserts
-    the declared type directly rather than relying on that alias.
-    """
-    import probatio
+    the validator's own module rather than relying on that alias.
 
+    A tool needing a cross-field rule composes `probatio.All(Schema(...), rule)`,
+    which is not nominally a `Schema`, so requiring exactly that type would fail
+    a correct tool. What matters is the origin, and that is also the thing the
+    alias can hide.
+    """
     tools = await _tools(hass, LLM_TOOL_MODE_FULL)
     assert tools
 
     wrong = {
         tool.name: type(tool.parameters).__module__
         for tool in tools
-        if not isinstance(tool.parameters, probatio.Schema)
+        if not type(tool.parameters).__module__.startswith("probatio")
     }
-    assert wrong == {}, f"tools not using probatio.Schema: {wrong}"
+    assert wrong == {}, f"tools not using a probatio validator: {wrong}"
 
 
 async def test_tool_schemas_still_convert_for_an_mcp_client(

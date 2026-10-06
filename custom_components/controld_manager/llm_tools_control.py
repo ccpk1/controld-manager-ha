@@ -50,6 +50,7 @@ from .const import (
     SERVICE_FIELD_ENABLED,
     SERVICE_FIELD_ENDPOINT_HOSTNAME,
     SERVICE_FIELD_ENDPOINT_ID,
+    SERVICE_FIELD_ENDPOINT_IP,
     SERVICE_FIELD_ENDPOINT_MAC,
     SERVICE_FIELD_ENDPOINT_NAME,
     SERVICE_FIELD_EXPIRATION_DURATION,
@@ -166,6 +167,53 @@ _EXPIRATION_DESCRIPTION: Final = (
 
 _COMMENT_DESCRIPTION: Final = "Optional. A comment to record on the rule."
 
+_ENDPOINT_NAME_DESCRIPTION: Final = (
+    "Optional. One or more endpoint display names, as an alternative to "
+    "`endpoint_id` and resolved against the inventory we hold. Names are not "
+    "guaranteed unique, so this fails when a name matches more than one "
+    "endpoint; prefer `endpoint_id` whenever you have it. Both selectors may be "
+    "given, and they are then combined."
+)
+
+_ENDPOINT_SELECTOR_DESCRIPTION: Final = (
+    "The endpoint or endpoints to act on, by `endpoint_id` or by "
+    "`endpoint_name`. Provide at least one. Ids are exact, so they are the safer "
+    "selector; a name is accepted because it is what the dashboard shows."
+)
+
+_ENDPOINT_SELECTOR_REQUIRED: Final = probatio.AtLeastOne(
+    SERVICE_FIELD_ENDPOINT_ID, SERVICE_FIELD_ENDPOINT_NAME
+)
+
+
+def _endpoint_selector_schema(fields: dict[Any, Any]) -> probatio.Schema:
+    """Return a schema that requires an endpoint id or an endpoint name.
+
+    ``AtLeastOne`` is a dict-level rule that has to run after the field schema,
+    but ``Schema``'s only second argument is ``extra``, so the two compose
+    through ``All``. ``Tool.parameters`` is annotated ``probatio.Schema`` and an
+    ``All`` combinator is not nominally one, so the result is cast: it validates
+    and converts through ``probatio.to_openapi`` exactly as a ``Schema`` does,
+    which is what the MCP server and the LLM providers actually call.
+    """
+    return cast(
+        probatio.Schema,
+        probatio.All(probatio.Schema(fields), _ENDPOINT_SELECTOR_REQUIRED),
+    )
+
+
+_ENDPOINT_NAME_SELECTOR_DESCRIPTION: Final = (
+    "Optional. The name of the endpoint this client has become, from "
+    "get_inventory. Only a client that was assigned its own profile is "
+    "addressable this way, and names are not unique. Prefer client_id."
+)
+
+_ENDPOINT_IP_SELECTOR_DESCRIPTION: Final = (
+    "Optional. The client's IP address, from get_inventory with detail 'full'. "
+    "Not guaranteed unique, since a client can renew into a different address. "
+    "Prefer client_id."
+)
+
 
 def _resolve_profile_pks(registry: Any, args: dict[str, Any]) -> tuple[str, ...]:
     """Return the profile ids a tool call addresses.
@@ -222,6 +270,22 @@ def _match_client_targets(
             for target in registry.client_alias_targets.values()
             if (target.client_hostname or "").casefold() in hostnames
         )
+    endpoint_names = {
+        name.casefold() for name in as_list(args.get(SERVICE_FIELD_ENDPOINT_NAME))
+    }
+    if endpoint_names:
+        return tuple(
+            target
+            for target in registry.client_alias_targets.values()
+            if (target.endpoint_name or "").casefold() in endpoint_names
+        )
+    ip_addresses = set(as_list(args.get(SERVICE_FIELD_ENDPOINT_IP)))
+    if ip_addresses:
+        return tuple(
+            target
+            for target in registry.client_alias_targets.values()
+            if (target.client_ip_address or "") in ip_addresses
+        )
     return ()
 
 
@@ -231,6 +295,10 @@ def _client_target(args: dict[str, Any]) -> dict[str, Any]:
         return {"kind": "client", "client_id": client_ids}
     if macs := args.get(SERVICE_FIELD_ENDPOINT_MAC):
         return {"kind": "client", "mac": macs}
+    if names := args.get(SERVICE_FIELD_ENDPOINT_NAME):
+        return {"kind": "client", "name": names}
+    if ips := args.get(SERVICE_FIELD_ENDPOINT_IP):
+        return {"kind": "client", "ip": ips}
     return {"kind": "client", "hostname": args.get(SERVICE_FIELD_ENDPOINT_HOSTNAME)}
 
 
@@ -255,6 +323,10 @@ def _client_selector_args_from_args(args: dict[str, Any]) -> str | None:
         return f"client_id={client_ids[0]!r}"
     if macs := as_list(args.get(SERVICE_FIELD_ENDPOINT_MAC)):
         return f"endpoint_mac={macs[0]!r}"
+    if names := as_list(args.get(SERVICE_FIELD_ENDPOINT_NAME)):
+        return f"endpoint_name={names[0]!r}"
+    if ips := as_list(args.get(SERVICE_FIELD_ENDPOINT_IP)):
+        return f"endpoint_ip={ips[0]!r}"
     if hostnames := as_list(args.get(SERVICE_FIELD_ENDPOINT_HOSTNAME)):
         return f"endpoint_hostname={hostnames[0]!r}"
     return None
@@ -302,6 +374,12 @@ class _ControlDControlTool(llm.Tool):
     annotations = _CONTROL_ANNOTATIONS
 
     _service: str
+
+    # Whether `endpoint_name` on this tool names the endpoint to act on. It is
+    # opt-in because the field is overloaded: `create_endpoint` takes
+    # `endpoint_name` as the name of the endpoint to *create*, so resolving it
+    # against the inventory would reject every creation.
+    _accepts_endpoint_name_selector: bool = False
 
     # Whether a pre-write state can be read at all. `create_rule` cannot: it is
     # additive, so there is no previous state to compare against.
@@ -367,6 +445,47 @@ class _ControlDControlTool(llm.Tool):
         )
         return {**args, SERVICE_FIELD_PROFILE_ID: translated}
 
+    def _resolve_endpoint_names(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Fill `endpoint_id` from `endpoint_name`, before the hooks read it.
+
+        The backing services accept either selector, but every hook on this side
+        resolves `endpoint_id` against the runtime registry, so a name has to
+        become an id before they run. Both may be supplied and are then merged,
+        matching the service, and the caller's shape is preserved because one of
+        these services takes a single endpoint as a scalar.
+
+        Raises ``ValueError`` when a name matches nothing or more than one
+        endpoint. Names are not unique, so that is reported rather than guessed.
+        """
+        requested_names = args.get(SERVICE_FIELD_ENDPOINT_NAME)
+        if not requested_names or not self._accepts_endpoint_name_selector:
+            return args
+        entry = hass.config_entries.async_get_entry(self._entry_id)
+        runtime = getattr(entry, "runtime_data", None)
+        endpoint_manager = getattr(getattr(runtime, "managers", None), "endpoint", None)
+        if endpoint_manager is None:
+            return args
+        resolved_ids = [
+            endpoint_manager.resolve_endpoint_target(endpoint_name=name).device_id
+            for name in as_list(requested_names)
+        ]
+        merged = list(
+            dict.fromkeys(
+                [*as_list(args.get(SERVICE_FIELD_ENDPOINT_ID)), *resolved_ids]
+            )
+        )
+        caller_used_scalars = not isinstance(
+            args.get(SERVICE_FIELD_ENDPOINT_ID), list
+        ) and not isinstance(requested_names, list)
+        return {
+            **args,
+            SERVICE_FIELD_ENDPOINT_ID: (
+                merged[0] if caller_used_scalars and len(merged) == 1 else merged
+            ),
+        }
+
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the resolved target to report, from the caller's own input."""
         return {key: value for key, value in args.items() if value is not None}
@@ -417,12 +536,43 @@ class _ControlDControlTool(llm.Tool):
         """Call the backing service and return the action result."""
         args = self._args(tool_input)
         try:
+            # Resolved first so that everything downstream — the preload, the
+            # pre-check, and the undo — sees the same resolved target.
+            args = self._resolve_endpoint_names(hass, args)
+        except ValueError as err:
+            # A name that resolves to nothing, or to more than one endpoint, is
+            # a validation failure. It becomes an action result so the model is
+            # told which of the two happened instead of the error escaping.
+            return llm.ToolResult(
+                data=build_action_result(
+                    status=ACTION_STATUS_FAILED,
+                    target=self._selector_target(args),
+                    changed=False,
+                    error=str(err),
+                ),
+                error=True,
+            )
+        try:
             await self._async_preload(hass, args)
             return await self._async_dispatch(hass, args, llm_context)
         finally:
             # Preloaded state is per-call, so it never outlives the call that
             # needed it.
             self._clear_preload()
+
+    def _selector_target(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return a target from the caller's own selectors, unresolved.
+
+        Used when resolution failed: `_target` reports the id the call resolved
+        to, and there is none to report, so echoing the caller's own selector is
+        the only honest answer.
+        """
+        return {
+            key: value
+            for key, value in args.items()
+            if key in (SERVICE_FIELD_ENDPOINT_ID, SERVICE_FIELD_ENDPOINT_NAME)
+            and value is not None
+        }
 
     def _clear_preload(self) -> None:
         """Drop any state loaded by ``_async_preload``."""
@@ -1714,15 +1864,19 @@ class RenameEndpointTool(_ControlDControlTool):
         "change its clients; if you meant to label a single device under an "
         "endpoint, use `set_client_alias` instead."
     )
-    parameters = probatio.Schema(
+    parameters = _endpoint_selector_schema(
         {
-            probatio.Required(
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
-                    "Required. The endpoint device_id or list of device_ids "
+                    "Optional. The endpoint device_id or list of device_ids "
                     "(from get_inventory). Ids are unique, so prefer this over a "
                     "name."
                 ),
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_NAME,
+                description=_ENDPOINT_NAME_DESCRIPTION,
             ): probatio.Any(str, [str]),
             probatio.Required(
                 SERVICE_FIELD_NEW_NAME,
@@ -1734,6 +1888,7 @@ class RenameEndpointTool(_ControlDControlTool):
         }
     )
     _service = SERVICE_RENAME_ENDPOINT
+    _accepts_endpoint_name_selector = True
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the renamed endpoints."""
@@ -1820,14 +1975,18 @@ class SetEndpointAnalyticsLoggingTool(_ControlDControlTool):
         "dashboard asks for a storage region; that choice is not made here. This "
         "is reversible — set it back."
     )
-    parameters = probatio.Schema(
+    parameters = _endpoint_selector_schema(
         {
-            probatio.Required(
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
-                    "Required. The endpoint device_id or list of device_ids "
+                    "Optional. The endpoint device_id or list of device_ids "
                     "(from get_inventory) to change logging for."
                 ),
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_NAME,
+                description=_ENDPOINT_NAME_DESCRIPTION,
             ): probatio.Any(str, [str]),
             probatio.Required(
                 SERVICE_FIELD_MODE,
@@ -1840,6 +1999,7 @@ class SetEndpointAnalyticsLoggingTool(_ControlDControlTool):
         }
     )
     _service = SERVICE_SET_ENDPOINT_ANALYTICS_LOGGING
+    _accepts_endpoint_name_selector = True
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the addressed endpoints."""
@@ -1875,15 +2035,19 @@ class SetEndpointProfileTool(_ControlDControlTool):
         "This is reversible: set the previous value back, or clear the "
         "secondary, and the `undo` field names the call."
     )
-    parameters = probatio.Schema(
+    parameters = _endpoint_selector_schema(
         {
-            probatio.Required(
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
-                    "Required. The endpoint device_id or list of device_ids "
+                    "Optional. The endpoint device_id or list of device_ids "
                     "(from get_inventory). Ids are unique, so prefer this over a "
                     "name."
                 ),
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_NAME,
+                description=_ENDPOINT_NAME_DESCRIPTION,
             ): probatio.Any(str, [str]),
             probatio.Optional(
                 SERVICE_FIELD_PROFILE_ID,
@@ -1911,6 +2075,7 @@ class SetEndpointProfileTool(_ControlDControlTool):
         }
     )
     _service = SERVICE_SET_ENDPOINT_PROFILE
+    _accepts_endpoint_name_selector = True
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the addressed endpoints and the profile change."""
@@ -2102,18 +2267,23 @@ class DeleteEndpointTool(_ControlDControlTool):
         "endpoint intact and its history readable, which is usually preferable "
         "to destroying it."
     )
-    parameters = probatio.Schema(
+    parameters = _endpoint_selector_schema(
         {
-            probatio.Required(
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
-                    "Required. The endpoint device_id or list of device_ids "
-                    "(from get_inventory). This is permanent."
+                    "Optional. The endpoint device_id or list of device_ids "
+                    "(from get_inventory). Prefer this; it is unambiguous."
                 ),
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_NAME,
+                description=_ENDPOINT_NAME_DESCRIPTION,
             ): probatio.Any(str, [str]),
         }
     )
     _service = SERVICE_DELETE_ENDPOINT
+    _accepts_endpoint_name_selector = True
     annotations = _DESTRUCTIVE_ANNOTATIONS
     # Deletion has no prior state to compare and no undo by design, so the
     # "state could not be read" note would give the wrong reason for both.
@@ -2147,15 +2317,19 @@ class SetEndpointDescriptionTool(_ControlDControlTool):
         "This is reversible: set the previous value back, which `undo` names. "
         "It does not touch the endpoint's name, its profiles, or its clients."
     )
-    parameters = probatio.Schema(
+    parameters = _endpoint_selector_schema(
         {
-            probatio.Required(
+            probatio.Optional(
                 SERVICE_FIELD_ENDPOINT_ID,
                 description=(
-                    "Required. The endpoint device_id or list of device_ids "
+                    "Optional. The endpoint device_id or list of device_ids "
                     "(from get_inventory). Ids are unique, so prefer this over a "
                     "name."
                 ),
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_NAME,
+                description=_ENDPOINT_NAME_DESCRIPTION,
             ): probatio.Any(str, [str]),
             probatio.Required(
                 SERVICE_FIELD_DESCRIPTION,
@@ -2163,10 +2337,11 @@ class SetEndpointDescriptionTool(_ControlDControlTool):
                     "Required. The note to store. An empty string clears the "
                     "description."
                 ),
-            ): cv.string,
+            ): str,
         }
     )
     _service = SERVICE_SET_ENDPOINT_DESCRIPTION
+    _accepts_endpoint_name_selector = True
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the addressed endpoints."""
@@ -2282,6 +2457,14 @@ class SetClientAliasTool(_ControlDControlTool):
                     "detail 'full'. Not guaranteed unique. Prefer client_id."
                 ),
             ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_NAME,
+                description=_ENDPOINT_NAME_SELECTOR_DESCRIPTION,
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_IP,
+                description=_ENDPOINT_IP_SELECTOR_DESCRIPTION,
+            ): probatio.Any(str, [str]),
             probatio.Required(
                 SERVICE_FIELD_ALIAS,
                 description=(
@@ -2392,6 +2575,14 @@ class ClearClientAliasTool(_ControlDControlTool):
                     "Optional. The client's hostname, from get_inventory with "
                     "detail 'full'. Not guaranteed unique. Prefer client_id."
                 ),
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_NAME,
+                description=_ENDPOINT_NAME_SELECTOR_DESCRIPTION,
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_IP,
+                description=_ENDPOINT_IP_SELECTOR_DESCRIPTION,
             ): probatio.Any(str, [str]),
             probatio.Optional(
                 SERVICE_FIELD_PARENT_ENDPOINT_NAME,
@@ -2519,6 +2710,14 @@ class DeleteClientTool(_ControlDControlTool):
                     "under one hostname, so this can match a long list. Prefer "
                     "client_id."
                 ),
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_NAME,
+                description=_ENDPOINT_NAME_SELECTOR_DESCRIPTION,
+            ): probatio.Any(str, [str]),
+            probatio.Optional(
+                SERVICE_FIELD_ENDPOINT_IP,
+                description=_ENDPOINT_IP_SELECTOR_DESCRIPTION,
             ): probatio.Any(str, [str]),
             probatio.Optional(
                 SERVICE_FIELD_PARENT_ENDPOINT_NAME,

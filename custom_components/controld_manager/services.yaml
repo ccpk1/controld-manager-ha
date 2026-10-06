@@ -988,10 +988,22 @@ get_inventory:
         ["7b6d4e8a2c0141e8b6d0f9a3c2e4d1f0"]
       selector:
         text:
+    profile_name:
+      required: false
+      example: |
+        ["Kids"]
+      selector:
+        text:
     endpoint_id:
       required: false
       example: |
         ["461wtt4eyr"]
+      selector:
+        text:
+    endpoint_name:
+      required: false
+      example: |
+        ["kadens-phone"]
       selector:
         text:
     client_limit:
@@ -1060,8 +1072,18 @@ get_activity_log:
       required: false
       selector:
         text:
+    profile_name:
+      required: false
+      example: "Kadens Phone"
+      selector:
+        text:
     endpoint_id:
       required: false
+      selector:
+        text:
+    endpoint_name:
+      required: false
+      example: "kadens-phone"
       selector:
         text:
     client_id:
@@ -1135,8 +1157,13 @@ test_domain:
   description: "Return the policy verdict for one domain on one endpoint."
   fields:
     endpoint_id:
-      required: true
+      required: false
       example: "461wtt4eyr"
+      selector:
+        text:
+    endpoint_name:
+      required: false
+      example: "kadens-phone"
       selector:
         text:
     domain:

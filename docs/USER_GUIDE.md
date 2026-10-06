@@ -1175,11 +1175,8 @@ Targeting rules:
 	catalog holds over a thousand rows while `limit` caps at 500, so without a
 	search a named service cannot be located. Put the name in the search box, for
 	example `apple`, rather than trying to page through the list
-- `redirect_locations` is account-wide and ignores the profile selectors, because
-the location list is the same for every profile
-
-The service response includes:
-
+- `profile_name` is optional and lets you scope the catalog without knowing the
+  profile PK. `profile_id` wins if you supply both
 - `profiles` for the selected scope
 - typed `items` for the requested catalog family
 - `item_count`, which reports how many rows matched after any `search`
@@ -1194,6 +1191,31 @@ Manual example:
 - find one named service in a catalog too large to list:
 	`catalog_type: services`
 	`search: apple`
+
+### Selecting profiles and endpoints by name
+
+Every service that acts on a profile or an endpoint, and every read that can be
+scoped to one, accepts either the Control D id or the display name:
+
+| Object | By id | By name |
+| --- | --- | --- |
+| Profile | `profile_id` | `profile_name` |
+| Endpoint | `endpoint_id` | `endpoint_name` |
+| Client | `client_id` | `endpoint_mac`, `endpoint_hostname`, `endpoint_ip` |
+| Filter | `filter_id` | `filter_name` |
+| Service | `service_id` | `service_name` |
+| Option | `option_id` | `option_name` |
+| Rule group | `rule_group_id` | `rule_group_name` |
+
+Names are convenient but not unique, so:
+
+- An explicit id always wins when both are supplied.
+- A name that matches nothing is an error, not an empty result.
+- A name that matches more than one object is an error, not an arbitrary pick.
+  Rename the duplicate or use the id.
+
+The one exception is `create_endpoint`, where `endpoint_name` is the name of the
+new endpoint to create rather than a way to select an existing one.
 
 ### Account overview service
 
