@@ -58,9 +58,9 @@ def _registry() -> ControlDRegistry:
             )
         },
         endpoint_inventory=ControlDEndpointInventoryStats(
-            discovered_endpoint_count=9,
-            router_client_count=4,
-            protected_endpoint_count=13,
+            endpoint_count=9,
+            client_count=4,
+            protected_device_count=13,
         ),
         profiles={
             "p-1": ControlDProfileSummary(profile_pk="p-1", name="Default"),
@@ -101,13 +101,17 @@ def test_registry_count_accessors_are_the_single_source() -> None:
     """The shared accessors expose the entity counts, not raw dict lengths."""
     registry = _registry()
 
-    # The endpoint count is the protected count, not len(registry.endpoints).
-    assert registry.endpoint_count == 13
-    assert registry.endpoint_count != len(registry.endpoints)
-    assert registry.discovered_endpoint_count == 9
-    assert registry.router_client_count == 4
+    # Three distinct counts. endpoint_count is the /devices rows; adding the
+    # clients behind them gives protected_device_count, which is what the count
+    # sensors report. Collapsing the two was the bug.
+    assert registry.endpoint_count == 9
+    assert registry.client_count == 4
+    assert registry.protected_device_count == 13
+    assert registry.protected_device_count == (
+        registry.endpoint_count + registry.client_count
+    )
     assert registry.profile_count == 2
-    assert registry.protected_endpoint_count_for_profile("p-1") == 4
+    assert registry.protected_device_count_for_profile("p-1") == 4
 
 
 def test_overview_account_counts_match_the_registry_accessors() -> None:
@@ -119,11 +123,9 @@ def test_overview_account_counts_match_the_registry_accessors() -> None:
 
     account: Any = overview["account"]
     assert account["profile_count"] == registry.profile_count == 2
-    assert account["endpoint_count"] == registry.endpoint_count == 13
-    assert (
-        account["discovered_endpoint_count"] == registry.discovered_endpoint_count == 9
-    )
-    assert account["router_client_count"] == registry.router_client_count == 4
+    assert account["endpoint_count"] == registry.endpoint_count == 9
+    assert account["client_count"] == registry.client_count == 4
+    assert account["protected_device_count"] == registry.protected_device_count == 13
     assert account["region"] == "america"
     # Integer, not a stringified integer: GET /users documents it as an integer
     # and the field was silently null in production until the parse was fixed.
@@ -144,8 +146,8 @@ def test_overview_profile_rows_match_the_entity_accessors() -> None:
     default_row = rows["p-1"]
     assert default_row["profile_name"] == "Default"
     assert (
-        default_row["endpoint_count"]
-        == registry.protected_endpoint_count_for_profile("p-1")
+        default_row["protected_device_count"]
+        == registry.protected_device_count_for_profile("p-1")
         == 4
     )
     assert default_row["blocked_queries"] == 500
@@ -154,7 +156,7 @@ def test_overview_profile_rows_match_the_entity_accessors() -> None:
     assert default_row["paused"] is False
 
     kids_row = rows["p-2"]
-    assert kids_row["endpoint_count"] == 0
+    assert kids_row["protected_device_count"] == 0
     assert kids_row["paused"] is True
     assert kids_row["blocked_queries"] is None
 
@@ -201,3 +203,27 @@ def test_overview_analytics_block_reflects_availability(
     )
     analytics = overview["account"]["analytics"]
     assert bool(analytics) is analytics_present
+
+
+def test_protected_device_count_is_endpoints_plus_clients_at_account_level() -> None:
+    """The account identity holds exactly, and the profile rows deliberately do not.
+
+    `protected_device_count` is everything DNS protection covers, so at account
+    level it is endpoints plus clients with no overlap: the account view is a
+    single pass over the endpoints. The per-profile rows cannot share that
+    property, because an endpoint enforcing two profiles is counted under each.
+    """
+    registry = _registry()
+    overview = _manager(registry).async_build_account_overview_response(
+        config_entry_id=_CONFIG_ENTRY_ID
+    )
+
+    account: Any = overview["account"]
+    assert account["protected_device_count"] == (
+        account["endpoint_count"] + account["client_count"]
+    )
+
+    # Every profile row is a protected-device count, never an endpoint count.
+    for row in overview["profiles"]:
+        assert "protected_device_count" in row
+        assert "endpoint_count" not in row

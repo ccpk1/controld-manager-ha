@@ -578,7 +578,7 @@ class EndpointManager(BaseManager):
         self, devices_payload: tuple[dict[str, Any], ...]
     ) -> dict[str, ControlDEndpointSummary]:
         """Normalize endpoint inventory into immutable endpoint summaries."""
-        router_client_counts_by_parent = self._summarize_router_clients(devices_payload)
+        client_counts_by_parent = self._summarize_clients_by_parent(devices_payload)
         endpoints: dict[str, ControlDEndpointSummary] = {}
         for device_payload in devices_payload:
             device_id = self._require_string(device_payload, "device_id")
@@ -593,9 +593,7 @@ class EndpointManager(BaseManager):
                     or device_payload.get("last_active")
                 ),
                 attached_profiles=attached_profiles,
-                associated_client_count=router_client_counts_by_parent.get(
-                    device_id, 0
-                ),
+                associated_client_count=client_counts_by_parent.get(device_id, 0),
                 parent_device_id=self._extract_parent_device_id(device_payload),
                 # Present only when this device is also a client under another
                 # endpoint, which is how a standalone endpoint is aliased.
@@ -624,20 +622,20 @@ class EndpointManager(BaseManager):
         devices_payload: tuple[dict[str, Any], ...],
         endpoints: dict[str, ControlDEndpointSummary],
     ) -> ControlDEndpointInventoryStats:
-        """Return account-level endpoint totals without creating extra entities."""
+        """Return account-level inventory totals without creating extra entities."""
         del devices_payload
-        router_client_count = sum(
+        client_count = sum(
             endpoint.associated_client_count for endpoint in endpoints.values()
         )
 
-        discovered_endpoint_count = len(endpoints)
+        endpoint_count = len(endpoints)
         return ControlDEndpointInventoryStats(
-            discovered_endpoint_count=discovered_endpoint_count,
-            router_client_count=router_client_count,
-            protected_endpoint_count=discovered_endpoint_count + router_client_count,
+            endpoint_count=endpoint_count,
+            client_count=client_count,
+            protected_device_count=endpoint_count + client_count,
         )
 
-    def _summarize_router_clients(
+    def _summarize_clients_by_parent(
         self, devices_payload: tuple[dict[str, Any], ...]
     ) -> dict[str, int]:
         """Return deduped nested router-client counts keyed by parent device."""
@@ -653,7 +651,7 @@ class EndpointManager(BaseManager):
                 self._normalize_client_identity(name)
             )
 
-        router_client_counts_by_parent: dict[str, int] = {}
+        client_counts_by_parent: dict[str, int] = {}
         seen_client_keys: set[tuple[str, str]] = set()
         for device_payload in devices_payload:
             parent_device_id = self._optional_string(device_payload.get("device_id"))
@@ -671,11 +669,11 @@ class EndpointManager(BaseManager):
                     parent_device_id, set()
                 ):
                     continue
-                router_client_counts_by_parent[parent_device_id] = (
-                    router_client_counts_by_parent.get(parent_device_id, 0) + 1
+                client_counts_by_parent[parent_device_id] = (
+                    client_counts_by_parent.get(parent_device_id, 0) + 1
                 )
 
-        return router_client_counts_by_parent
+        return client_counts_by_parent
 
     def _iter_attached_profiles(
         self, device_payload: dict[str, Any]

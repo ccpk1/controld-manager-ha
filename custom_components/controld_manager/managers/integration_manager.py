@@ -402,9 +402,16 @@ class IntegrationManager(BaseManager):
                 # account. The vendor defines no richer code set for accounts.
                 "status": registry.user.status if registry.user else None,
                 "profile_count": registry.profile_count,
+                # Three distinct counts, named for what each actually counts.
+                # `endpoint_count` is the `/devices` row count, `client_count`
+                # is the devices seen under them, and `protected_device_count`
+                # is the two added together: everything DNS protection covers.
+                # Reporting the sum as `endpoint_count` was wrong, since a
+                # client is not an endpoint. The sum is exact at this level
+                # because this is a single pass over the endpoints.
                 "endpoint_count": registry.endpoint_count,
-                "discovered_endpoint_count": registry.discovered_endpoint_count,
-                "router_client_count": registry.router_client_count,
+                "client_count": registry.client_count,
+                "protected_device_count": registry.protected_device_count,
                 "analytics": self._serialize_account_analytics(
                     registry.account_analytics
                 ),
@@ -448,8 +455,11 @@ class IntegrationManager(BaseManager):
                 {
                     "profile_id": profile_pk,
                     "profile_name": profile.name,
-                    "endpoint_count": (
-                        registry.protected_endpoint_count_for_profile(profile_pk)
+                    # Named for what it counts. An endpoint attached to two
+                    # profiles is counted under each, so these rows total more
+                    # than the account figure by design.
+                    "protected_device_count": (
+                        registry.protected_device_count_for_profile(profile_pk)
                     ),
                     "paused": profile.paused_until is not None,
                     "blocked_queries": (
@@ -493,7 +503,10 @@ class IntegrationManager(BaseManager):
                 "profile_id": profile_pk,
                 "profile_name": registry.profiles[profile_pk].name,
                 "paused": registry.profiles[profile_pk].paused_until is not None,
-                "endpoint_count": registry.protected_endpoint_count_for_profile(
+                # Per profile, so an endpoint enforcing two profiles is
+                # counted here twice. Summing these rows therefore exceeds the
+                # account's protected_device_count rather than matching it.
+                "protected_device_count": registry.protected_device_count_for_profile(
                     profile_pk
                 ),
             }

@@ -37,9 +37,9 @@ def _registry() -> ControlDRegistry:
     """Return a registry with a parent, a standalone client, and a sub-client."""
     return ControlDRegistry(
         endpoint_inventory=ControlDEndpointInventoryStats(
-            discovered_endpoint_count=3,
-            router_client_count=2,
-            protected_endpoint_count=5,
+            endpoint_count=3,
+            client_count=2,
+            protected_device_count=5,
         ),
         profiles={
             "p-1": ControlDProfileSummary(profile_pk="p-1", name="Default"),
@@ -141,15 +141,15 @@ def test_summary_returns_profiles_and_endpoints_without_clients() -> None:
     assert "clients" not in response
 
 
-def test_profile_rows_use_the_shared_endpoint_count_accessor() -> None:
-    """Profile endpoint counts match the profile entities."""
+def test_profile_rows_use_the_shared_protected_device_accessor() -> None:
+    """Profile counts match the profile entities, and are named for what they count."""
     registry = _registry()
     response = _build(registry)
 
     rows = {row["profile_id"]: row for row in response["profiles"]}
     assert (
-        rows["p-1"]["endpoint_count"]
-        == registry.protected_endpoint_count_for_profile("p-1")
+        rows["p-1"]["protected_device_count"]
+        == registry.protected_device_count_for_profile("p-1")
         == 3
     )
     assert rows["p-2"]["paused"] is True

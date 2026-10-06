@@ -283,9 +283,9 @@ def test_integration_manager_builds_normalized_registry() -> None:
     assert registry.endpoints["device-1"].associated_client_count == 0
     assert registry.endpoints["device-1"].parent_device_id == "router-1"
     assert registry.endpoints["device-1"].parent_client_id is None
-    assert registry.endpoint_inventory.discovered_endpoint_count == 2
-    assert registry.endpoint_inventory.router_client_count == 1
-    assert registry.endpoint_inventory.protected_endpoint_count == 3
+    assert registry.endpoint_inventory.endpoint_count == 2
+    assert registry.endpoint_inventory.client_count == 1
+    assert registry.endpoint_inventory.protected_device_count == 3
 
 
 def test_integration_manager_reads_org_stats_endpoint_fallback() -> None:

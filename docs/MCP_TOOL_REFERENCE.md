@@ -443,12 +443,13 @@ come before controls.
 - **When to use** — first, to size the account and see which profile is doing what.
 - **When not to use** — for per-query detail (use `get_activity_log`).
 - **Inputs** — none. The tool binds to its own config entry.
-- **Returns** — `result.account` with `region`, `status`, `profile_count`,
-  `endpoint_count`, `discovered_endpoint_count`, `router_client_count`, and an
-  `analytics` block (`total_queries`, `blocked_queries`, `bypassed_queries`,
+- **Returns** — `result.system_model` (the cross-cutting model, identical to the
+  API prompt), `result.account` with `region`, `status`, `profile_count`,
+  `endpoint_count`, `client_count`, `protected_device_count`, and an `analytics`
+  block (`total_queries`, `blocked_queries`, `bypassed_queries`,
   `redirected_queries`, `blocked_queries_ratio`, `window_start`, `window_end`),
-  plus `result.profiles[]` with `profile_id`, `profile_name`, `endpoint_count`,
-  `paused`, and blocked/bypassed/redirected counts.
+  plus `result.profiles[]` with `profile_id`, `profile_name`,
+  `protected_device_count`, `paused`, and blocked/bypassed/redirected counts.
 - **`status` is Control D's 0/1 account flag**, not a free-form code: `1`
   enabled, `0` disabled. It is the same enablement integer the API uses for
   filters, services, options, and restrictions (`PUT`/`DELETE` on a restriction
@@ -459,14 +460,22 @@ come before controls.
   concept and does not apply to this field.
 - **Counts never diverge from the entities.** Every count comes from the same
   `ControlDRegistry` accessors the account and profile entities read, so the tool
-  and the sensors always agree. `endpoint_count` is the protected count
-  (`discovered + router clients`), not the raw `/devices` row count.
-- **The per-profile `endpoint_count` rows do not sum to the account total.** An
-  endpoint attached to more than one profile (Control D's `profile` plus
-  `profile2`) is counted under each attachment, so the rows intentionally total
-  more than `account.endpoint_count`. Both figures are correct; the account one
-  is the count of distinct protected endpoints. Callers must quote the account
-  figure rather than adding the rows up.
+  and the sensors always agree.
+- **Three counts, and the names say which is which.** An *endpoint* is a
+  protected row in `/devices`, so `endpoint_count` is that row count alone. A
+  *client* is a device seen under an endpoint, so `client_count` is the sum of
+  the endpoints' client counts. `protected_device_count` is the two added
+  together: everything DNS protection covers. It is therefore **not** the
+  endpoint count, and conflating the two was a real defect — the figure was
+  reported as `endpoint_count` while counting clients as endpoints.
+- **The account identity holds exactly, and the profile rows deliberately do
+  not.** At account level `protected_device_count == endpoint_count +
+  client_count`, because the account view is a single pass over the endpoints.
+  The per-profile rows cannot share that property: an endpoint enforcing two
+  profiles (Control D's `profile` plus `profile2`) is counted under each, so they
+  total more. Measured on the account that motivated this: 20 endpoints plus 266
+  clients gives 286 protected devices, while the eight profile rows sum to 297.
+  Quote the account figure rather than adding the rows up.
 - **Availability** — every enabled tier, including Summary.
 - **Reversibility** — read-only; `undo` is `null`.
 - **Annotations** — `read_only=True`, `destructive=False`, `idempotent=True`,

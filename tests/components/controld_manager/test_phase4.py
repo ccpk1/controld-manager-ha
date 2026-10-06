@@ -654,9 +654,9 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert hass.states.get(profile_status_entity_id).name == "Primary Status"
     assert (
         hass.states.get(profile_endpoint_count_entity_id).name
-        == "Primary Endpoint count"
+        == "Primary Protected devices"
     )
-    assert hass.states.get(endpoint_count_entity_id).name == "Account Endpoint count"
+    assert hass.states.get(endpoint_count_entity_id).name == "Account Protected devices"
     assert hass.states.get(profile_count_entity_id).name == "Account Profile count"
     assert hass.states.get(total_queries_entity_id).name == "Account Total queries"
     assert hass.states.get(blocked_queries_entity_id).name == "Account Blocked queries"
@@ -698,7 +698,7 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert adult_mode_entry is not None
     assert adult_mode_entry.disabled_by is not None
     assert "last_refresh_error" not in hass.states.get(status_entity_id).attributes
-    assert "router_client_count" not in hass.states.get(status_entity_id).attributes
+    assert "client_count" not in hass.states.get(status_entity_id).attributes
 
     profile_device = device_registry.async_get_device_by_identifier(
         (DOMAIN, "instance::user-123::profile::profile-1"), entry.entry_id
@@ -7830,9 +7830,9 @@ async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> N
     }
     assert diagnostics["runtime"]["registry_summary"] == {
         "profile_count": 2,
-        "endpoint_count": 3,
-        "discovered_endpoint_count": 2,
-        "router_client_count": 1,
+        "endpoint_count": 2,
+        "client_count": 1,
+        "protected_device_count": 3,
         "service_category_count": 1,
         "filter_profile_count": 2,
         "service_profile_count": 2,
@@ -7844,8 +7844,12 @@ async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> N
         SERVICE_SELECTOR_AUTOMATIC
     ]
     assert diagnostics["runtime"]["profiles"]["profile-1"]["filter_count"] == 5
-    assert diagnostics["runtime"]["profiles"]["profile-1"]["endpoint_count"] == 3
-    assert diagnostics["runtime"]["profiles"]["profile-2"]["endpoint_count"] == 1
+    assert (
+        diagnostics["runtime"]["profiles"]["profile-1"]["protected_device_count"] == 3
+    )
+    assert (
+        diagnostics["runtime"]["profiles"]["profile-2"]["protected_device_count"] == 1
+    )
 
 
 async def test_stale_refresh_is_discarded_when_write_lands_during_fetch(

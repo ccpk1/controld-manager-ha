@@ -907,22 +907,31 @@ class ControlDRegistry:
         return len(self.profiles)
 
     @property
+    def protected_device_count(self) -> int:
+        """Return everything DNS protection covers, shown on the count sensors.
+
+        Endpoints plus the clients behind them. This is the figure that is not
+        the endpoint count, which is why it is named for what it counts.
+        """
+        return self.endpoint_inventory.protected_device_count
+
+    @property
     def endpoint_count(self) -> int:
-        """Return the protected endpoint count shown on the account entity."""
-        return self.endpoint_inventory.protected_endpoint_count
+        """Return the number of protected rows from `/devices`."""
+        return self.endpoint_inventory.endpoint_count
 
     @property
-    def discovered_endpoint_count(self) -> int:
-        """Return the raw endpoint inventory count."""
-        return self.endpoint_inventory.discovered_endpoint_count
+    def client_count(self) -> int:
+        """Return the number of clients seen under those endpoints."""
+        return self.endpoint_inventory.client_count
 
-    @property
-    def router_client_count(self) -> int:
-        """Return the router-attached client count."""
-        return self.endpoint_inventory.router_client_count
+    def protected_device_count_for_profile(self, profile_pk: str) -> int:
+        """Return the protected device count attributed to one profile.
 
-    def protected_endpoint_count_for_profile(self, profile_pk: str) -> int:
-        """Return the protected endpoint count for one profile."""
+        An endpoint attached to two profiles is counted under each of them, so
+        these per-profile figures deliberately exceed the account total when
+        summed. The account figure is a single pass and does not overlap.
+        """
         return sum(
             1 + endpoint.associated_client_count
             for endpoint in self.endpoints.values()
@@ -944,11 +953,19 @@ class ControlDRefreshIntervals:
 
 @dataclass(slots=True, frozen=True)
 class ControlDEndpointInventoryStats:
-    """Derived account-level endpoint inventory counts."""
+    """Derived account-level inventory counts.
 
-    discovered_endpoint_count: int = 0
-    router_client_count: int = 0
-    protected_endpoint_count: int = 0
+    The three counts are distinct and the names now say which is which. An
+    *endpoint* is a protected row from `/devices`, so `endpoint_count` is that
+    row count alone. A *client* is a device seen under an endpoint, so
+    `client_count` is the sum of the endpoints' client counts.
+    `protected_device_count` is everything DNS protection covers: the endpoints
+    plus the clients behind them, which is the figure both count sensors report.
+    """
+
+    endpoint_count: int = 0
+    client_count: int = 0
+    protected_device_count: int = 0
 
 
 def service_mode_from_action_do(action_do: int) -> str:
