@@ -31,6 +31,7 @@ Control D is also **unusually strong as a homelab foundation**. If you already u
 - 📷 [Screenshots](#screenshots)
 - 🏆 [The platinum-quality approach](#the-platinum-quality-approach)
 - ✨ [What it enables](#what-it-enables)
+- 🤖 [AI assistant and MCP tool surface](#ai-assistant-and-mcp-tool-surface)
 - ❤️ [Support the project](#support-the-project)
 - 🧩 [Supported setup and prerequisites](#supported-setup-and-prerequisites)
 - ⚡ [Quick installation](#quick-installation)
@@ -67,6 +68,7 @@ Control D Manager goes beyond a basic status integration. It gives Home Assistan
 - Native profile operations: disable profiles, change service modes, adjust filters, modify options, and work with custom rules directly from Home Assistant.
 - Endpoint activity visibility: expose per-endpoint activity entities to see when clients were last active on Control D and which profile currently owns them.
 - Automation-ready service layer: the integration is built for scripts and automations as much as dashboards, including temporary policy changes and copyable catalog discovery.
+- AI assistant tool surface: expose Control D to any Home Assistant LLM API and to MCP clients, tiered from read-only reporting up to a gated destructive set, so you can ask an assistant why something was blocked instead of clicking through a dashboard.
 - Partial Pi-hole dashboard compatibility: reuse familiar DNS dashboard cards for summary analytics without pretending Control D is a full Pi-hole clone.
 
 ### Profile-centric control
@@ -86,22 +88,39 @@ When a dashboard switch is not the right tool, the integration exposes shared se
 
 Service surface:
 
+Read services, which are ungated because they change nothing:
+
+- `controld_manager.get_account_overview`
+- `controld_manager.get_inventory`
+- `controld_manager.get_activity_log`
+- `controld_manager.get_catalog`
+- `controld_manager.test_domain`
+
+Write services:
+
 - `controld_manager.disable_profile`
 - `controld_manager.enable_profile`
-- `controld_manager.set_client_alias`
-- `controld_manager.clear_client_alias`
-- `controld_manager.rename_endpoint`
-- `controld_manager.set_endpoint_analytics_logging`
 - `controld_manager.set_filter_state`
 - `controld_manager.set_service_state`
+- `controld_manager.delete_service`
 - `controld_manager.set_option_state`
 - `controld_manager.set_default_rule_state`
 - `controld_manager.set_rule_state`
 - `controld_manager.create_rule`
 - `controld_manager.delete_rule`
-- `controld_manager.get_catalog`
+- `controld_manager.rename_endpoint`
+- `controld_manager.create_endpoint`
+- `controld_manager.delete_endpoint`
+- `controld_manager.set_endpoint_profile`
+- `controld_manager.set_endpoint_description`
+- `controld_manager.set_endpoint_analytics_logging`
+- `controld_manager.set_client_alias`
+- `controld_manager.clear_client_alias`
+- `controld_manager.delete_client`
 
-This makes it possible to target profiles by name or identity, clean up endpoint naming, tune endpoint analytics logging, apply or clear downstream client aliases for router-segmented clients, create or expire custom rules from automations, adjust service modes in the background, and query copyable catalogs for filters, services, rules, or profile options.
+Every write service is registered as an admin-only action. Automations and scripts are unaffected, because the check applies only to calls that carry a user, but a non-admin user calling one now fails where it previously succeeded. Reads stay available to any user, since they change nothing.
+
+This makes it possible to target profiles and endpoints by name or by identity, read per-query activity with the filter, service, or rule that caused each action, clean up endpoint naming, tune endpoint analytics logging, assign or clear endpoint profiles, apply or clear downstream client aliases for router-segmented clients, create or expire custom rules from automations, adjust service modes in the background, and query copyable catalogs for filters, services, rules, options, or the default rule.
 
 ### Analytics and endpoint visibility
 
@@ -129,6 +148,43 @@ Control D pairs especially well with environments that already use profile-based
 | Custom rule exposure | Opt in to expose selected rule folders, individual custom rules, or the full live rule surface for a profile. |
 | Tamper-detection hooks | Cross-reference endpoint activity with router or firewall visibility to spot likely DNS bypass behavior. |
 | Stateless pausing | Temporarily disable a profile with a duration while Control D handles the upstream countdown. |
+| AI and MCP access | Expose the same policy surface to an LLM assistant and to MCP clients through Home Assistant, tiered from reporting up to a gated destructive set. |
+
+## 🤖 AI assistant and MCP tool surface
+
+Control D Manager registers its own Home Assistant LLM API, so an assistant can work with your actual Control D configuration instead of guessing at it. Home Assistant exposes any registered LLM API to the built-in Assist pipeline and, through the MCP Server integration, to external MCP clients. You do not need to run or configure a separate server for this.
+
+**Requires Home Assistant `2026.10` or newer.** On older versions every other feature works normally and this setting is simply not offered.
+
+### Access tiers
+
+Exposure is opt-in, and the tier decides which tools exist at all. It is set in the integration options and is independent of the entity exposure settings.
+
+| Tier | Tools | What it reaches |
+| --- | --- | --- |
+| Off | 0 | Nothing is registered |
+| Summary only | 1 | Account counts, plus each profile's name and counts |
+| Read only | 5 | Adds endpoints, clients, addresses, and query-level analytics |
+| Read and control | 21 | Adds reversible changes: filters, services, options, rules, profile enable and disable, endpoint naming, profiles, descriptions, and client aliases |
+| Full | 24 | Adds the three destructive deletes, surfaced as their own tool class |
+
+The 24 tools cover reads such as `get_account_overview`, `get_inventory`, `get_activity_log`, `test_domain`, and `get_catalog`, plus writes such as `set_service_state`, `set_rule_state`, `set_endpoint_profile`, and `create_rule`. The full contract, including every field and response shape, is documented in [docs/MCP_TOOL_REFERENCE.md](docs/MCP_TOOL_REFERENCE.md).
+
+### What it is good at
+
+The reason this exists is troubleshooting. Control D's per-query activity log and ranked breakdowns are high-cardinality telemetry that would be noise in your entity model, so they are exposed on demand instead. Questions this surface is designed to answer:
+
+- "Why couldn't the living room TV send images this morning?" — the answer names the filter, service, or rule that blocked it, and when.
+- "Which profile is blocking YouTube, and on which devices?" — resolved across the profiles an endpoint enforces.
+- "Is `example.com` blocked for this device?" — one call, one verdict, without waiting for real traffic.
+- "What is this profile actually configured to do right now?" — filters, services, options, rules, and the default rule with their current state.
+
+### Safety
+
+- **Every write requires an administrator.** A read changes nothing and is available to any user, but a write is rejected for a non-admin user. This applies to the tools and to the underlying services alike.
+- **The destructive tier is separate.** `delete_rule`, `delete_client`, and `delete_endpoint` exist only at the Full tier, and the tools describe the blast radius before acting.
+- **Writes report honestly.** A change returns whether it actually changed anything, what the state was before, and the call that reverses it where one exists.
+- **Selectors are never guessed.** A name that matches nothing, or more than one object, is refused rather than resolved arbitrarily.
 
 ## ❤️ Support the project
 
@@ -153,6 +209,8 @@ If Control D Manager is making your smart home or homelab better, I would genuin
 - Connectivity: Home Assistant must be able to reach the Control D cloud API.
 
 Why a write-capable token? Because this integration supports real mutation paths, not just read-only reporting. Profile pause, filter changes, service changes, option changes, and rule management all depend on that permission level.
+
+**Upgrading from 1.x:** every service that changes Control D configuration now requires an administrator. Automations and scripts are unaffected, because the check applies only to calls that carry a user, but a non-admin user calling a write service will now be rejected where it previously succeeded. The read services are unchanged and remain available to any user.
 
 The optional AI assistant (MCP) tool surface requires Home Assistant `2026.10` or newer. On older versions every other feature works normally and the setting is simply not offered.
 
