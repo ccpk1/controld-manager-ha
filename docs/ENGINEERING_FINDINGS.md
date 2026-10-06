@@ -1213,6 +1213,36 @@ Settled interpretation:
 - it is not the authoritative source for endpoint discovery
 - its identifiers are not yet proven to match `/devices` identifiers directly
 
+### `v2/client` stops updating a client that became a standalone endpoint
+
+The analytics client row is **not** a reliable recency source for a client that
+has been promoted to its own endpoint.
+
+Promoting a client to a standalone endpoint moves its traffic attribution to the
+endpoint. Control D then stops updating the analytics row for that client, so its
+`lastActivityTime` freezes on the day of promotion while the endpoint's
+`last_activity` keeps moving.
+
+Measured on this account, which is what settled it:
+
+| Population | Count | Last active |
+| --- | --- | --- |
+| Standalone-endpoint clients | **6 of 6** | 146 to 174 days ago |
+| Regular clients | 191 | up to minutes ago |
+
+Every standalone endpoint was stale and clustered at 2026-04-14/15 or
+2026-05-11/14, the promotion dates, while its endpoint reported activity within
+minutes. `kadens-phone` is a phone in daily use whose client row read
+`2026-04-15` and whose endpoint read the same day.
+
+So `last_active` on a client row is taken from the endpoint whenever the client
+has one, and from the analytics timestamp only when it does not. Reading the
+analytics value unconditionally makes every promoted client, and therefore every
+phone, look dormant — which is exactly the population alias guidance is aimed at.
+
+This also qualifies the "recency and MAC validity" guidance: recency is only
+meaningful once the endpoint join is applied.
+
 Implementation consequence:
 
 - use `/devices` for endpoint lifecycle

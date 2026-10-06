@@ -343,8 +343,8 @@ class EndpointManager(BaseManager):
                 client_mac_address=self._optional_string(
                     analytics_client_payload.get("mac")
                 ),
-                client_last_active=self._normalize_datetime_value(
-                    analytics_client_payload.get("lastActivityTime")
+                client_last_active=self._client_last_active(
+                    endpoint_row, analytics_client_payload
                 ),
             )
 
@@ -387,12 +387,39 @@ class EndpointManager(BaseManager):
                 client_mac_address=self._optional_string(
                     analytics_client_payload.get("mac")
                 ),
-                client_last_active=self._normalize_datetime_value(
-                    analytics_client_payload.get("lastActivityTime")
+                # No endpoint to join to: this target came only from analytics,
+                # so the analytics timestamp is the only source there is.
+                client_last_active=self._client_last_active(
+                    None, analytics_client_payload
                 ),
             )
 
         return targets
+
+    def _client_last_active(
+        self,
+        endpoint_row: ControlDEndpointSummary | None,
+        analytics_client_payload: dict[str, Any],
+    ) -> datetime | None:
+        """Return when this client was last active.
+
+        A client promoted to its own standalone endpoint has its traffic
+        attributed to that endpoint from then on, and Control D stops updating
+        the analytics client row for it. The row's `lastActivityTime` therefore
+        freezes on the day of promotion, and only the endpoint keeps moving.
+
+        That is not hypothetical: every one of the six standalone endpoints on
+        the account this was diagnosed against reported a last-active of 146 to
+        174 days ago, while their endpoints reported activity minutes earlier,
+        for phones that are in daily use. The endpoint is authoritative whenever
+        one exists; the analytics timestamp is the only source for a client that
+        has no endpoint of its own.
+        """
+        if endpoint_row is not None and endpoint_row.last_active is not None:
+            return endpoint_row.last_active
+        return self._normalize_datetime_value(
+            analytics_client_payload.get("lastActivityTime")
+        )
 
     def aliasable_parent_endpoint_ids(
         self, devices_payload: tuple[dict[str, Any], ...]

@@ -87,7 +87,9 @@ Client rows are never cleaned up, so a parent endpoint with a long history
 carries rows for devices that no longer exist. Two fields say whether a row is
 attributable to a real device, and they are **independent** of each other:
 
-- `last_active` — when Control D last saw that client. Recent means live.
+- `last_active` — when Control D last saw that client. Recent means live. For a
+  client that has become a standalone endpoint this is the **endpoint's** last
+  activity, since that is where its traffic is attributed once promoted.
 - `mac_address` — blank or `00:00:00:00:00:00` on some rows.
 
 A blank MAC is expected rather than broken, and it does **not** indicate a stale
@@ -103,6 +105,16 @@ without a MAC to record, which is what produces them.
 Recency and MAC validity are independent, so neither one implies the other.
 Prefer a row that satisfies both, but do not discard a recency-bearing row just
 because its MAC is blank.
+
+**A promoted client reports its endpoint's recency.** When a client is made its
+own standalone endpoint, Control D attributes that client's traffic to the
+endpoint from then on and stops updating the analytics client row. The row's own
+timestamp therefore freezes on the day of promotion, so `last_active` is read
+from the endpoint instead whenever there is one. Without that join every
+promoted client looks dormant: on the account this was diagnosed against, **all
+six** standalone endpoints reported 146 to 174 days ago while their endpoints
+reported activity minutes earlier, for phones in daily use. A client with no
+endpoint of its own has only the analytics timestamp, and uses it.
 
 This affects which row to pick, not whether a write can succeed — the alias API
 keys on `client_id` and never needs a MAC. A blank-MAC client is still aliasable;
