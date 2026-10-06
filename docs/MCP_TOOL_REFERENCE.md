@@ -9,9 +9,9 @@ clients (via Home Assistant's `mcp_server`).
 - **Scope:** every tool, as shipped — **24 in total**: 5 read, 16 control, and 3
   destructive. Nothing here is aspirational; if a tool is listed, it is registered
   and tested.
-- **Status:** complete for the current initiative. The decision history behind each
+- **Status:** complete for the current initiative, released as `2.0.0-beta.1`. The decision history behind each
   contract, including the ones that were corrected, is in
-  `plans/in-process/CONTROLD_MANAGER_LLM_TOOLS_IN-PROCESS.md`.
+  `plans/completed/CONTROLD_MANAGER_LLM_TOOLS_COMPLETED.md`.
 - **How to read it:** [Conventions](#conventions) apply to every tool; each tool
   below follows one fixed template. Read Conventions first.
 
