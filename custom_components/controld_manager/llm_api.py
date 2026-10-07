@@ -25,7 +25,7 @@ from .const import (
     LLM_TOOL_MODE_READ_AND_CONTROL,
     LLM_TOOL_MODE_SUMMARY_ONLY,
 )
-from .llm_tools_common import PROMPT
+from .llm_tools_common import api_prompt
 from .llm_tools_control import build_control_tools
 from .llm_tools_read import build_account_overview_tools, build_read_tools
 from .models import ControlDManagerRuntime
@@ -58,15 +58,20 @@ class ControlDManagerAPI(llm.API):
     async def async_get_api_instance(
         self, llm_context: llm.LLMContext
     ) -> llm.APIInstance:
-        """Return the API instance for one LLM request."""
+        """Return the API instance for one LLM request.
+
+        Built per request so the user's timezone is read fresh: it is a Home
+        Assistant setting that can change while the integration is loaded.
+        """
+        time_zone = self.hass.config.time_zone
         return llm.APIInstance(
             api=self,
-            api_prompt=PROMPT,
+            api_prompt=api_prompt(time_zone),
             llm_context=llm_context,
-            tools=self._build_tools(),
+            tools=self._build_tools(time_zone),
         )
 
-    def _build_tools(self) -> list[llm.Tool]:
+    def _build_tools(self, time_zone: str | None = None) -> list[llm.Tool]:
         """Return the tools registered for the configured tier.
 
         Summary registers only the overview. Read tiers add the read tools.
@@ -80,7 +85,7 @@ class ControlDManagerAPI(llm.API):
         tools = build_account_overview_tools(entry_id=self._entry_id)
         if self._mode == LLM_TOOL_MODE_SUMMARY_ONLY:
             return tools
-        tools.extend(build_read_tools(entry_id=self._entry_id))
+        tools.extend(build_read_tools(entry_id=self._entry_id, time_zone=time_zone))
         if self._mode in (LLM_TOOL_MODE_READ_AND_CONTROL, LLM_TOOL_MODE_FULL):
             tools.extend(
                 build_control_tools(

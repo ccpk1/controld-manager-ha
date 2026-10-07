@@ -20,6 +20,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.controld_manager.const import (
     CONF_API_TOKEN,
     CONF_LLM_TOOL_MODE,
+    DEFAULT_DISABLE_MINUTES,
     DOMAIN,
     LLM_TOOL_MODE_FULL,
     LLM_TOOL_MODE_OFF,
@@ -27,6 +28,11 @@ from custom_components.controld_manager.const import (
     LLM_TOOL_MODE_READ_ONLY,
     LLM_TOOL_MODE_SUMMARY_ONLY,
     SERVICE_FIELD_CONFIG_ENTRY_ID,
+)
+from custom_components.controld_manager.llm_tools_common import (
+    CONTROL_INJECTION,
+    DELETE_INJECTION,
+    READ_INJECTION,
 )
 
 _FIRST_REFRESH: Final = (
@@ -214,6 +220,54 @@ async def test_every_tool_has_a_title_and_description(
         assert len(tool.description) > 80, tool.name
 
 
+async def test_every_read_tool_carries_the_read_injection(
+    read_tools: list[llm.Tool],
+) -> None:
+    """The family block reaches the client on every read tool, not just some.
+
+    A client that sends only `tools/list` never sees the API prompt, and
+    `system_model` arrives only if the agent has already called the overview, so
+    a description is the one channel every client is guaranteed to receive.
+    Asserting it per tool is what stops one description from silently losing it.
+    """
+    missing = [
+        tool.name
+        for tool in read_tools
+        if not (tool.description or "").startswith(READ_INJECTION)
+    ]
+    assert missing == [], f"read tools without the injection block: {missing}"
+
+
+async def test_every_write_tool_carries_its_family_injection(
+    hass: HomeAssistant,
+) -> None:
+    """Control carries the control block, and a delete carries the delete one.
+
+    The blocks differ where it matters: only the deletes say there is no undo.
+    """
+    tools = await _tools(hass, LLM_TOOL_MODE_FULL)
+    by_name = {tool.name.split("__")[1]: tool for tool in tools}
+
+    wrong = [
+        name
+        for name in _CONTROL_TOOLS
+        if not (by_name[name].description or "").startswith(CONTROL_INJECTION)
+    ]
+    assert wrong == [], f"control tools without the control block: {wrong}"
+
+    wrong = [
+        name
+        for name in _DESTRUCTIVE_TOOLS
+        if not (by_name[name].description or "").startswith(DELETE_INJECTION)
+    ]
+    assert wrong == [], f"delete tools without the delete block: {wrong}"
+
+    # The delete block is the only one that rules out an undo, so a control tool
+    # must never be handed it.
+    for name in _CONTROL_TOOLS:
+        assert not by_name[name].description.startswith(DELETE_INJECTION), name
+
+
 async def test_read_tools_declare_all_four_annotations(
     read_tools: list[llm.Tool],
 ) -> None:
@@ -327,6 +381,56 @@ async def test_a_service_failure_becomes_a_failed_action_result(
     assert result.data["status"] == "failed"
     assert result.data["changed"] is False
     assert result.data["target"] == {"profile_id": "p-1"}
+
+
+async def test_optional_fields_with_a_service_default_are_declared(
+    hass: HomeAssistant,
+) -> None:
+    """An optional field the service defaults must carry that default here too.
+
+    `after` is the field the system model tells a caller to trust, so a null
+    there for a value the service did apply is a false report. The tool also
+    cannot supply the vendor's default itself, so declaring it is the only way
+    `after` can name what actually happened.
+
+    `create_rule` reported `mode: null` while the rule blocked, and
+    `create_endpoint` reported three nulls for values the API had chosen.
+    """
+    tools = await _tools(hass, LLM_TOOL_MODE_FULL)
+    by_name = {tool.name.split("__")[1]: tool for tool in tools}
+    # (tool, required args, field, what applying the default must produce)
+    cases = [
+        ("create_rule", {"hostname": "a.example.com"}, "mode", "block"),
+        ("create_endpoint", {"endpoint_name": "e", "profile_id": "p"}, "mode", "None"),
+        ("disable_profile", {}, "minutes", DEFAULT_DISABLE_MINUTES),
+    ]
+    for name, required, field, want in cases:
+        args = by_name[name].parameters(required)
+        assert args.get(field) == want, f"{name}.{field} -> {args.get(field)!r}"
+
+
+async def test_a_target_names_what_is_addressed_not_every_argument(
+    hass: HomeAssistant,
+) -> None:
+    """`target` answers "what did this act on", so a duration is not a target.
+
+    The base target echoes every non-null argument, which is right until an
+    optional argument carries a default — then the default is reported as
+    though it were part of what the call addressed.
+    """
+    tools = await _tools(hass, LLM_TOOL_MODE_READ_AND_CONTROL)
+    (disable,) = [tool for tool in tools if tool.name == f"{DOMAIN}__disable_profile"]
+
+    fake_hass = MagicMock()
+    fake_hass.services.async_call = AsyncMock(side_effect=HomeAssistantError("nope"))
+    result = await disable.async_call(
+        fake_hass,
+        llm.ToolInput(tool_name=disable.name, tool_args={"profile_id": "p-1"}),
+        _llm_context(),
+    )
+
+    assert result.data["target"] == {"profile_id": "p-1"}
+    assert "minutes" not in result.data["target"]
 
 
 async def test_every_parameter_is_described(read_tools: list[llm.Tool]) -> None:
@@ -470,3 +574,32 @@ async def test_tool_schemas_still_convert_for_an_mcp_client(
         schema = probatio.to_openapi(tool.parameters, openapi_version="3.1.0")
         assert schema["type"] == "object", tool.name
         assert "properties" in schema, tool.name
+
+
+def test_no_tool_class_shadows_a_base_method_with_a_stub() -> None:
+    """A mixin must not replace a base method with a stub that raises.
+
+    A mixin listed before the tool base wins on the MRO, so a placeholder method
+    defined there silently replaces the real one. That happened here: a mixin
+    declared `_registry` as a `NotImplementedError` stub purely so it could be
+    read standalone, which broke `set_rule_state` and `delete_rule` in
+    production while every test still passed — the tests set `_registry` as an
+    *instance* attribute, which shadows the class either way.
+
+    Class-level resolution is checked because that is what an instance patch
+    cannot reach.
+    """
+    import inspect as _inspect
+
+    from custom_components.controld_manager import llm_tools_control as control
+
+    base = control._ControlDControlTool
+    tool_classes = [
+        obj
+        for _, obj in _inspect.getmembers(control, _inspect.isclass)
+        if issubclass(obj, base) and obj is not base
+    ]
+    assert tool_classes, "no tool classes found, so this test checks nothing"
+
+    for tool_class in tool_classes:
+        assert tool_class._registry is base._registry, tool_class.__name__

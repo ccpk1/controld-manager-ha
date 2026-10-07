@@ -16,7 +16,9 @@ import pytest
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import llm
 
+from custom_components.controld_manager.api import ControlDApiConnectionError
 from custom_components.controld_manager.llm_tools_control import (
+    DeleteEndpointTool,
     DeleteRuleTool,
     DeleteServiceTool,
     DisableProfileTool,
@@ -29,10 +31,12 @@ from custom_components.controld_manager.llm_tools_control import (
 )
 from custom_components.controld_manager.models import (
     ControlDDefaultRule,
+    ControlDEndpointSummary,
     ControlDFilter,
     ControlDProfileOption,
     ControlDProfileOptionChoice,
     ControlDProfileSummary,
+    ControlDRule,
     ControlDService,
 )
 
@@ -46,6 +50,8 @@ class _Registry:
     options_by_profile: dict[str, dict[str, Any]] = field(default_factory=dict)
     services_by_profile: dict[str, dict[str, Any]] = field(default_factory=dict)
     default_rules_by_profile: dict[str, Any] = field(default_factory=dict)
+    rules_by_profile: dict[str, dict[str, Any]] = field(default_factory=dict)
+    endpoints: dict[str, Any] = field(default_factory=dict)
 
 
 def _service(
@@ -110,6 +116,20 @@ def _registry() -> _Registry:
         default_rules_by_profile={
             "p-1": ControlDDefaultRule(enabled=True, action_do=0),
         },
+        endpoints={
+            "e-1": ControlDEndpointSummary(
+                device_id="e-1",
+                endpoint_pk="pk-1",
+                name="Living Room TV",
+                associated_client_count=4,
+                analytics_logging="some",
+            ),
+            "e-2": ControlDEndpointSummary(
+                device_id="e-2",
+                endpoint_pk="pk-2",
+                name="Guest Network",
+            ),
+        },
     )
 
 
@@ -125,9 +145,15 @@ def _llm_context() -> llm.LLMContext:
 
 
 def _hass(service_call: AsyncMock) -> MagicMock:
-    """Return a hass whose service registry records calls."""
+    """Return a hass whose service registry records calls.
+
+    `async_get_entry` returns None, matching a fixture with no config entry: the
+    manager lookups then find nothing and the rule preload returns early instead
+    of trying to await a mock.
+    """
     fake = MagicMock()
     fake.services.async_call = service_call
+    fake.config_entries.async_get_entry.return_value = None
     return fake
 
 
@@ -157,7 +183,13 @@ async def test_setting_a_filter_to_its_current_state_is_a_no_op() -> None:
 
     assert result.data["status"] == "already_in_state"
     assert result.data["changed"] is False
-    assert result.data["before"] == {"enabled": [True]}
+    assert result.data["before"] == {
+        "targets": [{"profile_id": "p-1", "filter_id": "ads", "enabled": True}]
+    }
+    # `after` carries the requested state in the same shape a real write uses.
+    # Echoing the named `before` here made `after` mean one thing for a no-op
+    # and another for an applied write, so a caller could not read it uniformly.
+    assert result.data["after"] == {"enabled": True}
     service_call.assert_not_called()
 
 
@@ -177,7 +209,9 @@ async def test_setting_a_filter_to_a_new_state_applies() -> None:
 
     assert result.data["status"] == "applied"
     assert result.data["changed"] is True
-    assert result.data["before"] == {"enabled": [True]}
+    assert result.data["before"] == {
+        "targets": [{"profile_id": "p-1", "filter_id": "ads", "enabled": True}]
+    }
     service_call.assert_called_once()
 
 
@@ -244,7 +278,9 @@ async def test_setting_an_option_to_its_current_state_is_a_no_op() -> None:
     )
 
     assert result.data["status"] == "already_in_state"
-    assert result.data["before"] == {"enabled": [True]}
+    assert result.data["before"] == {
+        "targets": [{"profile_id": "p-1", "option_id": "safesearch", "enabled": True}]
+    }
     service_call.assert_not_called()
 
 
@@ -272,7 +308,9 @@ async def test_an_enabled_toggle_reports_enabled_not_the_select_fallback() -> No
     )
 
     assert result.data["status"] == "applied"
-    assert result.data["before"] == {"enabled": [True]}
+    assert result.data["before"] == {
+        "targets": [{"profile_id": "p-1", "option_id": "safesearch", "enabled": True}]
+    }
 
 
 async def test_a_select_option_reports_its_value_label() -> None:
@@ -304,7 +342,11 @@ async def test_a_select_option_reports_its_value_label() -> None:
         _llm_context(),
     )
 
-    assert result.data["before"] == {"value": ["Minimal"]}
+    assert result.data["before"] == {
+        "targets": [
+            {"profile_id": "p-1", "option_id": "ai_malware", "value": "Minimal"}
+        ]
+    }
 
 
 async def test_setting_the_default_rule_to_its_current_mode_is_a_no_op() -> None:
@@ -322,8 +364,37 @@ async def test_setting_the_default_rule_to_its_current_mode_is_a_no_op() -> None
     )
 
     assert result.data["status"] == "already_in_state"
-    assert result.data["before"] == {"mode": ["Blocking"]}
+    assert result.data["before"] == {
+        "targets": [{"profile_id": "p-1", "mode": "Blocking"}]
+    }
     service_call.assert_not_called()
+
+
+async def test_a_profile_before_state_names_each_profile() -> None:
+    """Profile state must be attributable, like every other target state.
+
+    A bare `{"paused": [false, true]}` cannot say which profile was paused, and
+    the order came from the registry rather than the caller, so the values could
+    be read against the wrong profiles.
+    """
+    service_call = AsyncMock()
+    tool = _tool_with_registry(DisableProfileTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"profile_id": ["p-2", "p-1"], "minutes": 5},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["before"] == {
+        "targets": [
+            {"profile_id": "p-2", "paused": False},
+            {"profile_id": "p-1", "paused": False},
+        ]
+    }
 
 
 async def test_the_default_rule_offers_an_undo_of_its_previous_mode() -> None:
@@ -375,8 +446,51 @@ async def test_a_service_before_state_uses_the_same_vocabulary_as_after() -> Non
 
     assert result.data["status"] == "applied"
     # The registry row is action_do=0, i.e. blocked, reported as its label.
-    assert result.data["before"] == {"mode": ["Blocked"]}
+    assert result.data["before"] == {
+        "targets": [
+            {
+                "profile_id": "p-1",
+                "service_id": "instagram",
+                "configured": True,
+                "mode": "Blocked",
+            }
+        ]
+    }
     assert result.data["after"] == {"mode": "Bypassed"}
+
+
+async def test_setting_an_unconfigured_service_reports_no_previous_mode() -> None:
+    """A service the profile does not carry has no previous mode to report.
+
+    The catalog lists every service the vendor offers, so most rows have no
+    profile row at all and both read as `off`. Setting such a service creates
+    the row, which means the reverse is removing it rather than restoring a
+    mode — not an unreadable state, and not an absent undo.
+    """
+    service_call = AsyncMock()
+    # `p-2` carries no service rows, so nothing has a previous mode.
+    tool = _tool_with_registry(SetServiceStateTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={
+                "service_id": "netflix",
+                "profile_id": "p-2",
+                "mode": "Blocked",
+            },
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    assert result.data["before"] == {"targets": [], "configured": False}
+    assert result.data["undo"] == [
+        "controld_manager__delete_service(service_id='netflix', profile_id='p-2')"
+    ]
+    # An undo exists, so the unreadable-state warning must not be raised.
+    assert result.data["warnings"] == []
 
 
 async def test_deleting_a_rule_does_not_blame_an_unreadable_state() -> None:
@@ -613,3 +727,197 @@ def test_changed_is_false_for_a_no_op_and_true_for_a_change(
     """`changed` must agree with whether anything moved."""
     del hass
     assert SimpleNamespace(changed=False).changed is False
+
+
+async def test_the_logging_level_is_read_before_it_is_written() -> None:
+    """A write must be able to name the value it replaced.
+
+    `GET /devices` reports the level as `stats`, so it is available before a
+    write. Without reading it the tool could only say the previous state was
+    unreadable, while its own description promised the change was reversible.
+    """
+    service_call = AsyncMock()
+    tool = _tool_with_registry(
+        SetEndpointAnalyticsLoggingTool(entry_id="e-1"), _registry()
+    )
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"endpoint_id": "e-1", "mode": "Full"},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    assert result.data["before"] == {
+        "targets": [{"endpoint_id": "e-1", "mode": "Some"}]
+    }
+    assert result.data["undo"] == [
+        "controld_manager__set_endpoint_analytics_logging("
+        "endpoint_id='e-1', mode='Some')"
+    ]
+    # An undo exists, so the unreadable-state warning must not be raised.
+    assert result.data["warnings"] == []
+
+
+async def test_the_deleted_endpoint_is_described_before_it_is_destroyed() -> None:
+    """The most destructive tool must say what it destroyed, not just an id.
+
+    Once the row is gone `target` holds only the id, so the name and the number
+    of clients behind it have to be read first or not at all.
+    """
+    service_call = AsyncMock()
+    tool = _tool_with_registry(DeleteEndpointTool(entry_id="e-1"), _registry())
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(tool_name=tool.name, tool_args={"endpoint_id": "e-1"}),
+        _llm_context(),
+    )
+
+    assert result.data["before"] == {
+        "targets": [
+            {
+                "endpoint_id": "e-1",
+                "name": "Living Room TV",
+                "enforced_profiles": [],
+                "associated_client_count": 4,
+            }
+        ]
+    }
+
+
+async def test_the_deleted_rule_is_described_before_it_is_destroyed() -> None:
+    """A rule delete must say what it removed, not only the identity asked for.
+
+    Once the row is gone `target` holds only the identity the caller supplied,
+    so the rule's own id, action, and comment have to be read first. The data is
+    in the registry for an exposed rule; no fetch is added to the delete path.
+    """
+    registry = _registry()
+    registry.rules_by_profile = {
+        "p-1": {
+            "example.com": ControlDRule(
+                identity="root|example.com",
+                rule_pk="example.com",
+                order=0,
+                group_pk=None,
+                group_name=None,
+                enabled=True,
+                action_do=0,
+                comment="blocked on purpose",
+            )
+        }
+    }
+    service_call = AsyncMock()
+    tool = _tool_with_registry(DeleteRuleTool(entry_id="e-1"), registry)
+
+    result = await tool.async_call(
+        _hass(service_call),
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"rule_identity": "root|example.com", "profile_id": "p-1"},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["before"] == {
+        "targets": [
+            {
+                "rule_identity": "root|example.com",
+                "rule_id": "example.com",
+                "action": "block",
+                "enabled": True,
+                "comment": "blocked on purpose",
+                "group_name": None,
+            }
+        ]
+    }
+    # Deletion is still irreversible, so no undo is claimed.
+    assert result.data["undo"] is None
+
+
+async def test_a_rule_the_registry_does_not_hold_is_still_described() -> None:
+    """The common case is a rule the registry has no row for.
+
+    Custom-rule exposure is opt-in per profile, and 7 of 8 profiles on the
+    account this was built against reported `custom_rules=False` — so the
+    registry holds no rules for them at all. Reporting nothing there would mean
+    reporting nothing almost always, which is what happened in production while
+    a test that put the rule in the registry passed.
+    """
+    registry = _registry()  # holds no rules, as an unexposed profile does
+    rule = ControlDRule(
+        identity="root|gone.example.com",
+        rule_pk="gone.example.com",
+        order=0,
+        group_pk=None,
+        group_name=None,
+        enabled=False,
+        action_do=1,
+        comment="fetched, not registered",
+    )
+    manager = SimpleNamespace(
+        async_load_live_rules=AsyncMock(
+            return_value={"p-1": ({}, {"gone.example.com": rule})}
+        )
+    )
+    hass = _hass(AsyncMock())
+    hass.config_entries.async_get_entry.return_value = SimpleNamespace(
+        runtime_data=SimpleNamespace(managers=SimpleNamespace(integration=manager))
+    )
+    tool = _tool_with_registry(DeleteRuleTool(entry_id="e-1"), registry)
+
+    result = await tool.async_call(
+        hass,
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"rule_identity": "root|gone.example.com", "profile_id": "p-1"},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["before"] == {
+        "targets": [
+            {
+                "rule_identity": "root|gone.example.com",
+                "rule_id": "gone.example.com",
+                "action": "bypass",
+                "enabled": False,
+                "comment": "fetched, not registered",
+                "group_name": None,
+            }
+        ]
+    }
+
+
+async def test_a_failed_rule_preload_does_not_block_the_delete() -> None:
+    """The preload enriches `before`; it must never gate the write.
+
+    A fetch error escaping would turn a momentary API problem into a delete that
+    never reaches the service, so the failure is swallowed and the write proceeds
+    with whatever the registry could answer.
+    """
+    registry = _registry()
+    manager = SimpleNamespace(
+        async_load_live_rules=AsyncMock(side_effect=ControlDApiConnectionError("down"))
+    )
+    hass = _hass(AsyncMock())
+    hass.config_entries.async_get_entry.return_value = SimpleNamespace(
+        runtime_data=SimpleNamespace(managers=SimpleNamespace(integration=manager))
+    )
+    tool = _tool_with_registry(DeleteRuleTool(entry_id="e-1"), registry)
+
+    result = await tool.async_call(
+        hass,
+        llm.ToolInput(
+            tool_name=tool.name,
+            tool_args={"rule_identity": "root|gone.example.com", "profile_id": "p-1"},
+        ),
+        _llm_context(),
+    )
+
+    assert result.data["status"] == "applied"
+    assert result.data["before"] is None

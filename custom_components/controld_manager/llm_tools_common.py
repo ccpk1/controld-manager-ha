@@ -168,6 +168,70 @@ SYSTEM_MODEL: Final = (
 # prompt as well as the overview field.
 PROMPT: Final = SYSTEM_MODEL
 
+# Times on this surface are UTC, which is the right frame to diagnose in but not
+# the frame the user reasons in. Built per request rather than held as a
+# constant, because the timezone is a user setting that can change while the
+# integration is loaded, and because the tool set is rebuilt per request anyway.
+_TIME_ZONE_NOTE: Final = (
+    "Times on this surface are UTC, and troubleshooting is usually done in it. "
+    "The user's Home Assistant timezone is {time_zone}, so convert when a local "
+    "time is what they need \u2014 they reason about their own day, not UTC."
+)
+
+
+def time_zone_note(time_zone: str | None) -> str | None:
+    """Return the local-timezone note, or None when the timezone is unknown."""
+    if not time_zone:
+        return None
+    return _TIME_ZONE_NOTE.format(time_zone=time_zone)
+
+
+def api_prompt(time_zone: str | None = None) -> str:
+    """Return the API prompt, naming the user's timezone when it is known.
+
+    Assist appends this on every turn, so the note reaches a conversation
+    without being repeated in any tool description.
+    """
+    note = time_zone_note(time_zone)
+    return f"{SYSTEM_MODEL}\n\n{note}" if note else SYSTEM_MODEL
+
+
+# Injected into every tool description at construction. A client that sends only
+# `tools/list` never receives the API prompt, and `system_model` only arrives if
+# the agent has already called `get_account_overview`, so the descriptions are
+# the one channel every client is guaranteed to receive. Each tool's own text
+# stays unique; this block is what is true across the family.
+#
+# The first sentence of every block is the same orientation question, because an
+# agent that reaches a write tool having never called the overview has no idea
+# what a profile, endpoint, or client is.
+READ_INJECTION: Final = (
+    "**If you cannot clearly explain what a Control D profile, endpoint, and "
+    "client are, and what the account's counts mean, call "
+    "`get_account_overview` once** \u2014 it returns the system model that defines "
+    "them, and one call per session is enough unless a result stops making "
+    "sense. A capped result is not a complete one: check `truncated`, "
+    "`clients_truncated`, or `has_more`, and narrow the query rather than "
+    "presenting a cap as the whole answer."
+)
+
+CONTROL_INJECTION: Final = (
+    "**If you cannot clearly explain what a Control D profile, endpoint, and "
+    "client are, and what the account's counts mean, call "
+    "`get_account_overview` once before writing and subsequently only if unsure "
+    "of tool context** \u2014 it returns the system model that defines them."
+)
+
+DELETE_INJECTION: Final = (
+    "**If you cannot clearly explain what a Control D profile, endpoint, and "
+    "client are, and what the account's counts mean, call "
+    "`get_account_overview` once before writing** \u2014 it returns the system "
+    "model that defines them. **There is no undo here.** This removes "
+    "permanently, so an object created afterwards is new rather than restored. "
+    "Say what is destroyed and what survives, and prefer a reversible "
+    "alternative where one exists."
+)
+
 
 def format_tool_name(action: str) -> str:
     """Return a namespaced LLM tool name."""

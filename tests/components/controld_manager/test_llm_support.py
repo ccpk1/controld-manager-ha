@@ -201,6 +201,36 @@ async def test_api_instance_is_served_with_the_prompt(hass: HomeAssistant) -> No
     }
 
 
+async def test_the_timezone_reaches_both_delivery_paths(hass: HomeAssistant) -> None:
+    """State the user's timezone wherever times are reported.
+
+    Assist gets it through the API prompt, while a client that only sends
+    `tools/list` never sees that prompt and needs it on the activity log tool,
+    which is the one read tool that returns timestamps.
+    """
+    entry = _entry(options={CONF_LLM_TOOL_MODE: LLM_TOOL_MODE_READ_ONLY})
+    entry.add_to_hass(hass)
+
+    with (
+        patch(_FIRST_REFRESH, new=AsyncMock()),
+        patch(_PREDICATE, return_value=True),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        api_instance = await llm.async_get_api(
+            hass, f"{DOMAIN}-{entry.entry_id}", _llm_context()
+        )
+
+    assert hass.config.time_zone in api_instance.api_prompt
+    activity_log = next(
+        tool
+        for tool in api_instance.tools
+        if tool.name == f"{DOMAIN}__get_activity_log"
+    )
+    assert hass.config.time_zone in activity_log.description
+    assert "UTC" in activity_log.description
+
+
 async def test_read_tier_adds_the_inventory_tool(hass: HomeAssistant) -> None:
     """Read tiers add the read set; Summary does not."""
     entry = _entry(options={CONF_LLM_TOOL_MODE: LLM_TOOL_MODE_READ_ONLY})
