@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.util import dt as dt_util
@@ -373,7 +374,11 @@ class IntegrationManager(BaseManager):
             "item_count": len(items),
             **build_limit_meta(limit, len(items)),
             "items": items[:limit],
-            "text": text,
+            # `text` is the unfiltered copyable listing, so it is withheld
+            # rather than returned whole when `search` narrowed `items`. A
+            # caller reading it after a search would otherwise see rows the
+            # search removed, and there is no per-type renderer to narrow it.
+            "text": None if search else text,
         }
 
     def async_build_account_overview_response(
@@ -396,10 +401,11 @@ class IntegrationManager(BaseManager):
             "system_model": SYSTEM_MODEL,
             "account": {
                 "region": registry.user.stats_endpoint if registry.user else None,
-                # Control D's 0/1 account flag: 1 enabled, 0 disabled. This is the
-                # same enablement integer the API uses for filters, services,
-                # options, and restrictions, and reads back as 1 on a live
-                # account. The vendor defines no richer code set for accounts.
+                # Control D's account enablement integer, the same 0/1 shape the
+                # API uses for filters, services, options, and restrictions. Only
+                # 1 has ever been observed here, since the account cannot be
+                # disabled from this integration, so the meaning of 0 is unproven
+                # and no tool or doc states one. Exposed raw rather than labelled.
                 "status": registry.user.status if registry.user else None,
                 "profile_count": registry.profile_count,
                 # Three distinct counts, named for what each actually counts.
@@ -586,6 +592,10 @@ class IntegrationManager(BaseManager):
                     # endpoint alone is not enough to address it.
                     "parent_client_id": endpoint.parent_client_id,
                     "last_active": self._serialize_datetime(endpoint.last_active),
+                    # Kept out of `advanced` below, which is read-only: this one
+                    # is writable, and `set_endpoint_logging` reads it to name
+                    # the level it replaces. Control D reports it as `stats`.
+                    "analytics_logging": endpoint.analytics_logging,
                     # The endpoint's Advanced Settings, named as the dashboard
                     # names them. Each is false when Control D omits the field,
                     # which is how it reports a feature that is switched off.
@@ -693,7 +703,7 @@ class IntegrationManager(BaseManager):
             else None
         )
         vendor_name = record.get("endpointName")
-        return {
+        enriched: dict[str, JsonValueType] = {
             **record,
             "action_label": (
                 ACTIVITY_ACTION_LABELS.get(action) if isinstance(action, int) else None
@@ -702,6 +712,25 @@ class IntegrationManager(BaseManager):
             or (endpoint.name if endpoint is not None else "")
             or "",
         }
+        if "timestamp" in record:
+            enriched["timestamp"] = self._normalize_utc_timestamp(record["timestamp"])
+        return enriched
+
+    @staticmethod
+    def _normalize_utc_timestamp(value: Any) -> Any:
+        """Return an upstream timestamp in this surface's UTC notation.
+
+        The vendor sends activity timestamps with a `Z` suffix while every
+        timestamp this integration produces uses `+00:00`. Both are UTC, but two
+        notations for one thing invite a client to read them as different. An
+        unparseable value is returned untouched rather than dropped.
+        """
+        if not isinstance(value, str):
+            return value
+        try:
+            return datetime.fromisoformat(value).astimezone(UTC).isoformat()
+        except ValueError:
+            return value
 
     async def async_build_activity_log_response(
         self,
@@ -967,6 +996,16 @@ class IntegrationManager(BaseManager):
             services_payload = tuple(
                 await self.runtime.client.async_get_profile_services(profile_pk)
             )
+            # Which services the profile carries a row for. The catalog below
+            # lists every service the vendor offers, so without this a caller
+            # cannot tell "switched off" from "never configured" — both read as
+            # `current_mode: off`, and only a configured one has a previous mode
+            # to restore.
+            configured_pks = {
+                payload.get("PK")
+                for payload in services_payload
+                if isinstance(payload.get("PK"), str)
+            }
             services = sorted(
                 self._normalize_services(
                     services_payload,
@@ -993,6 +1032,7 @@ class IntegrationManager(BaseManager):
                         "category_id": service_row.category_pk,
                         "category_name": service_row.category_name,
                         "current_mode": service_row.current_mode,
+                        "configured": service_row.service_pk in configured_pks,
                     }
                 )
                 text_lines.append(

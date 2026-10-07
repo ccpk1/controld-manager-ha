@@ -65,6 +65,7 @@ from custom_components.controld_manager.const import (
     SERVICE_FIELD_REDIRECT_TARGET_TYPE,
     SERVICE_FIELD_RULE_GROUP_NAME,
     SERVICE_FIELD_RULE_IDENTITY,
+    SERVICE_FIELD_SEARCH,
     SERVICE_FIELD_SERVICE_ID,
     SERVICE_FIELD_SERVICE_NAME,
     SERVICE_FIELD_VALUE,
@@ -7594,7 +7595,144 @@ async def test_get_catalog_returns_services(hass) -> None:
     assert response["catalog_type"] == "services"
     assert response["items"][0]["service_id"] == "amazonmusic"
     assert response["items"][0]["category_name"] == "Audio"
+    # The profile carries a row for this service, so it has a previous mode.
+    assert response["items"][0]["configured"] is True
     assert "amazonmusic, Amazon Music, Audio" in response["text"]
+
+
+async def test_get_catalog_marks_a_service_the_profile_does_not_carry(hass) -> None:
+    """Availability and configuration are different sets, and mode cannot tell them.
+
+    The catalog lists every service the vendor offers while a profile carries
+    rows only for the ones configured on it, and both report `current_mode: off`.
+    Without `configured` a caller cannot tell which rows a write would modify
+    from which it would create.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    # Two services offered, one of them configured on the profile.
+    available = [
+        {
+            "PK": "amazonmusic",
+            "name": "Amazon Music",
+            "category": "audio",
+            "warning": "",
+            "unlock_location": "JFK",
+        },
+        {
+            "PK": "netflix",
+            "name": "Netflix",
+            "category": "audio",
+            "warning": "",
+            "unlock_location": "JFK",
+        },
+    ]
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=available),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_services",
+            new=AsyncMock(
+                side_effect=lambda profile_pk: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=True,
+                        include_rules=False,
+                    ).services
+                )
+            ),
+        ),
+    ):
+        response = await hass.services.async_call(
+            DOMAIN,
+            SERVICE_GET_CATALOG,
+            {
+                SERVICE_FIELD_CATALOG_TYPE: "services",
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+            },
+            blocking=True,
+            return_response=True,
+        )
+
+    configured = {item["service_id"]: item["configured"] for item in response["items"]}
+    assert configured == {"amazonmusic": True, "netflix": False}
+
+
+async def test_a_searched_catalog_withholds_the_unfiltered_text(hass) -> None:
+    """`text` is the unfiltered listing, so a search must not hand back removed rows.
+
+    `text` exists to be copied from, and it covers the whole catalog. Returning
+    it alongside a narrowed `items` would show a caller rows the search had
+    filtered out, with nothing marking which of the two was authoritative.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_services",
+            new=AsyncMock(
+                side_effect=lambda profile_pk: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=True,
+                        include_rules=False,
+                    ).services
+                )
+            ),
+        ),
+    ):
+        searched = await hass.services.async_call(
+            DOMAIN,
+            SERVICE_GET_CATALOG,
+            {
+                SERVICE_FIELD_CATALOG_TYPE: "services",
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_SEARCH: "amazon",
+            },
+            blocking=True,
+            return_response=True,
+        )
+        unfiltered = await hass.services.async_call(
+            DOMAIN,
+            SERVICE_GET_CATALOG,
+            {
+                SERVICE_FIELD_CATALOG_TYPE: "services",
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+            },
+            blocking=True,
+            return_response=True,
+        )
+
+    assert searched["item_count"] == 1
+    assert searched["text"] is None
+    # Without a search the copyable listing is still returned in full.
+    assert unfiltered["text"] is not None
 
 
 async def test_get_catalog_returns_rules(hass) -> None:

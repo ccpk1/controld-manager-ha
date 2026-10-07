@@ -184,6 +184,10 @@ class ControlDEndpointSummary:
     # feature is off, so absence means "not enabled" rather than "unknown".
     description: str | None = None
     icon: str | None = None
+    # The analytics logging level, as one of the `ENDPOINT_ANALYTICS_*` keys.
+    # `GET /devices` reports it as `stats`, so it is read back rather than only
+    # written; without it a write cannot name its own previous value.
+    analytics_logging: str | None = None
     authorize_by_secure_dns: bool = False
     require_authorized_ips: bool = False
     legacy_dns_resolver: str | None = None
@@ -1129,6 +1133,23 @@ def endpoint_analytics_stats_value_from_mode(mode: str) -> int:
         ENDPOINT_ANALYTICS_SOME: 1,
         ENDPOINT_ANALYTICS_FULL: 2,
     }[normalized]
+
+
+def endpoint_analytics_mode_from_stats_value(stats: object) -> str | None:
+    """Translate an upstream ``stats`` value back into a logging mode key.
+
+    The reverse of `endpoint_analytics_stats_value_from_mode`. `GET /devices`
+    returns `stats` on every endpoint row, so without this the level could be
+    written but never read back — a write with no way to name its own previous
+    value. An unrecognised value returns None rather than guessing a mode.
+    """
+    if isinstance(stats, bool) or not isinstance(stats, int):
+        return None
+    return {
+        0: ENDPOINT_ANALYTICS_NONE,
+        1: ENDPOINT_ANALYTICS_SOME,
+        2: ENDPOINT_ANALYTICS_FULL,
+    }.get(stats)
 
 
 def rule_group_mode_from_action(action_do: int | None, enabled: bool) -> str:

@@ -326,6 +326,27 @@ def test_advanced_settings_map_to_the_dashboard_labels() -> None:
     assert endpoint.prevent_deactivation_enabled is True
 
 
+def test_the_analytics_logging_level_is_read_from_the_stats_field() -> None:
+    """`stats` is the logging level, and it is read rather than only written.
+
+    `GET /devices` returns it on every row, so without this the level could be
+    set but never read back, leaving a write unable to name what it replaced.
+    An unrecognised value is not guessed at.
+    """
+    manager = EndpointManager()
+    for stats, expected in ((2, "full"), (1, "some"), (0, "none"), (9, None)):
+        rows = manager.normalize_endpoints(
+            ({"device_id": "ep-1", "PK": "ep-1", "name": "A", "stats": stats},)
+        )
+        assert rows["ep-1"].analytics_logging == expected, stats
+
+    # Absent entirely, which is how the API reports a field it does not send.
+    rows = manager.normalize_endpoints(
+        ({"device_id": "ep-1", "PK": "ep-1", "name": "A"},)
+    )
+    assert rows["ep-1"].analytics_logging is None
+
+
 def test_advanced_settings_default_off_when_the_api_omits_them() -> None:
     """An omitted field means the feature is off, and must not read as enabled."""
     endpoint = _endpoint_rows(

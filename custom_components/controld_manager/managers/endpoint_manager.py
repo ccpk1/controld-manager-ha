@@ -15,6 +15,7 @@ from ..models import (
     ControlDEndpointInventoryStats,
     ControlDEndpointSummary,
     build_client_alias_target_key,
+    endpoint_analytics_mode_from_stats_value,
 )
 from .base_manager import BaseManager
 
@@ -600,6 +601,9 @@ class EndpointManager(BaseManager):
                 parent_client_id=relationship[2] if relationship else None,
                 description=self._optional_string(device_payload.get("desc")),
                 icon=self._optional_string(device_payload.get("icon")),
+                analytics_logging=endpoint_analytics_mode_from_stats_value(
+                    device_payload.get("stats")
+                ),
                 authorize_by_secure_dns=bool(device_payload.get("learn_ip")),
                 require_authorized_ips=bool(device_payload.get("restricted")),
                 legacy_dns_resolver=self._nested_string(
