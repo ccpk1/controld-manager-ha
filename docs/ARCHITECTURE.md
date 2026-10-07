@@ -170,8 +170,81 @@ assistants and MCP clients through Home Assistant.
 Files:
 
 - `llm_api.py` owns the integration-owned `llm.API` registration
-- `llm_tools_common.py` owns `SYSTEM_MODEL`, the one canonical statement of what the surface is, plus the tool-name helper. `SYSTEM_MODEL` reaches the model two ways: as the API prompt, which Assist appends to the system prompt, and as the `system_model` field on the `get_account_overview` result, which is how a client that sees only tool calls obtains it. MCP's `prompts` primitive is user-controlled, so it cannot carry guidance a tool-only client needs
+- `llm_tools_common.py` owns `SYSTEM_MODEL`, the one canonical statement of what the surface is, plus the three family injection blocks and the tool-name helper
 - `llm_tools_read.py` and `llm_tools_control.py` own the read and control tools
+
+#### How guidance reaches a model
+
+Three layers of text, each with one job, and no two of them say the same thing.
+
+| Layer | Scope | Delivered by |
+| --- | --- | --- |
+| `SYSTEM_MODEL` | true across every tool | the API prompt, and `result.system_model` |
+| Family injection | true across one family | prepended to every description in that family |
+| Description body | true of one tool only | that tool's own description |
+
+The reason there are three rather than one is that **no single channel reaches
+every client**:
+
+- The **API prompt** is Assist's. An MCP client does not receive it — Home
+  Assistant's MCP server leaves `InitializeResult.instructions` empty, and its
+  MCP client ignores the field anyway.
+- A **`system_model` field** in a result only arrives if the agent has already
+  called `get_account_overview`. An agent that goes straight to a write tool
+  never sees it.
+- MCP's **`prompts` primitive** is user-controlled: a client surfaces a prompt
+  for explicit invocation rather than injecting it, and the clients in common use
+  send `tools/list` and nothing more.
+
+That leaves the **tool descriptions as the only text every client is guaranteed
+to receive**. They are therefore the one place a rule that must not be missed can
+live, and the injection is how a rule is stated once and still reaches all of
+them.
+
+Each family's injection opens with the same **orientation question**: whether the
+agent can explain what a profile, endpoint, and client are and what the counts
+mean, and if not, that `get_account_overview` returns the model that defines
+them. It is phrased as a question the model can answer about its own state rather
+than a request to be careful, and it names a concrete remedy, because an
+instruction to *understand* something cannot be acted on. The control and delete
+variants bind it *before writing*, since a wrong write against a live network
+costs more than a wrong read.
+
+Division of labour, and the rule for deciding where a sentence belongs:
+
+- **`SYSTEM_MODEL`** carries anything true across all 24 tools: the vocabulary,
+  identifier provenance, the action-result fields, how to read `undo`, the
+  `200 ok` trap, tier gating, retention.
+- **A family injection** carries what is true across that whole family *and is
+  absent from the model*. Read adds that a capped result is not a complete one.
+  Delete adds that there is no undo and to prefer a reversible alternative.
+  Control adds nothing beyond orientation, because every control-wide rule it
+  could carry is already in the model.
+- **A description body** carries what is true of one tool: its arguments, its
+  enums, its own failure modes.
+
+A rule that applies to two tools rather than a whole family belongs in those two
+bodies, not in a block repeated across sixteen. `'Off'` is not removal is the
+worked example: it is real and important, and it belongs to `set_service_state`
+and `delete_service` because it is meaningless to the other fourteen controls.
+
+#### The injection is structural
+
+Both base classes carry an `_injection` class attribute and prepend it in
+`__init__`:
+
+```python
+class _ControlDControlTool(llm.Tool):
+    _injection: str = CONTROL_INJECTION
+```
+
+The three destructive tools override it with `DELETE_INJECTION`. A tool therefore
+cannot be added without a block: subclass the base and it inherits the family
+injection, or override it deliberately. This is enforced by
+`test_every_write_tool_carries_its_family_injection`, which also asserts that no
+control tool is ever handed the delete block — the failure mode being guarded
+against is not a wrong block but a *missing* one, which is how `test_domain`
+once shipped without the redirect-is-not-blocking guidance it needed.
 
 Rules:
 
@@ -195,6 +268,9 @@ Rules:
   boundary
 - `undo` in the action result is a **list** of calls, because the tools accept
   lists of targets and restoring three previous values takes three calls
+- a description is written for a **machine consumer**, not a reader: field →
+  meaning, one fact per line, no justification clauses. Prose that explains why a
+  rule exists costs tokens on every request and changes no behaviour
 
 ## Polling architecture
 

@@ -9,7 +9,7 @@ clients (via Home Assistant's `mcp_server`).
 - **Scope:** every tool, as shipped — **24 in total**: 5 read, 16 control, and 3
   destructive. Nothing here is aspirational; if a tool is listed, it is registered
   and tested.
-- **Status:** complete for the current initiative, released as `2.0.0-beta.1`. The decision history behind each
+- **Status:** complete for the current initiative, released as `2.0.0-beta.2`. The decision history behind each
   contract, including the ones that were corrected, is in
   `plans/completed/CONTROLD_MANAGER_LLM_TOOLS_COMPLETED.md`.
 - **How to read it:** [Conventions](#conventions) apply to every tool; each tool
@@ -92,6 +92,90 @@ exclude the majority of clients, so the model travels inside a tool result.
 
 This is the one place the two paths deliberately carry identical text. The cost
 is that Assist holds it twice; the alternative was two texts that drift.
+
+### How guidance reaches a client
+
+The model is not the only text a client sees, and it cannot be. Neither delivery
+path is universal:
+
+| Path | Assist | Any other MCP client |
+| --- | --- | --- |
+| API prompt | yes, every turn | **no** — Home Assistant's MCP server leaves `InitializeResult.instructions` empty, and its MCP client ignores the field |
+| `result.system_model` | yes | **only if the agent calls `get_account_overview`** |
+| Tool descriptions | yes | **yes, on `tools/list`** |
+
+So an agent that sends `tools/list` and goes directly to a write tool would
+otherwise know nothing about what a profile, endpoint, or client is. **Tool
+descriptions are the only channel every client is guaranteed to receive**, which
+makes them the one place a rule that must not be missed can live.
+
+Text is therefore layered, and no two layers say the same thing:
+
+| Layer | Scope | Examples |
+| --- | --- | --- |
+| **System model** | true across all 24 tools | the vocabulary, identifier provenance, the action-result fields, `undo`, the `200 ok` trap, tier gating, retention |
+| **Family injection** | true across one family, and absent from the model | read: a capped result is not complete. delete: there is no undo, prefer a reversible alternative |
+| **Description body** | true of one tool | its arguments, its enums, its own failure modes |
+
+#### The injection block
+
+Every description is composed as `injection + body` at construction time, from an
+`_injection` class attribute on the tool's base class. The three destructive
+tools override it. A tool cannot be registered without a block.
+
+All three blocks open with the same **orientation question**:
+
+> **If you cannot clearly explain what a Control D profile, endpoint, and client
+> are, and what the account's counts mean, call `get_account_overview` once** —
+> it returns the system model that defines them, …
+
+Three properties of that sentence are deliberate:
+
+- **It asks a question the model can answer**, rather than instructing it to be
+  careful. "Confirm you understand the vocabulary" is not actionable; "can you
+  explain what a profile, endpoint, and client are?" is checkable.
+- **It names a concrete remedy**, so the instruction can be followed in one call.
+- **It bounds itself** — once per session, or only if a result stops making
+  sense — so it does not prompt a call before every read.
+
+The control and delete variants bind it *before writing* rather than leaving it
+idle. A wrong write changes a live network; a wrong read does not. The delete
+variant then adds what the model cannot say because it is not true of every tool:
+that this family has no undo, and to prefer a reversible alternative.
+
+**Control adds nothing beyond orientation.** That is a considered result, not an
+omission: every control-wide rule it could carry — read state before writing,
+confirm wide-reaching changes, writes return an `undo` — is already in the system
+model, and repeating it would mean paying for the same sentence sixteen times.
+Read and delete each carry one rule the model genuinely lacks.
+
+A rule that belongs to two tools rather than a whole family goes in those two
+bodies. `'Off'` is not removal is the worked example: it is stated on
+`set_service_state` and `delete_service`, because it is meaningless to the other
+fourteen controls and would be dead weight on all sixteen.
+
+#### Writing a description for a machine, not a reader
+
+A description is not prose about a tool; it is the argument and result contract.
+It is written as field → meaning:
+
+| Written for a reader | Written for a machine |
+| --- | --- |
+| "Resolve the filter first with `get_catalog` (`catalog_type 'filters'`), which returns each filter's id, name, and current enabled state." | "`filter_id` / `filter_name` — from `get_catalog`, `catalog_type: 'filters'`." |
+| "This is reversible — set the previous value back, or use the `undo` field." | *(deleted — the model defines `undo`)* |
+| "Use it to stop a category from being blocked, or to start blocking one that is currently off." | *(deleted — the `enabled` argument states the effect)* |
+
+Two kinds of sentence come out in that pass. **Justification clauses** explain why
+a rule exists; they cost tokens on every request and change no behaviour.
+**Restatements** repeat what the model or the argument list already says. Both are
+removed, and what remains is the set of facts a caller cannot get from anywhere
+else.
+
+The pass is not cosmetic. Applied across the read tools it cut 9,995 characters to
+6,783 (−32%) *while adding* the injection to all five, and the same register for
+control cut 16,211 to 9,971 (−38.5%). It also removes the failure it looks like it
+might cause: a description that states an enum with the wrong case, or paraphrases
+it, sends the model to a value the schema rejects.
 
 ### Client identity
 
@@ -315,6 +399,19 @@ returns, not where the data came from**. Control tool names mirror the underlyin
 service name (`set_filter_state`, `rename_endpoint`, …). The `controld_manager__`
 prefix disambiguates our tools when several LLM APIs are merged.
 
+**A client may add its own prefix to that name.** A client presenting an MCP tool
+to its model commonly renames it to `mcp_<server>_<tool name>`, which shares a
+64-character budget with the server name the user chose. `Home Assistant`'s MCP
+server passes names through untouched, so this is a client-side constraint, not
+one the integration enforces or can see. Where a client does enforce it, a tool
+whose name does not fit is dropped from the list entirely — which reads as a
+missing tool rather than a long name.
+
+`set_endpoint_analytics_logging` is the longest action here and sits closest to
+that budget. It is left as-is, because it mirrors its service name and other
+clients are unaffected. A deployment using a client with such a limit and a long
+server name may find it unavailable; shortening the server name restores it.
+
 ### Availability model
 
 A single option, **AI assistant (MCP) tool access**, controls what is registered.
@@ -387,8 +484,20 @@ that supports `changed` and `undo` could not be made.
   be read this reports that the action was **sent**, not that the value differs,
   and the result says so in `warnings`.
 - `target` — the **resolved** object acted on (id + name).
-- `before` / `after` — `before` is the state observed before the action; `after`
-  is the state the action **requested**, not a fresh reading.
+- `before` — the state observed before the action, as `{"targets": [...]}` with
+  one **named** row per addressed object. Every tool that reports per-target
+  state uses this one container, and each row carries the id it belongs to, so
+  nothing is matched by position. The two deletes report what they are about to
+  destroy rather than a prior *state* — a name, profiles, and client count for an
+  endpoint; the id, action, and comment for a rule — because that information
+  cannot be recovered once the row is gone. `delete_client` is the other
+  deliberate exception: it reports a *summary* of what is about to be destroyed
+  (`{client_count, clients, delete_history}`), because the question it answers
+  there is "how much history goes with this", not "what was each value".
+- `after` — the state the action **requested**, flat and identical for every
+  addressed target, so it is not repeated per row. It takes this shape on every
+  status, including `already_in_state`; compare it against each
+  `before.targets[]` entry.
 - `undo` — the calls that reverse the action, as a **list**, or `null`. It is a
   list because the tools accept lists of targets: restoring three services with
   three different previous modes takes three calls. Each entry may name a tool
@@ -404,6 +513,70 @@ that supports `changed` and `undo` could not be made.
 three deletes are not idempotent and can never report it.
 
 Both shapes are strictly JSON-serializable (no datetimes or sets).
+
+#### A field with a service default declares that default
+
+`after` is the field the system model tells a caller to trust, so a `null` there
+for a value the service did apply is a false report. The tool cannot supply the
+vendor's default on its own — it only sees the caller's arguments — so an
+optional field whose absence still has a definite effect declares the default in
+its schema:
+
+| Field | Declared default | Without it |
+| --- | --- | --- |
+| `create_rule.mode` | `block` | `after: {"mode": null}` while the rule blocks |
+| `create_endpoint.mode` | `None` | `after` reports three nulls for values the API chose |
+| `disable_profile.minutes` | `15` | the undo cannot name when it re-enables |
+
+The tool's hooks receive **schema-validated** arguments, so a declared default
+reaches `before`, `after`, and `undo` without any other change. This is enforced
+by `test_optional_fields_with_a_service_default_are_declared`.
+
+The same echo is why a tool whose target is not simply its arguments overrides
+`_target`: the base implementation returns every non-null argument, which is
+correct until an optional argument carries a default, and then the default is
+reported as though it were part of what the call addressed.
+
+#### A write is not immediately visible to a read
+
+Writes invalidate refresh groups that are re-polled on their own cycles, so a
+newly created object can be absent from a read for a short window after a
+successful write — and a read scoped by *name* can fail to resolve it, because
+resolution is against the inventory that has not caught up yet.
+
+A create returning `applied` is the authoritative signal that the object exists.
+Absence from an immediately following read is not evidence the create failed, and
+a caller should not report one as the other. Address an object by **id** wherever
+the id is known, which is unaffected by the lag.
+
+#### An id wins outright; it is not unioned with a name
+
+Both the tool layer and the backing services accept an id or a display name for
+the same object. When a caller supplies **both**, the services resolve the id
+group and never consult the names — and the tool layer now resolves the same way,
+so the two agree on the target set.
+
+This matters because `before`, `after`, and `undo` are built from the tool's
+resolution. Treating the two selectors as a union made the result name every row
+either selector matched, while the write reached only the ids: a caller would be
+told two filters were enabled and handed an undo that disables two, of which one
+was never touched.
+
+Supplying only a name still works. Supplying both means the name is ignored, so
+pass one or the other rather than both as a belt-and-braces measure.
+
+#### A select option is cleared with `enabled: false`, not `value: 'Off'`
+
+A dropdown option with no current value is reported by the catalog as
+`current_value: "Off"`, and `'Off'` is also listed among the option's selectable
+values. It is **not**, however, a valid `value` argument: upstream it means *no
+value*, which is indistinguishable from an unrecognised one, so the service
+rejects the literal string with *"The selected Control D option value is not
+supported"*.
+
+Clearing such an option is `enabled: false` with no `value`. That is also what
+the `undo` emits for a dropdown that was previously unset, so an undo is never a
+call that would fail when used.
 
 ### Annotations
 
@@ -537,10 +710,63 @@ strictly better than exposing a surface that cannot be drilled into.
 | `get_catalog` | "What filters, services, options, rules, and default rules exist, and what state are they in?" |
 
 `get_catalog` returns **state**, not just availability: filters carry `enabled`,
-`supports_modes`, and `current_mode`; services carry `current_mode`; rules carry
-`action`, `enabled`, `comment`, and `group`; profile options carry
-`current_value`. There is deliberately **no separate policy tool**, because it
-would be a re-skin of this one.
+`supports_modes`, and `current_mode`; services carry `current_mode` and
+`configured`; rules carry `action`, `enabled`, `comment`, and `group`; profile
+options carry `current_value`. There is deliberately **no separate policy tool**,
+because it would be a re-skin of this one.
+
+**`configured` is what separates "switched off" from "never configured".** The
+service catalog lists every service the vendor offers — over a thousand rows —
+while a profile carries rows only for the services configured on it. Both kinds
+of row report `current_mode: off`, so without `configured` the two are
+indistinguishable, and a caller cannot tell which services have a previous mode
+worth naming. Only a configured service does.
+
+This matters on the write side. `set_service_state` on an unconfigured service is
+how a service *gets* configured: it creates the row. That call therefore has no
+previous mode to restore, so `before` reports `configured: false` and the `undo`
+names `delete_service` — removing the row — rather than a mode reversal. Without
+the field that same call would look like a state that failed to read, and the
+model would report a perfectly reversible change as irreversible.
+
+**Read surfaces say `action`, write surfaces say `mode`.** The write tools take a
+`mode` argument and report it back under that name in `before` and `after`, so one
+write result is internally consistent. `get_catalog` reports `action`, which is
+what the catalog rows carry upstream. A caller mapping between them is crossing
+from the read vocabulary to the write one, and that is the only place the two
+should meet.
+
+### `action` means three different things
+
+The word is overloaded in this surface, and only one of the three is a rule's
+behaviour. Read this before writing any description that mentions `action`.
+
+| Where | What `action` is | Values |
+| --- | --- | --- |
+| `get_catalog`, `catalog_type: 'rules'` | a rule's behaviour | `block`, `bypass`, `redirect` |
+| `get_activity_log`, `records[]` | a query's verdict, as a **code** | `-1`, `0`, `1`, `3` |
+| upstream only, never exposed | the vendor's JSON object wrapping `do` + `status` | — |
+
+The third is the vendor's own shape and is not surfaced: Control D writes a rule
+with `{"do": <int>, "status": 0|1}` and its validation errors say *"Invalid rule
+action"*, so `action` is the vendor's word for the concept while `do` is the value
+inside it. We normalize both away at the client boundary.
+
+**The write surface is uniformly `mode`, and that is ours.** Control D has no
+`mode` field. The three mode families are named by us, in three different cases
+because they are three different things:
+
+| Family | Keys | Service calls take |
+| --- | --- | --- |
+| Rules | `block` / `bypass` / `redirect` | the key itself |
+| Services | `off` / `blocked` / `bypassed` / `redirected` | `Off` / `Blocked` / `Bypassed` / `Redirected` |
+| Default rule | `blocking` / `bypassing` / `redirecting` | `Blocking` / `Bypassing` / `Redirecting` |
+
+`SERVICE_FIELD_MODE = "mode"` is the one write argument across services, rules,
+and the default rule, so a caller uses `mode` everywhere the caller writes and
+`action` only where the caller reads. A rule's `before` and `after` inside a write
+result use `mode`, because a write result is compared against the write that
+produced it; a catalog row uses `action`, because that is what it carries.
 
 `catalog_type: 'redirect_locations'` is the one type that is **not**
 profile-scoped: it returns the account's **107** usable redirect destinations,
@@ -557,6 +783,13 @@ would otherwise be unreachable: `search='apple'` finds the Apple service in one
 call where listing never would. `item_count` reports the filtered total, and the
 profile columns are deliberately excluded from matching so that searching for a
 service cannot select every row through a profile name.
+
+**`search` filters `items` and `item_count`, and sets `text` to `null`.** `text`
+is the unfiltered copyable listing of the whole catalog, so it is withheld
+rather than returned whole once a search has narrowed `items` — returning both
+would show a caller rows the search had removed, with nothing marking which of
+the two was authoritative. Read `items` for a narrowed result; `text` is present
+only when nothing was filtered.
 
 **Diagnosing a block.** The activity record names its own cause, so the path is:
 widen the window (traffic is often older than the default hour), set
@@ -625,7 +858,13 @@ uniqueness.
 | `associated_client_count` | Clients attributed to this endpoint |
 | `parent_device_id`, `parent_client_id` | Set when the device is also a client under another endpoint |
 | `last_active` | When the endpoint was last seen. **Absent** when it has never been seen |
+| `analytics_logging` | `None`, `Some`, or `Full` — the level `set_endpoint_logging` sets |
 | `advanced` | The dashboard's Advanced Settings; see above |
+
+`analytics_logging` sits at the top level rather than inside `advanced`, because
+`advanced` is documented read-only and this is the one endpoint setting a tool
+here can change. Control D reports it as `stats` (`0`/`1`/`2`); the read side maps
+it back, which is what lets `set_endpoint_logging` name the level it replaces.
 
 Two profiles are common here: 11 of 20 endpoints on the account that motivated
 this integration enforce a primary *and* a secondary. The rule engine **merges**
@@ -664,6 +903,39 @@ Every tool documented below uses this exact shape, in this order:
 - **Availability & tier**
 - **Reversibility & undo** — for controls
 - **Annotations** — the four flags
+
+### The description template
+
+A tool's description is composed at construction from two parts, and the split
+decides what goes where:
+
+```
+[family injection — identical for every tool in the family]
+
+[body — unique to this tool]
+```
+
+The body is written for a machine consumer, in this order:
+
+1. **One line: what the tool does.** No justification clause.
+2. **A bullet per argument**, as `field — meaning`. State the source
+   (`get_catalog, catalog_type: 'filters'`) and exact enum values in their exact
+   case, because the three mode families use three different cases for the same
+   concept: `'Off'`/`'Blocked'`/`'Bypassed'`/`'Redirected'` on services,
+   `'block'`/`'bypass'`/`'redirect'` on rules, and
+   `'Blocking'`/`'Bypassing'`/`'Redirecting'` on the default rule.
+3. **Only genuine tool-specific warnings**, such as `create_rule` being
+   non-idempotent, `set_endpoint_profile` merging two profiles before matching,
+   or `delete_service` not being the same as `mode: 'Off'`.
+
+Do not restate any of the following, which are already covered elsewhere:
+
+- what `undo`, `before`, `after`, `changed`, `warnings`, or `status` mean — the
+  system model defines every one of them
+- that the tool is reversible, in the thirteen forms this was previously written
+- the definition of a profile, endpoint, or client — the system model defines all
+  three, and the injection exists to make sure the agent has it
+- what a count means, or when to prefer the activity log over `test_domain`
 
 ## Gotchas the tool schemas must encode
 
