@@ -57,11 +57,11 @@ async def async_get_config_entry_diagnostics(
             },
             "registry_summary": {
                 "profile_count": len(registry.profiles),
-                "endpoint_count": registry.endpoint_inventory.protected_endpoint_count,
-                "discovered_endpoint_count": (
-                    registry.endpoint_inventory.discovered_endpoint_count
+                "endpoint_count": registry.endpoint_inventory.endpoint_count,
+                "client_count": registry.endpoint_inventory.client_count,
+                "protected_device_count": (
+                    registry.endpoint_inventory.protected_device_count
                 ),
-                "router_client_count": registry.endpoint_inventory.router_client_count,
                 "service_category_count": len(registry.service_categories),
                 "filter_profile_count": len(registry.filters_by_profile),
                 "service_profile_count": len(registry.services_by_profile),
@@ -115,8 +115,12 @@ async def async_get_config_entry_diagnostics(
                     "option_count": len(
                         registry.options_by_profile.get(profile_pk, {})
                     ),
-                    "endpoint_count": registry.protected_endpoint_count_for_profile(
-                        profile_pk
+                    "endpoint_count": registry.endpoint_count_for_profile(profile_pk),
+                    "client_count": registry.client_count_for_profile(profile_pk),
+                    # Endpoints plus clients. These per-profile rows overlap, so
+                    # they total more than the account figure when summed.
+                    "protected_device_count": (
+                        registry.protected_device_count_for_profile(profile_pk)
                     ),
                 }
                 for profile_pk, profile_row in registry.profiles.items()

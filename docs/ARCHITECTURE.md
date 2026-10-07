@@ -33,8 +33,9 @@ Use these terms consistently across code and docs.
 | Device | A Home Assistant device registry object used only as a logical and visual container |
 | Entity | A Home Assistant platform object only |
 | Profile | A Control D configuration container holding rules, services, and blocklists |
-| Endpoint | A top-level Control D protected device row from `/devices`, such as a router segment or an individually protected client |
-| Client | A client visible under an endpoint in analytics and device relationships; client aliases are client-scoped, not endpoint-scoped |
+| Endpoint | A Control D DNS resolver that enforces a profile: a top-level protected row from `/devices`, whether a router segment, a ctrld instance, or an individually protected device. An endpoint **always** enforces at least one profile |
+| Client | A device seen under an endpoint in analytics and device relationships; client aliases are client-scoped, not endpoint-scoped |
+| Protected device | Everything DNS protection covers: an endpoint, or a client under one. The count sensors report the total, which is endpoints plus clients |
 | Runtime snapshot | The coordinator-owned in-memory view of current Control D state |
 | Registry | The manager-owned indexed runtime structure derived from API payloads |
 | Policy | A Control D rule, filter, service toggle, or other supported profile-level control |
@@ -46,6 +47,8 @@ Critical rules:
 - never use `entity` to describe a Control D profile, endpoint, policy, or API object
 - never use `device` to describe a physical Control D endpoint
 - never use `domain` to describe DNS domains or Control D policy categories inside integration code
+- never call a client an endpoint, or an endpoint a client. A client under an endpoint inherits that endpoint's profile, and the two are separate rows in inventory
+- a client that is **explicitly assigned** a profile becomes its own endpoint too, so one device may legitimately appear as both. `get_inventory` marks it with `is_standalone_endpoint`, `own_endpoint_id`, and `parent_client_id`
 
 ## Core runtime model
 
@@ -167,8 +170,81 @@ assistants and MCP clients through Home Assistant.
 Files:
 
 - `llm_api.py` owns the integration-owned `llm.API` registration
-- `llm_tools_common.py` owns the shared API prompt and tool-name helper
+- `llm_tools_common.py` owns `SYSTEM_MODEL`, the one canonical statement of what the surface is, plus the three family injection blocks and the tool-name helper
 - `llm_tools_read.py` and `llm_tools_control.py` own the read and control tools
+
+#### How guidance reaches a model
+
+Three layers of text, each with one job, and no two of them say the same thing.
+
+| Layer | Scope | Delivered by |
+| --- | --- | --- |
+| `SYSTEM_MODEL` | true across every tool | the API prompt, and `result.system_model` |
+| Family injection | true across one family | prepended to every description in that family |
+| Description body | true of one tool only | that tool's own description |
+
+The reason there are three rather than one is that **no single channel reaches
+every client**:
+
+- The **API prompt** is Assist's. An MCP client does not receive it — Home
+  Assistant's MCP server leaves `InitializeResult.instructions` empty, and its
+  MCP client ignores the field anyway.
+- A **`system_model` field** in a result only arrives if the agent has already
+  called `get_account_overview`. An agent that goes straight to a write tool
+  never sees it.
+- MCP's **`prompts` primitive** is user-controlled: a client surfaces a prompt
+  for explicit invocation rather than injecting it, and the clients in common use
+  send `tools/list` and nothing more.
+
+That leaves the **tool descriptions as the only text every client is guaranteed
+to receive**. They are therefore the one place a rule that must not be missed can
+live, and the injection is how a rule is stated once and still reaches all of
+them.
+
+Each family's injection opens with the same **orientation question**: whether the
+agent can explain what a profile, endpoint, and client are and what the counts
+mean, and if not, that `get_account_overview` returns the model that defines
+them. It is phrased as a question the model can answer about its own state rather
+than a request to be careful, and it names a concrete remedy, because an
+instruction to *understand* something cannot be acted on. The control and delete
+variants bind it *before writing*, since a wrong write against a live network
+costs more than a wrong read.
+
+Division of labour, and the rule for deciding where a sentence belongs:
+
+- **`SYSTEM_MODEL`** carries anything true across all 24 tools: the vocabulary,
+  identifier provenance, the action-result fields, how to read `undo`, the
+  `200 ok` trap, tier gating, retention.
+- **A family injection** carries what is true across that whole family *and is
+  absent from the model*. Read adds that a capped result is not a complete one.
+  Delete adds that there is no undo and to prefer a reversible alternative.
+  Control adds nothing beyond orientation, because every control-wide rule it
+  could carry is already in the model.
+- **A description body** carries what is true of one tool: its arguments, its
+  enums, its own failure modes.
+
+A rule that applies to two tools rather than a whole family belongs in those two
+bodies, not in a block repeated across sixteen. `'Off'` is not removal is the
+worked example: it is real and important, and it belongs to `set_service_state`
+and `delete_service` because it is meaningless to the other fourteen controls.
+
+#### The injection is structural
+
+Both base classes carry an `_injection` class attribute and prepend it in
+`__init__`:
+
+```python
+class _ControlDControlTool(llm.Tool):
+    _injection: str = CONTROL_INJECTION
+```
+
+The three destructive tools override it with `DELETE_INJECTION`. A tool therefore
+cannot be added without a block: subclass the base and it inherits the family
+injection, or override it deliberately. This is enforced by
+`test_every_write_tool_carries_its_family_injection`, which also asserts that no
+control tool is ever handed the delete block — the failure mode being guarded
+against is not a wrong block but a *missing* one, which is how `test_domain`
+once shipped without the redirect-is-not-blocking guidance it needed.
 
 Rules:
 
@@ -185,13 +261,16 @@ Rules:
   `already_in_state` instead of claiming a change that did not happen. This is a
   read-only view of data the coordinator already holds, never a second data path
 - tools use the repository lexicon exactly; a Control D endpoint is never called
-  a client or a device
+  a client or a device, and a client is never called an endpoint
 - the tool layer is opt-in per config entry via the LLM tool mode, which decides
   which tools are registered. Every write service additionally requires an admin
   user, so the tier is a reachability limit rather than the only authorization
   boundary
 - `undo` in the action result is a **list** of calls, because the tools accept
   lists of targets and restoring three previous values takes three calls
+- a description is written for a **machine consumer**, not a reader: field →
+  meaning, one fact per line, no justification clauses. Prose that explains why a
+  rule exists costs tokens on every request and changes no behaviour
 
 ## Polling architecture
 
@@ -247,7 +326,7 @@ The default Home Assistant naming contract is intentionally scope-specific.
 Examples:
 
 - Account device: `Account`
-- Account entities: `Account Profile Count`, `Account Endpoint Count`
+- Account entities: `Account Profile Count`, `Account Protected Devices`
 - Profile device: upstream profile name
 - Small profile entity set: `Disable`
 - High-cardinality profile entities: `Options / Disable`, `Filters / Ads & Trackers`, `Services / Hosting / Alibaba Cloud`, `Rules / Domain / example.com`

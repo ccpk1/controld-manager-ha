@@ -37,9 +37,9 @@ def _registry() -> ControlDRegistry:
     """Return a registry with a parent, a standalone client, and a sub-client."""
     return ControlDRegistry(
         endpoint_inventory=ControlDEndpointInventoryStats(
-            discovered_endpoint_count=3,
-            router_client_count=2,
-            protected_endpoint_count=5,
+            endpoint_count=3,
+            client_count=2,
+            protected_device_count=5,
         ),
         profiles={
             "p-1": ControlDProfileSummary(profile_pk="p-1", name="Default"),
@@ -141,15 +141,15 @@ def test_summary_returns_profiles_and_endpoints_without_clients() -> None:
     assert "clients" not in response
 
 
-def test_profile_rows_use_the_shared_endpoint_count_accessor() -> None:
-    """Profile endpoint counts match the profile entities."""
+def test_profile_rows_use_the_shared_protected_device_accessor() -> None:
+    """Profile counts match the profile entities, and are named for what they count."""
     registry = _registry()
     response = _build(registry)
 
     rows = {row["profile_id"]: row for row in response["profiles"]}
     assert (
-        rows["p-1"]["endpoint_count"]
-        == registry.protected_endpoint_count_for_profile("p-1")
+        rows["p-1"]["protected_device_count"]
+        == registry.protected_device_count_for_profile("p-1")
         == 3
     )
     assert rows["p-2"]["paused"] is True
@@ -324,6 +324,27 @@ def test_advanced_settings_map_to_the_dashboard_labels() -> None:
     assert endpoint.expose_ip_host == "home.example.com"
     # Prevent Deactivation: presence of a PIN is all that is reported.
     assert endpoint.prevent_deactivation_enabled is True
+
+
+def test_the_analytics_logging_level_is_read_from_the_stats_field() -> None:
+    """`stats` is the logging level, and it is read rather than only written.
+
+    `GET /devices` returns it on every row, so without this the level could be
+    set but never read back, leaving a write unable to name what it replaced.
+    An unrecognised value is not guessed at.
+    """
+    manager = EndpointManager()
+    for stats, expected in ((2, "full"), (1, "some"), (0, "none"), (9, None)):
+        rows = manager.normalize_endpoints(
+            ({"device_id": "ep-1", "PK": "ep-1", "name": "A", "stats": stats},)
+        )
+        assert rows["ep-1"].analytics_logging == expected, stats
+
+    # Absent entirely, which is how the API reports a field it does not send.
+    rows = manager.normalize_endpoints(
+        ({"device_id": "ep-1", "PK": "ep-1", "name": "A"},)
+    )
+    assert rows["ep-1"].analytics_logging is None
 
 
 def test_advanced_settings_default_off_when_the_api_omits_them() -> None:

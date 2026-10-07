@@ -225,17 +225,38 @@ def test_prompt_covers_the_shipped_surface() -> None:
         "endpoint",
         "client",
         "already_in_state",
-        "truncated",
         "undo",
-        "retention",
+        "33 day",
+        "analytics logging",
         "triggerValue",
         "get_account_overview",
         "get_activity_log",
         "test_domain",
-        "untrusted",
+        "attacker",
+        "bypassed",
+        "redirected",
     }
     missing = {term for term in required if term.lower() not in PROMPT.lower()}
     assert missing == set(), f"prompt is missing: {sorted(missing)}"
+
+
+def test_prompt_explains_the_outcomes_are_not_degrees_of_one_thing() -> None:
+    """Blocked, bypassed, redirected, and failed all have to be named.
+
+    Bypassed is routine rather than a fault, and redirected relocates a lookup
+    rather than refusing it. A model that treats them as grades of blocking
+    misreports ordinary traffic.
+    """
+    lowered = PROMPT.lower()
+    for outcome in ("blocked", "bypassed", "redirected", "failed"):
+        assert outcome in lowered, outcome
+
+    # Bypassed must be described as normal, not as a problem.
+    bypassed_line = next(
+        line for line in PROMPT.splitlines() if line.startswith("- **bypassed**")
+    )
+    assert "allowed" in bypassed_line.lower()
+    assert "routine" in bypassed_line.lower()
 
 
 def test_prompt_does_not_describe_removed_tools() -> None:
@@ -250,19 +271,22 @@ def test_prompt_does_not_describe_removed_tools() -> None:
 
 
 def test_prompt_does_not_claim_a_shipped_capability_is_impossible() -> None:
-    """The prompt must describe the surface as it is, including its deletes.
+    """The prompt must never assert that Control D cannot do something.
 
-    It once asserted that no tool could delete an endpoint while `delete_endpoint`
-    was registered and described in the same prompt, so the model was told both
-    that the action was available and that it was impossible. The destructive
-    tools are named here so adding or renaming one has to update this test.
+    It once carried a rule ordering the model to say so, which risked the model
+    telling a user a capability was absent when it was merely not exposed here.
+    The surface is tier-gated, so the model does not enumerate write tools; what
+    it must do instead is frame absence as "no tool here exposes it".
     """
-    for destructive in ("delete_client", "delete_endpoint", "delete_rule"):
-        assert destructive in PROMPT, f"prompt does not name {destructive}"
+    assert "no tool here exposes it" in PROMPT
 
-    # No blanket "cannot delete an endpoint" claim may return.
-    assert "No tool in this set can delete an endpoint" not in PROMPT
-    assert "delete_endpoint` removes the endpoint" in PROMPT
+    # No wording may return that asserts the vendor lacks a capability.
+    for claim in (
+        "Control D cannot",
+        "cannot do something",
+        "the API does not support it",
+    ):
+        assert claim not in PROMPT, claim
 
 
 def test_prompt_states_each_cross_cutting_rule_once() -> None:
@@ -273,11 +297,10 @@ def test_prompt_states_each_cross_cutting_rule_once() -> None:
     """
     paragraphs = [p for p in PROMPT.split("\n\n") if p.strip()]
 
-    duality = [
-        p
-        for p in paragraphs
-        if "both" in p.lower() and "endpoint" in p.lower() and "client" in p.lower()
-    ]
+    # The duality is specifically that one device can be both a client and an
+    # endpoint at once. Matching on "both" alone also catches unrelated phrases
+    # such as "ids win when both are given".
+    duality = [p for p in paragraphs if "appear as both" in p]
     assert len(duality) == 1, f"duality stated in {len(duality)} paragraphs"
 
     identifiers = [

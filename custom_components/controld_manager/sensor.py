@@ -19,15 +19,15 @@ from .const import (
     ATTR_ACCOUNT_STATUS,
     ATTR_ANALYTICS_END_TIME,
     ATTR_ANALYTICS_START_TIME,
+    ATTR_CLIENT_COUNT,
     ATTR_CONSECUTIVE_FAILED_REFRESHES,
-    ATTR_DISCOVERED_ENDPOINT_COUNT,
+    ATTR_ENDPOINT_COUNT,
     ATTR_LAST_REFRESH_ATTEMPT,
     ATTR_LAST_REFRESH_ERROR,
     ATTR_LAST_REFRESH_TRIGGER,
     ATTR_LAST_SUCCESSFUL_REFRESH,
     ATTR_PAUSED_UNTIL,
     ATTR_REFRESH_IN_PROGRESS,
-    ATTR_ROUTER_CLIENT_COUNT,
     ATTR_STATS_ENDPOINT,
     ITEM_TYPE_ANALYTICS_METRIC,
     ITEM_TYPE_STATUS,
@@ -97,7 +97,7 @@ def _build_sensor_entity(
         if sensor_key == "status":
             return ControlDManagerProfileStatusSensor(config_entry, profile_pk)
         if sensor_key == "endpoint_count":
-            return ControlDManagerProfileEndpointCountSensor(config_entry, profile_pk)
+            return ControlDManagerProfileProtectedDeviceSensor(config_entry, profile_pk)
         if sensor_key == "blocked_queries_ratio":
             return ControlDManagerProfileBlockedQueriesRatioSensor(
                 config_entry, profile_pk
@@ -113,7 +113,7 @@ def _build_sensor_entity(
     if key == "instance::profile_count":
         return ControlDManagerProfileCountSensor(config_entry)
     if key == "instance::endpoint_count":
-        return ControlDManagerEndpointCountSensor(config_entry)
+        return ControlDManagerProtectedDeviceSensor(config_entry)
     if key == "instance::status":
         return ControlDManagerStatusSensor(config_entry)
     if key == "instance::total_queries":
@@ -288,7 +288,7 @@ class ControlDManagerProfileStatusSensor(ControlDManagerProfileEntity, SensorEnt
 
 
 class ControlDManagerProfileCountSensor(ControlDManagerInstanceEntity, SensorEntity):
-    """Expose the current number of discovered profiles."""
+    """Expose how many Control D profiles this entry manages."""
 
     _attr_translation_key = TRANS_KEY_ENTITY_PROFILE_COUNT
     _attr_native_unit_of_measurement = "profiles"
@@ -303,51 +303,63 @@ class ControlDManagerProfileCountSensor(ControlDManagerInstanceEntity, SensorEnt
 
     @property
     def native_value(self) -> int:
-        """Return the current number of discovered profiles."""
+        """Return the number of profiles returned by the account."""
         return self.runtime.registry.profile_count
 
 
-class ControlDManagerEndpointCountSensor(ControlDManagerInstanceEntity, SensorEntity):
-    """Expose the current number of discovered endpoints."""
+class ControlDManagerProtectedDeviceSensor(ControlDManagerInstanceEntity, SensorEntity):
+    """Expose everything DNS protection covers: endpoints plus their clients."""
 
     _attr_translation_key = TRANS_KEY_ENTITY_PIHOLE_UNIQUE_CLIENTS
-    _attr_native_unit_of_measurement = "endpoints"
+    # Not "endpoints": the value counts protected devices, and a client is not
+    # an endpoint. "devices" is the honest unit for the total.
+    _attr_native_unit_of_measurement = "devices"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _purpose = PURPOSE_INSTANCE_SUMMARY
     _item_type = ITEM_TYPE_SUMMARY_METRIC
 
     def __init__(self, config_entry: ConfigEntry[ControlDManagerRuntime]) -> None:
-        """Initialize the endpoint-count sensor."""
+        """Initialize the protected-device count sensor.
+
+        The sensor key stays ``endpoint_count`` because it is part of the entity
+        unique id, and changing it would re-create every existing entity and
+        break the dashboards referencing them. Only the label moves, since the
+        value counts protected devices rather than endpoints. The translation
+        key is the Pi-hole one, which the card matches on.
+        """
         super().__init__(config_entry, "endpoint_count")
-        self._attr_name = "Endpoint count"
+        self._attr_name = "Protected devices"
 
     @property
     def native_value(self) -> int:
-        """Return the current number of discovered endpoints."""
-        return self.runtime.registry.endpoint_count
+        """Return everything DNS protection covers, not the endpoint count.
+
+        This is endpoints plus the clients behind them. The card this sensor is
+        keyed for reads it as distinct clients making queries, which is the same
+        figure, and the two underlying counts are exposed as attributes.
+        """
+        return self.runtime.registry.protected_device_count
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Return the explicit and nested endpoint counts."""
+        """Return the two counts that make up the total."""
         attributes = super().extra_state_attributes or {}
         attributes.update(
             {
-                ATTR_DISCOVERED_ENDPOINT_COUNT: (
-                    self.runtime.registry.discovered_endpoint_count
-                ),
-                ATTR_ROUTER_CLIENT_COUNT: (self.runtime.registry.router_client_count),
+                ATTR_ENDPOINT_COUNT: (self.runtime.registry.endpoint_count),
+                ATTR_CLIENT_COUNT: (self.runtime.registry.client_count),
             }
         )
         return attributes
 
 
-class ControlDManagerProfileEndpointCountSensor(
+class ControlDManagerProfileProtectedDeviceSensor(
     ControlDManagerProfileEntity, SensorEntity
 ):
-    """Expose the current number of endpoints attached to one profile."""
+    """Expose the protected devices attributed to one profile."""
 
     _attr_translation_key = TRANS_KEY_ENTITY_PIHOLE_UNIQUE_CLIENTS
-    _attr_native_unit_of_measurement = "endpoints"
+    _attr_native_unit_of_measurement = "devices"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _purpose = PURPOSE_PROFILE_SUMMARY
     _item_type = ITEM_TYPE_SUMMARY_METRIC
@@ -357,14 +369,22 @@ class ControlDManagerProfileEndpointCountSensor(
         config_entry: ConfigEntry[ControlDManagerRuntime],
         profile_pk: str,
     ) -> None:
-        """Initialize the profile endpoint-count sensor."""
+        """Initialize the profile protected-device count sensor.
+
+        The sensor key is kept for entity identity, as on the account sensor;
+        only the label and the value's meaning are corrected.
+        """
         super().__init__(config_entry, profile_pk, "endpoint_count")
-        self._attr_name = "Endpoint count"
+        self._attr_name = "Protected devices"
 
     @property
     def native_value(self) -> int:
-        """Return the current number of endpoints attached to this profile."""
-        return self.runtime.registry.protected_endpoint_count_for_profile(
+        """Return the protected devices attributed to this profile.
+
+        An endpoint enforcing two profiles is counted under each of them, so
+        these figures total more than the account count when summed.
+        """
+        return self.runtime.registry.protected_device_count_for_profile(
             self._profile_pk
         )
 

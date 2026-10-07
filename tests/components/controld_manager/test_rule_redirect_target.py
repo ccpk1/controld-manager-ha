@@ -202,8 +202,14 @@ def test_the_before_state_includes_the_redirect_destination() -> None:
 
     before: Any = tool._before(MagicMock(), {"rule_identity": _IDENTITY})
 
-    assert before["action"] == ["redirect"]
-    assert before["redirect_target"] == ["CLE"]
+    assert before["targets"] == [
+        {
+            "rule_identity": _IDENTITY,
+            "enabled": True,
+            "mode": "redirect",
+            "redirect_target": "CLE",
+        }
+    ]
 
 
 def test_the_before_state_omits_the_key_when_nothing_redirects() -> None:

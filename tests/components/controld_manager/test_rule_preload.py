@@ -104,8 +104,14 @@ async def test_the_preloaded_row_backs_the_precheck_and_undo() -> None:
     before: Any = tool._before(_hass_for(tool), {"rule_identity": _IDENTITY})
     undo = tool._undo(_hass_for(tool), {"rule_identity": _IDENTITY})
 
-    assert before["action"] == ["redirect"]
-    assert before["redirect_target"] == ["127.0.0.1"]
+    assert before["targets"] == [
+        {
+            "rule_identity": _IDENTITY,
+            "enabled": True,
+            "mode": "redirect",
+            "redirect_target": "127.0.0.1",
+        }
+    ]
     assert undo is not None
     assert "redirect_target='127.0.0.1'" in undo[0]
 

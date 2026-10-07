@@ -23,6 +23,8 @@ from custom_components.controld_manager.llm_tools_control import (
     DeleteEndpointTool,
     RenameEndpointTool,
     SetEndpointDescriptionTool,
+    _before_rows,
+    _resolve_row_pks,
 )
 from custom_components.controld_manager.services import (
     _resolve_read_endpoint_ids,
@@ -194,6 +196,84 @@ def test_create_endpoint_does_not_require_a_selector() -> None:
 
     validated = tool.parameters({"endpoint_name": "new-one", "profile_id": "p-1"})
     assert validated["endpoint_name"] == "new-one"
+
+
+def test_an_id_wins_over_a_name_when_both_are_given() -> None:
+    """The action result must name the same rows the service will act on.
+
+    The service resolves an id group and never consults names once one is
+    present. Unioning the two selectors here instead reported a wider target set
+    than the write reached, so `before`, `after`, and `undo` named rows the call
+    never touched.
+    """
+    rows = {
+        "p-1": {
+            "light": SimpleNamespace(name="Hagezi's DNS - Light"),
+            "pro": SimpleNamespace(name="Hagezi's DNS - Pro"),
+        }
+    }
+
+    resolved = _resolve_row_pks(
+        rows,
+        ("p-1",),
+        id_field="filter_id",
+        name_field="filter_name",
+        args={"filter_id": "light", "filter_name": "Hagezi's DNS - Pro"},
+        name_attr="name",
+    )
+
+    assert resolved == (("p-1", "light"),)
+
+
+def test_a_name_is_used_only_when_no_id_is_given() -> None:
+    """A name still resolves on its own, which is the whole point of the option."""
+    rows = {
+        "p-1": {
+            "light": SimpleNamespace(name="Hagezi's DNS - Light"),
+            "pro": SimpleNamespace(name="Hagezi's DNS - Pro"),
+        }
+    }
+
+    resolved = _resolve_row_pks(
+        rows,
+        ("p-1",),
+        id_field="filter_id",
+        name_field="filter_name",
+        args={"filter_name": "Hagezi's DNS - Pro"},
+        name_attr="name",
+    )
+
+    assert resolved == (("p-1", "pro"),)
+
+
+def test_a_before_row_names_the_object_its_state_belongs_to() -> None:
+    """State must never be attributable to the wrong target by position.
+
+    The rows come back in registry order while the caller supplied its own, so a
+    bare list of values read against the caller's list can hand one object's
+    state to another. Naming each row removes the ordering dependency.
+    """
+    rows_by_profile = {
+        "p-1": {
+            "light": SimpleNamespace(enabled=True),
+            "pro": SimpleNamespace(enabled=False),
+        }
+    }
+
+    # Registry order, which is deliberately not the caller's order.
+    before = _before_rows(
+        (("p-1", "light"), ("p-1", "pro")),
+        rows_by_profile,
+        id_field="filter_id",
+        state=lambda row: {"enabled": row.enabled},
+    )
+
+    assert before == {
+        "targets": [
+            {"profile_id": "p-1", "filter_id": "light", "enabled": True},
+            {"profile_id": "p-1", "filter_id": "pro", "enabled": False},
+        ]
+    }
 
 
 def _entry(runtime: Any) -> Any:

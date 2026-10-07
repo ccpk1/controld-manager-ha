@@ -60,7 +60,7 @@ from .const import (
     SERVICE_GET_INVENTORY,
     SERVICE_TEST_DOMAIN,
 )
-from .llm_tools_common import as_list, format_tool_name
+from .llm_tools_common import READ_INJECTION, as_list, format_tool_name, time_zone_note
 from .utils.time_window import ACTIVITY_LOG_WINDOWS, DEFAULT_ACTIVITY_LOG_WINDOW
 
 # Every read tool queries the Control D cloud API rather than local state, so
@@ -79,6 +79,10 @@ class _ControlDReadTool(llm.Tool):
     integration = DOMAIN
     annotations = _READ_ANNOTATIONS
 
+    # Prepended at construction rather than written into each description, so a
+    # new read tool cannot be added without the family block.
+    _injection: Final = READ_INJECTION
+
     _service: str
     _response_type: str
 
@@ -90,6 +94,8 @@ class _ControlDReadTool(llm.Tool):
     def __init__(self, *, entry_id: str) -> None:
         """Bind the tool to the config entry it was registered for."""
         self._entry_id = entry_id
+        if self.description:
+            self.description = f"{self._injection}\n\n{self.description}"
 
     def _args(self, tool_input: llm.ToolInput) -> dict[str, Any]:
         """Return tool args validated against the declared schema.
@@ -158,29 +164,24 @@ class GetAccountOverviewTool(_ControlDReadTool):
     name = format_tool_name("get_account_overview")
     title = "Get account overview"
     description = (
-        "Report the high-level state of the Control D account: the analytics "
-        "region, how many profiles, endpoints, and router clients exist, and how "
-        "many DNS queries were blocked, bypassed, or redirected in the current "
-        "analytics window. It also lists one row per profile with that profile's "
-        "endpoint count, paused state, and blocked, bypassed, and redirected "
-        "counts.\n"
+        "Account-level counts and block statistics, plus one row per profile.\n"
         "\n"
-        "This is the orientation call. Start here to size the account and see "
-        "which profile is doing what before asking a narrower question, and call "
-        "it once per session unless something has changed.\n"
+        "Call this first: it is the only result carrying `system_model`.\n"
         "\n"
-        "All counts come from the same runtime state the integration's own "
-        "entities use, so they always agree with the sensors. Block counts only "
-        "exist for endpoints that have analytics logging enabled, and the "
-        "reported window is whatever the account returns, which may not be an "
-        "exact round hour. This tool reads no per-query detail; use "
-        "`get_activity_log` for that.\n"
+        "- `region` — analytics region token.\n"
+        "- `endpoint_count` — rows in `/devices`. `client_count` — devices seen "
+        "under them. `protected_device_count` — the two added; what DNS "
+        "protection covers. Exact here, a single pass.\n"
+        "- `profiles[]` — `profile_id`, `profile_name`, "
+        "`protected_device_count`, `paused`, and per-profile "
+        "blocked/bypassed/redirected counts. These rows do **not** sum to the "
+        "account figure: an endpoint on two profiles counts under each. Quote "
+        "the account value.\n"
+        "- `analytics` — totals and ratio for the account's own window, which "
+        "may not be a round hour. Block counts exist only where analytics "
+        "logging is on.\n"
         "\n"
-        "`status` is Control D's 0/1 account flag: 1 when the account is "
-        "enabled, 0 when it is disabled. Quote the account `endpoint_count`, "
-        "not a sum of the profile rows. An endpoint attached to more than one "
-        "profile is counted under each of them, so those rows deliberately "
-        "total more than the account figure."
+        "Per-query detail is `get_activity_log`."
     )
     parameters = probatio.Schema({})
     _service = SERVICE_GET_ACCOUNT_OVERVIEW
@@ -193,56 +194,32 @@ class GetInventoryTool(_ControlDReadTool):
     name = format_tool_name("get_inventory")
     title = "Get inventory"
     description = (
-        "Report the account's structure: every profile, every endpoint, and "
-        "(with full detail) every client seen under an endpoint. Use it to "
-        "resolve the identifiers and names that the other tools need before "
-        "acting, and to answer questions about how the account is organized.\n"
+        "Account structure: every profile, every endpoint, and with "
+        "`detail: full` every client under them. The source for `profile_id`, "
+        "`endpoint_id`, and `client_id` before any write.\n"
         "\n"
-        "The words are not interchangeable. A *profile* is a policy container. "
-        "An *endpoint* is a top-level protected row (a router segment, a ctrld "
-        "instance, or an individually protected device). A *client* is something "
-        "seen under an endpoint. An endpoint enforces its own profile, and may "
-        "enforce a second as well; `enforced_profiles` lists every one it "
-        "enforces, in order, with each one's slot named.\n"
-        "\n"
-        "Both enforced profiles apply: the rule engine merges them before "
-        "matching, so an endpoint is blocked by its second profile just as it is "
-        "by its first. When asked why something is blocked for an endpoint, look "
-        "at every entry in `enforced_profiles`, not only the primary.\n"
-        "\n"
-        "A client follows its parent endpoint's profile. A client that has been "
-        "made into its own standalone device becomes an endpoint as well: it "
-        "appears in `endpoints` with its own profile, and in `clients` with "
-        "`is_standalone_endpoint: true` and its `own_endpoint_id` set. A client "
-        "with `is_standalone_endpoint: false` only follows its parent.\n"
-        "\n"
-        "Defaults to `detail: summary`, which returns profiles and endpoints but "
-        "no client rows. Use `detail: full` to add clients, and narrow with "
-        "`profile_id` or `endpoint_id` rather than pulling every client in the "
-        "account. Client rows are capped by `client_limit`, and "
-        "`clients_truncated` says whether the cap was hit; narrow the filter "
-        "instead of treating a capped list as complete.\n"
-        "\n"
-        "When you are picking a client to alias, check the two fields that say "
-        "whether the row is attributable to a real device. `last_active` is when "
-        "Control D last saw it, so the most recent rows are the live ones; "
-        "`mac_address` is the other. The account keeps a long tail of rows that "
-        "are never cleaned up, and some carry a blank or all-zeros MAC because "
-        "the router relays them without one — that is expected, not an error, "
-        "and it does **not** mean the row is old. The two signals are "
-        "independent, so prefer a row that is both recently active and has a "
-        "usable MAC, and treat a row with neither as one to leave alone.\n"
-        "\n"
-        "`get_inventory`'s endpoint rows also carry an `advanced` block: the "
-        "dashboard's Advanced Settings, named as the dashboard names them. "
-        "`authorize_by_secure_dns` and `require_authorized_ips` are flags, while "
-        "`legacy_dns`, `authorize_by_dynamic_dns`, and `expose_ip_via_dns` are "
-        "`{enabled, ...}` objects that also carry the resolver, hostname, or host "
-        "when on. These are **read-only reports**: no tool here can change them, "
-        "so describe the value rather than offering to set it.\n"
-        "\n"
-        "All counts come from the same runtime state the integration's own "
-        "entities use, so they always agree with the sensors."
+        "- `enforced_profiles` — every profile the endpoint enforces, in order, "
+        "slot named. Both apply: the engine merges them before matching, so the "
+        "secondary blocks just as the primary does. Check every entry when "
+        "explaining a block.\n"
+        "- `detail` — `summary` (default) returns profiles and endpoints; "
+        "`full` adds clients. Narrow with `profile_id` or `endpoint_id` rather "
+        "than pulling every client.\n"
+        "- Client rows — `last_active` is when Control D last saw the device, so "
+        "recent means live. For a promoted client it reports the endpoint's "
+        "activity, because the traffic is attributed there once promoted. "
+        "`mac_address` is the second signal: blank or all-zeros is expected "
+        "where the router relays without a MAC, so it does **not** mean the row "
+        "is stale. The two are independent — prefer a row that is both recent "
+        "and has a usable MAC.\n"
+        "- `analytics_logging` — the endpoint's logging level: `'None'`, "
+        "`'Some'`, or `'Full'`. `set_endpoint_logging` reads this to name the "
+        "level it replaces.\n"
+        "- `advanced` — the dashboard's Advanced Settings. Read-only: no tool "
+        "here changes them, so report the value, never offer to set it.\n"
+        "- `analytics_logging` — `None`, `Some`, or `Full`, the level "
+        "`set_endpoint_logging` sets. It sits outside `advanced` because it is "
+        "the one endpoint setting a tool here can change."
     )
     parameters = probatio.Schema(
         {
@@ -313,53 +290,42 @@ class GetActivityLogTool(_ControlDReadTool):
     name = format_tool_name("get_activity_log")
     title = "Get activity log"
     description = (
-        "Report individual DNS queries and what Control D did with each one. "
-        'This is the tool for "why was this blocked?" and "what has this '
-        'device been doing?"\n'
+        "Individual DNS queries and what Control D did with each: the tool for "
+        '"why was this blocked?".\n'
         "\n"
-        "A record names its own cause in `trigger` and `triggerValue`, which are "
-        "the fields to read first: `filter` for a blocklist such as "
-        "`x-hagezi-light`, `service` for one such as `apple` or `instagram`, "
-        "`custom` for one of your own rules, `default` for the profile's "
-        "catch-all, `grule` for a global rule, or `rebind`. `triggerValue` is "
-        "present only when there is a list or object to name, so its **absence "
-        "is itself the answer** — a `default` trigger carries none, because the "
-        "catch-all rule is not a list. Never read a missing `triggerValue` as "
-        "missing data.\n"
+        "- `trigger` + `triggerValue` — the cause. `filter` (a blocklist), "
+        "`service`, `custom` (a rule of yours), `default` (the catch-all), "
+        "`grule`, `rebind`. `triggerValue` is absent when there is no list to "
+        "name — for `default` that absence is the answer, not missing data.\n"
+        "- `action_label` — the verdict. The raw `action` codes are not "
+        "contiguous and one is negative: -1 failed, 0 blocked, 1 bypassed, "
+        "3 redirected.\n"
+        "- `profileId` — which profile decided, which matters when an endpoint "
+        "enforces more than one. `endpointName` is resolved from current "
+        "inventory and empty for a device no longer held; `endpointId` is "
+        "always present.\n"
+        "- `status_code` — DNS response code. `rcode` is not accepted.\n"
         "\n"
-        "Read `action_label` for the verdict. The raw `action` codes are not "
-        "contiguous and one is negative, so do not compare `action` to a "
-        "number: -1 failed, 0 blocked, 1 bypassed, 3 redirected.\n"
-        "\n"
-        "`profileId` says which profile produced the verdict, which matters "
-        "when an endpoint enforces more than one. `endpointName` is resolved "
-        "from the current inventory, so it is empty for an endpoint we no "
-        "longer hold; `endpointId` is always present.\n"
-        "\n"
-        "To diagnose a block: widen the window, since traffic is often older "
-        "than the default hour; set `query_action` to `blocked`; then read "
-        "`trigger` and `triggerValue` and resolve what they name with "
-        "`get_catalog` (`filters`, `services`, or `rules`). Change it with the "
-        "matching tool. For aggregate counts use `get_account_overview`, and "
-        "to ask about one domain on one endpoint in a single call use "
-        "`test_domain`.\n"
-        "\n"
-        "Defaults to the last hour across the whole account. Narrow the window "
-        "and the scope rather than paging through everything: the activity log "
-        "is a recent-detail surface and a page can be large. Filter by "
-        "`profile_id`, `endpoint_id`, or `client_id` (which requires an "
-        "endpoint), by `query_action` to see only blocks or only passes, or by "
-        "`search` to match a domain substring. **One page is not the whole "
-        "window** — check `has_more` and page on rather than concluding you "
-        "have seen everything.\n"
-        "\n"
-        "Retention is limited (roughly 33 days, and a user can shorten it or "
-        "turn logging off), so an empty result may mean no matching traffic, a "
-        "window that has expired, or logging being disabled — say which you "
-        "cannot distinguish rather than reporting that nothing happened. There "
-        "is no total, so never imply one. `status_code` is the DNS response "
-        "code, and `rcode` is not an accepted parameter."
+        "To diagnose a block: widen the window, set `query_action` to "
+        "`blocked`, then resolve `trigger`/`triggerValue` with `get_catalog`. "
+        "Change it with the matching tool. Defaults to the last hour "
+        "account-wide. Narrow with `window`, `profile_id`, `endpoint_id`, "
+        "`client_id` (needs an endpoint), `query_action`, or `search`. **One "
+        "page is not the window** — check `has_more`. There is no total, so "
+        "never imply one."
     )
+
+    def __init__(self, *, entry_id: str, time_zone: str | None = None) -> None:
+        """Bind the tool and name the user's timezone when it is known.
+
+        Appended here rather than written into the class text, because the
+        timezone is a user setting and this is the one tool that reports times.
+        """
+        super().__init__(entry_id=entry_id)
+        note = time_zone_note(time_zone)
+        if note:
+            self.description = f"{self.description}\n\n{note}"
+
     parameters = probatio.Schema(
         {
             probatio.Optional(
@@ -529,28 +495,20 @@ class TestDomainTool(_ControlDReadTool):
     name = format_tool_name("test_domain")
     title = "Test domain"
     description = (
-        "Ask Control D what would happen if one endpoint resolved one domain, "
-        "without waiting for real traffic. This is the cheapest way to answer "
-        '"is this blocked?" and "what would block it?" — one call, one '
-        "domain, one endpoint.\n"
+        "What Control D would do if one endpoint resolved one domain, without "
+        'waiting for traffic. The cheapest "is this blocked?".\n'
         "\n"
-        "The result reports whether the domain is blocked and, when it is, the "
-        "profile that decided it, the matched rule or list, and the cause "
-        "(`source` is 'filter', 'service', 'custom', or 'default' after "
-        "translation, with the raw value in `source_label`). A blocked answer "
-        "comes back as `is_blocked: true` with a REFUSED response code; that is "
-        "a normal result, not an error. If no policy matched, the domain is "
-        "simply not blocked and the cause fields are empty.\n"
+        "- `is_blocked` — the verdict. A block returns REFUSED; that is a "
+        "normal result, not an error.\n"
+        "- `source` / `source_label` — the cause after translation, and the raw "
+        "value naming the list or rule.\n"
+        "- **Redirecting is not blocking.** A redirect reports "
+        "`is_blocked: false` with a resolved address. Read `action` to tell "
+        "block, bypass, and redirect apart.\n"
         "\n"
-        "**Redirecting is not blocking.** A rule that redirects a domain reports "
-        "`is_blocked: false` alongside a resolved answer address, so never read a "
-        "rule match as a block. Read `action` to distinguish block, bypass, and "
-        "redirect, and `source_label` to name the cause.\n"
-        "\n"
-        "Use `get_inventory` to find the endpoint device_id, and "
-        "`get_activity_log` when you want the real traffic history rather than a "
-        "hypothetical answer. The lookup is diagnostic and does not appear in "
-        "the activity log."
+        "Needs an `endpoint_id` — the verdict is per-endpoint, because each "
+        "enforces its own profile. Diagnostic only: the lookup never appears in "
+        "the activity log. Use `get_activity_log` for real traffic."
     )
     parameters = probatio.Schema(
         {
@@ -599,36 +557,22 @@ class GetCatalogTool(_ControlDReadTool):
     name = format_tool_name("get_catalog")
     title = "Get catalog"
     description = (
-        "Report Control D configuration and its current state for one profile "
-        "scope. Use it to resolve the exact identifiers the control tools need "
-        "before changing anything, and to answer what a profile is configured "
-        "to do.\n"
+        "A profile's configuration and current state: the source for filter, "
+        "service, option, and rule ids before changing anything.\n"
         "\n"
-        "Choose one `catalog_type` per call:\n"
-        "- `filters` — blocklists, each with whether it is enabled, whether it "
-        "supports modes, and its current mode.\n"
-        "- `services` — services, each with its category and current mode.\n"
-        "- `rules` — rule folders and the custom rules inside them, with action, "
-        "enabled state, and comment.\n"
-        "- `profile_options` — options such as AI Malware, Safe Search, and "
-        "Restricted YouTube, with their current value.\n"
-        "- `default_rule` — each profile's catch-all action.\n"
-        "- `redirect_locations` — the account's usable redirect destinations, "
-        "each with the 3-letter code a redirect's `redirect_target` takes plus "
-        "its city and country. This one is account-wide and ignores "
-        "`profile_id`, because the location set is the same for every profile; "
-        "it is what makes a redirect choosable instead of guessed.\n"
+        "One `catalog_type` per call: `filters`, `services`, `rules`, "
+        "`profile_options`, `default_rule`, or `redirect_locations`. The last "
+        "is account-wide and ignores `profile_id` — it supplies the 3-letter "
+        "code a redirect's `redirect_target` takes.\n"
         "\n"
-        "Scope it with `profile_id`; without one it returns every managed "
-        "profile, which is usually more than you need.\n"
+        "Scope with `profile_id`; without it every managed profile is "
+        "returned.\n"
         "\n"
-        "The service catalog alone runs past a thousand entries while `limit` "
-        "caps at 500, and this tool has no paging, so a large catalog cannot "
-        "be listed exhaustively. Use `search` to find a named row instead of "
-        "`limit` to page through one: `search='apple'` finds the Apple service "
-        "in a single call where listing never would. `search` matches "
-        "case-insensitively against a row's own name and ids, not its profile "
-        "columns, and `item_count` reports how many rows actually matched."
+        "The service catalog runs past a thousand entries and `limit` caps at "
+        "500 with no paging, so it cannot be listed exhaustively. Use `search` "
+        "to find a named row — `search='apple'` finds the Apple service in one "
+        "row where listing never would. It matches the row's own name and ids, "
+        "not its profile columns; `item_count` reports the true match count."
     )
     parameters = probatio.Schema(
         {
@@ -681,11 +625,11 @@ class GetCatalogTool(_ControlDReadTool):
     _profile_id_is_device_id = True
 
 
-def build_read_tools(*, entry_id: str) -> list[llm.Tool]:
+def build_read_tools(*, entry_id: str, time_zone: str | None = None) -> list[llm.Tool]:
     """Return the read tools bound to one config entry."""
     return [
         GetInventoryTool(entry_id=entry_id),
-        GetActivityLogTool(entry_id=entry_id),
+        GetActivityLogTool(entry_id=entry_id, time_zone=time_zone),
         TestDomainTool(entry_id=entry_id),
         GetCatalogTool(entry_id=entry_id),
     ]

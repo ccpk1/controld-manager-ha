@@ -177,7 +177,11 @@ async def test_the_precheck_still_reads_the_registry_by_profile_pk() -> None:
     )
 
     assert result.data["status"] == "already_in_state"
-    assert result.data["before"] == {"enabled": [True]}
+    assert result.data["before"] == {
+        "targets": [
+            {"profile_id": "962691chipwa5", "filter_id": "ads", "enabled": True}
+        ]
+    }
     service_call.assert_not_called()
 
 
@@ -297,7 +301,11 @@ async def test_a_resolved_write_carries_no_warning() -> None:
     )
 
     assert result.data["status"] == "applied"
-    assert result.data["before"] == {"enabled": [True]}
+    assert result.data["before"] == {
+        "targets": [
+            {"profile_id": "962691chipwa5", "filter_id": "ads", "enabled": True}
+        ]
+    }
     assert result.data["undo"] is not None
     assert result.data["warnings"] == []
 

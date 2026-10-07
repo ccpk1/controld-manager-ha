@@ -20,6 +20,7 @@ directly. Service schemas elsewhere in this integration stay on voluptuous.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any, Final, cast, override
 
 import probatio
@@ -28,8 +29,11 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import llm
 
+from .api.exceptions import ControlDApiError
 from .const import (
+    DEFAULT_DISABLE_MINUTES,
     DOMAIN,
+    RULE_ACTION_BLOCK,
     SERVICE_CLEAR_CLIENT_ALIAS,
     SERVICE_CREATE_ENDPOINT,
     SERVICE_CREATE_RULE,
@@ -87,9 +91,16 @@ from .const import (
     SERVICE_SET_RULE_STATE,
     SERVICE_SET_SERVICE_STATE,
 )
-from .llm_tools_common import as_list, format_tool_name
+from .llm_tools_common import (
+    CONTROL_INJECTION,
+    DELETE_INJECTION,
+    as_list,
+    format_tool_name,
+)
 from .models import (
     DEFAULT_RULE_MODE_LABELS,
+    ENDPOINT_ANALYTICS_MODE_LABELS,
+    ENDPOINT_ANALYTICS_NONE,
     SERVICE_MODE_LABELS,
     ControlDRule,
     default_rule_mode_labels,
@@ -343,19 +354,76 @@ def _resolve_row_pks(
 ) -> tuple[tuple[str, str], ...]:
     """Return the (profile_pk, row_pk) pairs a call addresses.
 
-    Rows are matched by id when given, otherwise by their display name.
+    Rows are matched by id when any are given, and by display name only when
+    none are. Ids win outright rather than being unioned with names, which is
+    what the backing services do: they resolve ids and never consult names once
+    an id is present. Unioning here instead would report a wider target set than
+    the write touches, so `before`, `after`, and `undo` would describe rows the
+    call never reached.
     """
     row_ids = as_list(args.get(id_field))
-    row_names = as_list(args.get(name_field))
-    wanted_names = {name.casefold() for name in row_names}
     pairs: list[tuple[str, str]] = []
+    if row_ids:
+        for profile_pk in profile_pks:
+            for row_pk in rows_by_profile.get(profile_pk, {}):
+                if row_pk in row_ids:
+                    pairs.append((profile_pk, row_pk))
+        return tuple(pairs)
+
+    wanted_names = {name.casefold() for name in as_list(args.get(name_field))}
+    if not wanted_names:
+        return ()
     for profile_pk in profile_pks:
         for row_pk, row in rows_by_profile.get(profile_pk, {}).items():
-            if (row_ids and row_pk in row_ids) or (
-                wanted_names and getattr(row, name_attr, "").casefold() in wanted_names
-            ):
+            if getattr(row, name_attr, "").casefold() in wanted_names:
                 pairs.append((profile_pk, row_pk))
     return tuple(pairs)
+
+
+def _before_rows(
+    pairs: tuple[tuple[str, str], ...],
+    rows_by_profile: dict[str, dict[str, Any]],
+    *,
+    id_field: str,
+    state: Callable[[Any], dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Return a `before` state as one named row per addressed object.
+
+    Named rather than positional, because the order cannot be relied on: the
+    rows come back in registry order while the caller supplied its own, so a
+    bare list of values read against the caller's target list can attribute one
+    object's state to another. Each row carries the id it belongs to, so nothing
+    has to be matched by position. `set_endpoint_profile` already reported its
+    state this way; this brings the other tools into line with it.
+    """
+    rows: list[dict[str, Any]] = []
+    for profile_pk, object_pk in pairs:
+        row = rows_by_profile.get(profile_pk, {}).get(object_pk)
+        if row is None:
+            continue
+        rows.append({"profile_id": profile_pk, id_field: object_pk, **state(row)})
+    return {"targets": rows} if rows else None
+
+
+def _before_flat_rows(
+    object_ids: tuple[str, ...],
+    rows: dict[str, Any],
+    *,
+    id_field: str,
+    state: Callable[[Any], dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Return a `before` state for a source already keyed by the id itself.
+
+    Endpoints are account-scoped rather than profile-scoped, so their registry is
+    a flat mapping and there is no profile dimension to name in each row.
+    """
+    collected: list[dict[str, Any]] = []
+    for object_id in object_ids:
+        row = rows.get(object_id)
+        if row is None:
+            continue
+        collected.append({id_field: object_id, **state(row)})
+    return {"targets": collected} if collected else None
 
 
 class _ControlDControlTool(llm.Tool):
@@ -372,6 +440,11 @@ class _ControlDControlTool(llm.Tool):
 
     integration = DOMAIN
     annotations = _CONTROL_ANNOTATIONS
+
+    # Prepended at construction rather than written into each description, so a
+    # new control tool cannot be added without the family block. The destructive
+    # tools override this with DELETE_INJECTION.
+    _injection: str = CONTROL_INJECTION
 
     _service: str
 
@@ -394,6 +467,8 @@ class _ControlDControlTool(llm.Tool):
     def __init__(self, *, entry_id: str) -> None:
         """Bind the tool to the config entry it was registered for."""
         self._entry_id = entry_id
+        if self.description:
+            self.description = f"{self._injection}\n\n{self.description}"
 
     def _args(self, tool_input: llm.ToolInput) -> dict[str, Any]:
         """Return tool args validated against the declared schema."""
@@ -589,14 +664,17 @@ class _ControlDControlTool(llm.Tool):
         before = self._before(hass, args)
 
         if self._is_already_in_state(hass, args):
-            # Nothing changed, so there is nothing to reverse.
+            # Nothing changed, so there is nothing to reverse. `after` still
+            # comes from `_after` rather than echoing `before`: the two carry
+            # different shapes, and reporting the named `before` here made
+            # `after` mean one thing for a no-op and another for a write.
             return llm.ToolResult(
                 data=build_action_result(
                     status=ACTION_STATUS_ALREADY_IN_STATE,
                     target=target,
                     changed=False,
                     before=before,
-                    after=before,
+                    after=self._after(args),
                 )
             )
 
@@ -749,15 +827,16 @@ class SetFilterStateTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the current enabled state of the addressed filters."""
+        """Return the current enabled state of each addressed filter, named."""
         registry = self._registry(hass)
         if registry is None:
             return None
-        states = [
-            registry.filters_by_profile[profile_pk][filter_pk].enabled
-            for profile_pk, filter_pk in self._pairs(hass, args)
-        ]
-        return {"enabled": states} if states else None
+        return _before_rows(
+            self._pairs(hass, args),
+            registry.filters_by_profile,
+            id_field=SERVICE_FIELD_FILTER_ID,
+            state=lambda row: {"enabled": row.enabled},
+        )
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Return whether every addressed filter is already as requested."""
@@ -801,15 +880,26 @@ class SetServiceStateTool(_ControlDControlTool):
         "else.\n"
         "\n"
         "Resolve the service first with get_catalog (catalog_type 'services'). "
-        "Pass either the id or the name; ids take precedence. A service not "
-        "currently listed on the profile can still be set, which adds it.\n"
+        "Pass either the id or the name; ids take precedence.\n"
+        "\n"
+        "The catalog lists every service the vendor offers, but a profile only "
+        "carries the ones configured on it, and `configured` says which. A "
+        "service with `configured: false` has no row and no previous mode, and "
+        "this call is what creates one. Setting such a service is not an "
+        "error — it is how a service gets configured — but `before` then "
+        "reports `configured: false` in place of a mode, and the undo removes "
+        "the row rather than restoring a mode.\n"
         "\n"
         "A redirect mode needs a destination: 'location' with a region code such "
         "as 'JFK', or 'ip' with an address. Leaving a service in a redirect mode "
         "without a target is rejected.\n"
         "\n"
         "This is reversible — set the mode back, or use the `undo` field. Every "
-        "device on that profile is affected."
+        "device on that profile is affected.\n"
+        "\n"
+        "A row this call creates may not appear in a read until the next "
+        "refresh, because profile detail is polled on its own cycle. Absence "
+        "immediately after a successful write is not a failure."
     )
     parameters = probatio.Schema(
         {
@@ -872,23 +962,33 @@ class SetServiceStateTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the current service modes as display labels.
+        """Return each addressed service's current mode, named.
 
-        Labels rather than the internal mode keys, so ``before`` and ``after``
-        speak the same vocabulary and a caller comparing them is not misled by
-        "blocked" versus "Blocked".
+        Modes are display labels rather than the internal keys, so ``before`` and
+        ``after`` speak the same vocabulary and a caller comparing them is not
+        misled by "blocked" versus "Blocked".
+
+        A service the profile does not carry yet reports ``configured: false``
+        rather than no state at all. The catalog lists every service the vendor
+        offers, most with no row on any given profile, so a service with no row
+        has no previous mode — a fact about the profile, not a failure to read
+        one.
         """
         registry = self._registry(hass)
         if registry is None:
             return None
-        modes = [
-            SERVICE_MODE_LABELS.get(
-                registry.services_by_profile[profile_pk][service_pk].current_mode
-            )
-            for profile_pk, service_pk in self._pairs(hass, args)
-        ]
-        modes = [mode for mode in modes if mode is not None]
-        return {"mode": modes} if modes else None
+        pairs = self._pairs(hass, args)
+        if not pairs:
+            return {"targets": [], "configured": False}
+        return _before_rows(
+            pairs,
+            registry.services_by_profile,
+            id_field=SERVICE_FIELD_SERVICE_ID,
+            state=lambda row: {
+                "configured": True,
+                "mode": SERVICE_MODE_LABELS.get(row.current_mode),
+            },
+        )
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Return whether every addressed service is already in the requested mode.
@@ -911,11 +1011,19 @@ class SetServiceStateTool(_ControlDControlTool):
         return {"mode": args[SERVICE_FIELD_MODE]}
 
     def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
-        """Return one call per service, restoring its previous mode."""
+        """Return one call per service, restoring its previous mode.
+
+        A service the profile did not carry had no mode to restore, because this
+        call is what put the row there. The reverse of that is removing the row,
+        which `delete_service` does, so the undo is a real one rather than
+        nothing at all.
+        """
         registry = self._registry(hass)
         pairs = self._pairs(hass, args)
-        if registry is None or not pairs:
+        if registry is None:
             return None
+        if not pairs:
+            return [self._unconfigured_undo(args)]
         calls: list[str] = []
         for profile_pk, service_pk in pairs:
             # The schema takes display labels, so the key read from the registry
@@ -931,6 +1039,23 @@ class SetServiceStateTool(_ControlDControlTool):
                 f"mode={label!r})"
             )
         return calls or None
+
+    def _unconfigured_undo(self, args: dict[str, Any]) -> str:
+        """Return the call that removes a row this write is about to create.
+
+        Whichever selector the caller used is echoed back, so the undo is a
+        usable call whether the service and profile were named by id or by name.
+        """
+        service = args.get(SERVICE_FIELD_SERVICE_ID) or args.get(
+            SERVICE_FIELD_SERVICE_NAME
+        )
+        profile = args.get(SERVICE_FIELD_PROFILE_ID) or args.get(
+            SERVICE_FIELD_PROFILE_NAME
+        )
+        return (
+            f"{format_tool_name('delete_service')}("
+            f"service_id={service!r}, profile_id={profile!r})"
+        )
 
 
 class DeleteServiceTool(_ControlDControlTool):
@@ -1001,18 +1126,16 @@ class DeleteServiceTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the modes the addressed services currently hold."""
+        """Return the mode each addressed service currently holds, named."""
         registry = self._registry(hass)
         if registry is None:
             return None
-        modes = [
-            SERVICE_MODE_LABELS.get(
-                registry.services_by_profile[profile_pk][service_pk].current_mode
-            )
-            for profile_pk, service_pk in self._pairs(hass, args)
-        ]
-        modes = [mode for mode in modes if mode is not None]
-        return {"mode": modes} if modes else None
+        return _before_rows(
+            self._pairs(hass, args),
+            registry.services_by_profile,
+            id_field=SERVICE_FIELD_SERVICE_ID,
+            state=lambda row: {"mode": SERVICE_MODE_LABELS.get(row.current_mode)},
+        )
 
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the removed state."""
@@ -1054,7 +1177,16 @@ class SetOptionStateTool(_ControlDControlTool):
         "\n"
         "Resolve the option first with get_catalog (catalog_type "
         "'profile_options'), which returns each option's id, type, and current "
-        "value. Toggle options use `enabled`; dropdown options use `value`.\n"
+        "value, plus the `choices` for a dropdown.\n"
+        "\n"
+        "- `enabled` — for a toggle option.\n"
+        "- `value` — for a dropdown option, and it takes one of that option's "
+        "`choices`. It is not the `'Off'` a catalog row reports for an unset "
+        "option: `'Off'` means no value rather than a value, so it is "
+        "rejected.\n"
+        "- `enabled: false` — clears a dropdown option back to its default, "
+        "which is the state a catalog row reports as `'Off'`. Use this to "
+        "undo a dropdown change, not `value: 'Off'`.\n"
         "\n"
         "This is reversible — set the previous value back, or use the `undo` "
         "field. Options apply to every device on the profile."
@@ -1118,7 +1250,7 @@ class SetOptionStateTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the current option states, shaped by option kind.
+        """Return each addressed option's current state, named, by kind.
 
         Reported per kind rather than as a single select-style label:
         ``current_select_option`` returns "Off" for any option whose value has no
@@ -1126,22 +1258,20 @@ class SetOptionStateTool(_ControlDControlTool):
         would otherwise be reported as off.
         """
         registry = self._registry(hass)
-        pairs = self._pairs(hass, args)
-        if registry is None or not pairs:
+        if registry is None:
             return None
-        enabled: list[bool] = []
-        values: list[str] = []
-        for profile_pk, option_pk in pairs:
-            option = registry.options_by_profile[profile_pk][option_pk]
+
+        def state(option: Any) -> dict[str, Any]:
             if option.entity_kind == "toggle":
-                enabled.append(option.is_enabled)
-            elif option.entity_kind == "select":
-                values.append(option.current_select_option)
-        if enabled and values:
-            return {"enabled": enabled, "value": values}
-        if enabled:
-            return {"enabled": enabled}
-        return {"value": values} if values else None
+                return {"enabled": option.is_enabled}
+            return {"value": option.current_select_option}
+
+        return _before_rows(
+            self._pairs(hass, args),
+            registry.options_by_profile,
+            id_field=SERVICE_FIELD_OPTION_ID,
+            state=state,
+        )
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Return whether every addressed option is already as requested."""
@@ -1171,7 +1301,15 @@ class SetOptionStateTool(_ControlDControlTool):
         return after
 
     def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
-        """Return one call per option, restoring its previous value."""
+        """Return one call per option, restoring its previous value.
+
+        A select option with no current value is at its default, which the
+        catalog reports as "Off". Restoring that state is `enabled: false`, not
+        `value: 'Off'` — the service rejects the literal string because "Off"
+        resolves to no upstream value, and it cannot tell that apart from an
+        unrecognised one. Emitting the literal would produce an undo that fails
+        when used.
+        """
         registry = self._registry(hass)
         pairs = self._pairs(hass, args)
         if registry is None or not pairs:
@@ -1183,6 +1321,8 @@ class SetOptionStateTool(_ControlDControlTool):
                 undo_args = f"enabled={option.is_enabled}"
             elif option.entity_kind == "select" and option.current_value_key:
                 undo_args = f"value={option.current_value_key!r}"
+            elif option.entity_kind == "select":
+                undo_args = "enabled=False"
             else:
                 continue
             calls.append(
@@ -1192,11 +1332,99 @@ class SetOptionStateTool(_ControlDControlTool):
         return calls or None
 
 
-class SetRuleStateTool(_ControlDControlTool):
-    """Enable, disable, or modify one custom rule."""
+class _RuleRowMixin:
+    """Rule-row resolution for the tools that address rules by identity.
+
+    The registry holds only the rules a profile exposes as entities, and that
+    exposure is opt-in per profile — on the account this was built against, 7 of
+    8 profiles reported `custom_rules=False` and therefore held no rules at all.
+    So the registry cannot answer for a rule in the common case, and both rule
+    tools fetch what it does not hold: `set_rule_state` for its pre-check and
+    undo, `delete_rule` to describe what it removes.
+
+    The fetch is **best-effort**. It enriches `before`; it must never gate the
+    operation, so a failure leaves the registry's answer standing and the call
+    proceeds. A rule the registry holds is answered from there and costs no
+    request.
+    """
 
     # Rows fetched for a rule the registry does not expose, held for one call.
     _preloaded_rules: dict[str, dict[str, ControlDRule]] | None = None
+
+    # Declared so this mixin reads standalone. Annotation only: a stub method
+    # would shadow the real implementation, and the mixin precedes the tool base
+    # in the MRO.
+    _entry_id: str
+    _registry: Any
+
+    def _matching_rules(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> tuple[Any, ...]:
+        """Return the rule rows this call addresses, by identity."""
+        registry = self._registry(hass)
+        if registry is None:
+            return ()
+        identities = set(as_list(args[SERVICE_FIELD_RULE_IDENTITY]))
+        rows_by_profile = self._preloaded_rules or {}
+        found: list[Any] = []
+        for profile_pk in _resolve_profile_pks(registry, args):
+            source = rows_by_profile.get(profile_pk) or registry.rules_by_profile.get(
+                profile_pk, {}
+            )
+            found.extend(
+                rule for rule in source.values() if rule.identity in identities
+            )
+        return tuple(found)
+
+    async def _async_preload(self, hass: HomeAssistant, args: dict[str, Any]) -> None:
+        """Fetch rules the registry does not hold, if it cannot answer.
+
+        Skipped entirely when the registry already holds every addressed rule, so
+        an exposed rule costs no request. A failure is logged and swallowed: the
+        rows are enrichment, and letting a fetch error escape would turn a
+        momentary API problem into a call that never reaches the service.
+        """
+        registry = self._registry(hass)
+        if registry is None:
+            return
+        identities = set(as_list(args[SERVICE_FIELD_RULE_IDENTITY]))
+        if not identities:
+            return
+        profiles = _resolve_profile_pks(registry, args)
+        if all(
+            any(
+                rule.identity in identities
+                for rule in registry.rules_by_profile.get(profile_pk, {}).values()
+            )
+            for profile_pk in profiles
+        ):
+            return
+        entry = hass.config_entries.async_get_entry(self._entry_id)
+        manager = getattr(
+            getattr(getattr(entry, "runtime_data", None), "managers", None),
+            "integration",
+            None,
+        )
+        if manager is None:
+            return
+        try:
+            loaded = await manager.async_load_live_rules(frozenset(profiles))
+        except ControlDApiError as err:
+            LOGGER.debug(
+                "Preload of rule rows failed, continuing without them: %s", err
+            )
+            return
+        self._preloaded_rules = {
+            profile_pk: rows[1] for profile_pk, rows in loaded.items()
+        }
+
+    def _clear_preload(self) -> None:
+        """Drop the preloaded rows once the call is done."""
+        self._preloaded_rules = None
+
+
+class SetRuleStateTool(_RuleRowMixin, _ControlDControlTool):
+    """Enable, disable, or modify one custom rule."""
 
     name = format_tool_name("set_rule_state")
     title = "Set rule state"
@@ -1274,84 +1502,36 @@ class SetRuleStateTool(_ControlDControlTool):
     )
     _service = SERVICE_SET_RULE_STATE
 
-    def _matching_rules(
-        self, hass: HomeAssistant, args: dict[str, Any]
-    ) -> tuple[Any, ...]:
-        """Return the rule rows this call addresses, by identity.
-
-        Prefers rows preloaded from the API: the registry only holds rules a
-        profile exposes, so without them the pre-check, the no-op check, and the
-        undo would all be blind for an unexposed rule.
-        """
-        registry = self._registry(hass)
-        if registry is None:
-            return ()
-        identities = set(as_list(args[SERVICE_FIELD_RULE_IDENTITY]))
-        rows_by_profile = self._preloaded_rules or {}
-        found: list[Any] = []
-        for profile_pk in _resolve_profile_pks(registry, args):
-            source = rows_by_profile.get(profile_pk) or registry.rules_by_profile.get(
-                profile_pk, {}
-            )
-            found.extend(
-                rule for rule in source.values() if rule.identity in identities
-            )
-        return tuple(found)
-
-    async def _async_preload(self, hass: HomeAssistant, args: dict[str, Any]) -> None:
-        """Fetch rules the registry does not hold.
-
-        Only runs when the registry cannot answer, so the common case of an
-        exposed rule costs no extra request.
-        """
-        registry = self._registry(hass)
-        if registry is None:
-            return
-        identities = set(as_list(args[SERVICE_FIELD_RULE_IDENTITY]))
-        if not identities:
-            return
-        profiles = _resolve_profile_pks(registry, args)
-        if all(
-            any(
-                rule.identity in identities
-                for rule in registry.rules_by_profile.get(profile_pk, {}).values()
-            )
-            for profile_pk in profiles
-        ):
-            return
-        entry = hass.config_entries.async_get_entry(self._entry_id)
-        manager = getattr(
-            getattr(getattr(entry, "runtime_data", None), "managers", None),
-            "integration",
-            None,
-        )
-        if manager is None:
-            return
-        loaded = await manager.async_load_live_rules(frozenset(profiles))
-        self._preloaded_rules = {
-            profile_pk: rows[1] for profile_pk, rows in loaded.items()
-        }
-
-    def _clear_preload(self) -> None:
-        """Drop the preloaded rows once the call is done."""
-        self._preloaded_rules = None
-
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the current rule states, including any redirect destination."""
+        """Return each addressed rule's current state, named.
+
+        The key is `mode`, matching this tool's own argument and `after`, even
+        though `get_catalog` reports the same property as `action`. A write
+        result is compared against the write that produced it, so it uses the
+        write vocabulary; the read tools keep the vendor's word, which is what
+        the catalog rows carry.
+        """
         rules = self._matching_rules(hass, args)
         if not rules:
             return None
-        targets = [rule.redirect_target for rule in rules]
-        before: dict[str, Any] = {
-            "enabled": [rule.enabled for rule in rules],
-            "action": [rule.action_key for rule in rules],
+
+        def state(rule: Any) -> dict[str, Any]:
+            row: dict[str, Any] = {
+                "enabled": rule.enabled,
+                "mode": rule.action_key,
+            }
+            # A redirect whose destination is not reported is only half-described.
+            if rule.redirect_target is not None:
+                row["redirect_target"] = rule.redirect_target
+            return row
+
+        return {
+            "targets": [
+                {"rule_identity": rule.identity, **state(rule)} for rule in rules
+            ]
         }
-        # A redirect whose destination is not reported is only half-described.
-        if any(target is not None for target in targets):
-            before["redirect_target"] = targets
-        return before
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Return whether the addressed rules already match the request."""
@@ -1469,14 +1649,19 @@ class SetDefaultRuleStateTool(_ControlDControlTool):
         if registry is None:
             return None
         modes = [
-            DEFAULT_RULE_MODE_LABELS.get(
-                registry.default_rules_by_profile[pk].current_mode
+            (
+                pk,
+                DEFAULT_RULE_MODE_LABELS.get(
+                    registry.default_rules_by_profile[pk].current_mode
+                ),
             )
             for pk in _resolve_profile_pks(registry, args)
             if pk in registry.default_rules_by_profile
         ]
-        modes = [mode for mode in modes if mode is not None]
-        return {"mode": modes} if modes else None
+        rows = [
+            {"profile_id": pk, "mode": mode} for pk, mode in modes if mode is not None
+        ]
+        return {"targets": rows} if rows else None
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Return whether every addressed profile already uses the requested mode.
@@ -1557,17 +1742,19 @@ class EnableProfileTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the current paused state of the addressed profiles."""
+        """Return the current paused state of the addressed profiles, named."""
         registry = self._registry(hass)
         if registry is None:
             return None
-        return {
-            "paused": [
-                registry.profiles[pk].paused_until is not None
-                for pk in self._profile_pks(hass, args)
-                if pk in registry.profiles
-            ]
-        }
+        rows = [
+            {
+                "profile_id": pk,
+                "paused": registry.profiles[pk].paused_until is not None,
+            }
+            for pk in self._profile_pks(hass, args)
+            if pk in registry.profiles
+        ]
+        return {"targets": rows} if rows else None
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Enabling is a no-op when nothing is paused."""
@@ -1622,10 +1809,11 @@ class DisableProfileTool(_ControlDControlTool):
             ): probatio.Any(str, [str]),
             probatio.Optional(
                 SERVICE_FIELD_MINUTES,
+                default=DEFAULT_DISABLE_MINUTES,
                 description=(
                     "Optional. How long to disable the profile for, in minutes. "
-                    "Defaults to a short window. Prefer a short value; the "
-                    "profile re-enables itself when it elapses."
+                    f"Defaults to {DEFAULT_DISABLE_MINUTES}. Prefer a short "
+                    "value; the profile re-enables itself when it elapses."
                 ),
             ): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=1440)),
         }
@@ -1641,17 +1829,19 @@ class DisableProfileTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the current paused state of the addressed profiles."""
+        """Return the current paused state of the addressed profiles, named."""
         registry = self._registry(hass)
         if registry is None:
             return None
-        return {
-            "paused": [
-                registry.profiles[pk].paused_until is not None
-                for pk in self._profile_pks(hass, args)
-                if pk in registry.profiles
-            ]
-        }
+        rows = [
+            {
+                "profile_id": pk,
+                "paused": registry.profiles[pk].paused_until is not None,
+            }
+            for pk in self._profile_pks(hass, args)
+            if pk in registry.profiles
+        ]
+        return {"targets": rows} if rows else None
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Disabling is a no-op when every addressed profile is already paused."""
@@ -1668,6 +1858,24 @@ class DisableProfileTool(_ControlDControlTool):
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the requested paused state and duration."""
         return {"paused": True, "minutes": args.get(SERVICE_FIELD_MINUTES)}
+
+    def _target(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return the addressed profiles.
+
+        Named explicitly because the default target echoes every non-null
+        argument, which would report the disable duration as though it were part
+        of what was addressed. The duration belongs in `after`.
+        """
+        return {
+            key: value
+            for key, value in args.items()
+            if key
+            in (
+                SERVICE_FIELD_PROFILE_ID,
+                SERVICE_FIELD_PROFILE_NAME,
+            )
+            and value is not None
+        }
 
     def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str]:
         """Return the call that re-enables the profile."""
@@ -1692,9 +1900,10 @@ class CreateRuleTool(_ControlDControlTool):
         "being blocked by a filter. Optionally place it in a folder with "
         "`rule_group_id` (from get_catalog, catalog_type 'rules').\n"
         "\n"
-        "This is NOT idempotent: creating the same rule twice creates two rules. "
-        "The service rejects a domain that already has a rule on the profile, but "
-        "do not retry a failed call blindly.\n"
+        "This is NOT idempotent: each call creates a new rule, and it never "
+        "reports `already_in_state`. A domain that already has a rule on the "
+        "profile is rejected rather than duplicated, so do not treat a "
+        "rejection as a reason to retry blindly.\n"
         "\n"
         "To undo it, delete the rule — the `undo` field names that call. If the "
         "configured tier does not include destructive actions, the undo is not "
@@ -1712,6 +1921,7 @@ class CreateRuleTool(_ControlDControlTool):
             ): probatio.Any(str, [str]),
             probatio.Optional(
                 SERVICE_FIELD_MODE,
+                default=RULE_ACTION_BLOCK,
                 description=(
                     "Optional. What the rule does: 'block' (the default), "
                     "'bypass' to make an exception, or 'redirect'. The values "
@@ -1794,8 +2004,10 @@ class CreateRuleTool(_ControlDControlTool):
         ]
 
 
-class DeleteRuleTool(_ControlDControlTool):
+class DeleteRuleTool(_RuleRowMixin, _ControlDControlTool):
     """Permanently delete one or more custom rules."""
+
+    _injection: str = DELETE_INJECTION
 
     name = format_tool_name("delete_rule")
     title = "Delete rule"
@@ -1832,13 +2044,41 @@ class DeleteRuleTool(_ControlDControlTool):
     )
     _service = SERVICE_DELETE_RULE
     annotations = _DESTRUCTIVE_ANNOTATIONS
-    # Deletion has no prior state to compare and no undo by design, so the
-    # "state could not be read" note would give the wrong reason for both.
+    # No prior state to compare and no undo by design. The pre-check exists to
+    # skip a no-op write, which cannot apply to a delete, so it stays off;
+    # `_before` is implemented regardless, reporting what is destroyed.
     _has_precheck = False
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the deleted rule target."""
         return {"rule_identity": args[SERVICE_FIELD_RULE_IDENTITY]}
+
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return what each addressed rule is, read before it is destroyed.
+
+        Not the rule's prior *state* — there is none to restore — but what it
+        was. Once the row is gone `target` holds only the identity it was asked
+        for, so the rule's own id, action, comment, and folder have to be read
+        first or not at all.
+        """
+        rules = self._matching_rules(hass, args)
+        if not rules:
+            return None
+        return {
+            "targets": [
+                {
+                    "rule_identity": rule.identity,
+                    "rule_id": rule.rule_pk,
+                    "action": rule.action_key,
+                    "enabled": rule.enabled,
+                    "comment": rule.comment,
+                    "group_name": rule.group_name,
+                }
+                for rule in rules
+            ]
+        }
 
     def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> None:
         """Deletion is irreversible, so no undo is claimed."""
@@ -1901,16 +2141,16 @@ class RenameEndpointTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the current endpoint names."""
+        """Return the current endpoint names, named per endpoint."""
         registry = self._registry(hass)
         if registry is None:
             return None
-        names = [
-            registry.endpoints[device_id].name
+        rows = [
+            {"endpoint_id": device_id, "name": registry.endpoints[device_id].name}
             for device_id in as_list(args[SERVICE_FIELD_ENDPOINT_ID])
             if device_id in registry.endpoints
         ]
-        return {"name": names} if names else None
+        return {"targets": rows} if rows else None
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Return whether every addressed endpoint already carries the new name."""
@@ -1971,9 +2211,11 @@ class SetEndpointAnalyticsLoggingTool(_ControlDControlTool):
         "privacy-relevant change rather than a routine one.\n"
         "\n"
         "Find the endpoint with get_inventory and pass its `device_id` as "
-        "`endpoint_id`. The first time logging is enabled for an endpoint the "
-        "dashboard asks for a storage region; that choice is not made here. This "
-        "is reversible — set it back."
+        "`endpoint_id`. The current level is the endpoint's "
+        "`analytics_logging`, so `before` and the `undo` are real: the undo "
+        "restores the level each endpoint held. The first time logging is "
+        "enabled for an endpoint the dashboard asks for a storage region; that "
+        "choice is not made here."
     )
     parameters = _endpoint_selector_schema(
         {
@@ -2005,9 +2247,53 @@ class SetEndpointAnalyticsLoggingTool(_ControlDControlTool):
         """Return the addressed endpoints."""
         return {"kind": "endpoint", "id": args[SERVICE_FIELD_ENDPOINT_ID]}
 
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return each addressed endpoint's current logging level, named."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        return _before_flat_rows(
+            tuple(
+                device_id
+                for device_id in as_list(args[SERVICE_FIELD_ENDPOINT_ID])
+                if device_id in registry.endpoints
+            ),
+            registry.endpoints,
+            id_field=SERVICE_FIELD_ENDPOINT_ID,
+            # The display label, so `before` and `after` speak the same
+            # vocabulary: the schema takes labels, and reporting the internal key
+            # here would make a caller compare "some" against "Some".
+            state=lambda endpoint: {
+                "mode": (
+                    ENDPOINT_ANALYTICS_MODE_LABELS[endpoint.analytics_logging]
+                    if endpoint.analytics_logging is not None
+                    else None
+                )
+            },
+        )
+
     def _after(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the requested logging level."""
         return {"mode": args[SERVICE_FIELD_MODE]}
+
+    def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
+        """Return one call per endpoint, restoring its previous logging level."""
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        calls: list[str] = []
+        for device_id in as_list(args[SERVICE_FIELD_ENDPOINT_ID]):
+            endpoint = registry.endpoints.get(device_id)
+            if endpoint is None or endpoint.analytics_logging is None:
+                continue
+            calls.append(
+                f"{format_tool_name('set_endpoint_analytics_logging')}("
+                f"endpoint_id={device_id!r}, "
+                f"mode={ENDPOINT_ANALYTICS_MODE_LABELS[endpoint.analytics_logging]!r})"
+            )
+        return calls or None
 
 
 class SetEndpointProfileTool(_ControlDControlTool):
@@ -2078,7 +2364,11 @@ class SetEndpointProfileTool(_ControlDControlTool):
     _accepts_endpoint_name_selector = True
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Return the addressed endpoints and the profile change."""
+        """Return the addressed endpoints and the profile change.
+
+        The slot keys match `after`, so one result does not describe the same
+        two slots two ways.
+        """
         return {
             "kind": "endpoint",
             "id": args[SERVICE_FIELD_ENDPOINT_ID],
@@ -2105,7 +2395,7 @@ class SetEndpointProfileTool(_ControlDControlTool):
             for device_id in requested
             if (endpoint := endpoints.get(device_id)) is not None
         ]
-        return {"endpoints": rows} if rows else None
+        return {"targets": rows} if rows else None
 
     def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> list[str] | None:
         """Return the calls that put each endpoint's own profiles back."""
@@ -2200,6 +2490,7 @@ class CreateEndpointTool(_ControlDControlTool):
             ): cv.string,
             probatio.Optional(
                 SERVICE_FIELD_MODE,
+                default=ENDPOINT_ANALYTICS_MODE_LABELS[ENDPOINT_ANALYTICS_NONE],
                 description=(
                     "Optional. The initial analytics logging level: 'None', "
                     "'Some' (counts only), or 'Full' (records the queries). "
@@ -2246,6 +2537,8 @@ class CreateEndpointTool(_ControlDControlTool):
 class DeleteEndpointTool(_ControlDControlTool):
     """Permanently delete one or more endpoints."""
 
+    _injection: str = DELETE_INJECTION
+
     name = format_tool_name(SERVICE_DELETE_ENDPOINT)
     title = "Delete endpoint"
     description = (
@@ -2285,13 +2578,45 @@ class DeleteEndpointTool(_ControlDControlTool):
     _service = SERVICE_DELETE_ENDPOINT
     _accepts_endpoint_name_selector = True
     annotations = _DESTRUCTIVE_ANNOTATIONS
-    # Deletion has no prior state to compare and no undo by design, so the
-    # "state could not be read" note would give the wrong reason for both.
+    # No prior state to compare and no undo by design. The pre-check exists to
+    # skip a no-op write, which cannot apply to a delete, so it stays off;
+    # `_before` is implemented regardless, reporting what is destroyed.
     _has_precheck = False
 
     def _target(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the deleted endpoints."""
         return {"kind": "endpoint", "id": args[SERVICE_FIELD_ENDPOINT_ID]}
+
+    def _before(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return what each addressed endpoint is, read before it is destroyed.
+
+        Not the endpoint's prior *state* — there is none to restore — but what it
+        was, because this is the most destructive tool here and its own
+        description asks for the blast radius to be stated. Once the row is gone
+        `target` holds only a bare id, so the name, the enforced profiles, and
+        how many clients sat behind it have to be read first or not at all.
+        """
+        registry = self._registry(hass)
+        if registry is None:
+            return None
+        return _before_flat_rows(
+            tuple(
+                device_id
+                for device_id in as_list(args[SERVICE_FIELD_ENDPOINT_ID])
+                if device_id in registry.endpoints
+            ),
+            registry.endpoints,
+            id_field=SERVICE_FIELD_ENDPOINT_ID,
+            state=lambda endpoint: {
+                "name": endpoint.name,
+                "enforced_profiles": [
+                    profile.profile_pk for profile in endpoint.attached_profiles
+                ],
+                "associated_client_count": endpoint.associated_client_count,
+            },
+        )
 
     def _undo(self, hass: HomeAssistant, args: dict[str, Any]) -> None:
         """Deletion is irreversible, so no undo is claimed."""
@@ -2362,7 +2687,7 @@ class SetEndpointDescriptionTool(_ControlDControlTool):
             for device_id in as_list(args[SERVICE_FIELD_ENDPOINT_ID])
             if (endpoint := registry.endpoints.get(device_id)) is not None
         ]
-        return {"endpoints": rows} if rows else None
+        return {"targets": rows} if rows else None
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Return whether every addressed endpoint already carries this note."""
@@ -2497,11 +2822,16 @@ class SetClientAliasTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the clients' current aliases."""
+        """Return the clients' current aliases, named per client."""
         targets = self._matching_targets(hass, args)
         if not targets:
             return None
-        return {"alias": [target.client_alias for target in targets]}
+        return {
+            "targets": [
+                {"client_id": target.client_id, "alias": target.client_alias}
+                for target in targets
+            ]
+        }
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Return whether every addressed client already carries this alias."""
@@ -2609,11 +2939,16 @@ class ClearClientAliasTool(_ControlDControlTool):
     def _before(
         self, hass: HomeAssistant, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Return the aliases about to be removed."""
+        """Return the aliases about to be removed, named per client."""
         targets = self._matching_targets(hass, args)
         if not targets:
             return None
-        return {"alias": [target.client_alias for target in targets]}
+        return {
+            "targets": [
+                {"client_id": target.client_id, "alias": target.client_alias}
+                for target in targets
+            ]
+        }
 
     def _is_already_in_state(self, hass: HomeAssistant, args: dict[str, Any]) -> bool:
         """Clearing is a no-op only when no addressed client has an alias left."""
@@ -2639,6 +2974,8 @@ class ClearClientAliasTool(_ControlDControlTool):
 
 class DeleteClientTool(_ControlDControlTool):
     """Permanently delete client rows and, by default, their query history."""
+
+    _injection: str = DELETE_INJECTION
 
     name = format_tool_name("delete_client")
     title = "Delete client"

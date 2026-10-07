@@ -65,6 +65,7 @@ from custom_components.controld_manager.const import (
     SERVICE_FIELD_REDIRECT_TARGET_TYPE,
     SERVICE_FIELD_RULE_GROUP_NAME,
     SERVICE_FIELD_RULE_IDENTITY,
+    SERVICE_FIELD_SEARCH,
     SERVICE_FIELD_SERVICE_ID,
     SERVICE_FIELD_SERVICE_NAME,
     SERVICE_FIELD_VALUE,
@@ -628,9 +629,10 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
         hass.states.get(profile_count_entity_id).attributes["unit_of_measurement"]
         == "profiles"
     )
+    # "devices", not "endpoints": the value counts endpoints plus their clients.
     assert (
         hass.states.get(endpoint_count_entity_id).attributes["unit_of_measurement"]
-        == "endpoints"
+        == "devices"
     )
     assert hass.states.get(total_queries_entity_id).state == "57826"
     assert hass.states.get(blocked_queries_entity_id).state == "8100"
@@ -654,9 +656,9 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert hass.states.get(profile_status_entity_id).name == "Primary Status"
     assert (
         hass.states.get(profile_endpoint_count_entity_id).name
-        == "Primary Endpoint count"
+        == "Primary Protected devices"
     )
-    assert hass.states.get(endpoint_count_entity_id).name == "Account Endpoint count"
+    assert hass.states.get(endpoint_count_entity_id).name == "Account Protected devices"
     assert hass.states.get(profile_count_entity_id).name == "Account Profile count"
     assert hass.states.get(total_queries_entity_id).name == "Account Total queries"
     assert hass.states.get(blocked_queries_entity_id).name == "Account Blocked queries"
@@ -698,7 +700,7 @@ async def test_phase4_entities_are_created_and_attached(hass) -> None:
     assert adult_mode_entry is not None
     assert adult_mode_entry.disabled_by is not None
     assert "last_refresh_error" not in hass.states.get(status_entity_id).attributes
-    assert "router_client_count" not in hass.states.get(status_entity_id).attributes
+    assert "client_count" not in hass.states.get(status_entity_id).attributes
 
     profile_device = device_registry.async_get_device_by_identifier(
         (DOMAIN, "instance::user-123::profile::profile-1"), entry.entry_id
@@ -800,11 +802,12 @@ async def test_profile_analytics_sensors_are_created_for_each_profile(hass) -> N
         hass.states.get(profile_total_entity_id).attributes["unit_of_measurement"]
         == "queries"
     )
+    # "devices", not "endpoints", for the same reason as the account sensor.
     assert (
         hass.states.get(profile_endpoint_count_entity_id).attributes[
             "unit_of_measurement"
         ]
-        == "endpoints"
+        == "devices"
     )
     assert hass.states.get(profile_total_entity_id).name == "Primary Total queries"
     assert (
@@ -7592,7 +7595,144 @@ async def test_get_catalog_returns_services(hass) -> None:
     assert response["catalog_type"] == "services"
     assert response["items"][0]["service_id"] == "amazonmusic"
     assert response["items"][0]["category_name"] == "Audio"
+    # The profile carries a row for this service, so it has a previous mode.
+    assert response["items"][0]["configured"] is True
     assert "amazonmusic, Amazon Music, Audio" in response["text"]
+
+
+async def test_get_catalog_marks_a_service_the_profile_does_not_carry(hass) -> None:
+    """Availability and configuration are different sets, and mode cannot tell them.
+
+    The catalog lists every service the vendor offers while a profile carries
+    rows only for the ones configured on it, and both report `current_mode: off`.
+    Without `configured` a caller cannot tell which rows a write would modify
+    from which it would create.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    # Two services offered, one of them configured on the profile.
+    available = [
+        {
+            "PK": "amazonmusic",
+            "name": "Amazon Music",
+            "category": "audio",
+            "warning": "",
+            "unlock_location": "JFK",
+        },
+        {
+            "PK": "netflix",
+            "name": "Netflix",
+            "category": "audio",
+            "warning": "",
+            "unlock_location": "JFK",
+        },
+    ]
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=available),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_services",
+            new=AsyncMock(
+                side_effect=lambda profile_pk: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=True,
+                        include_rules=False,
+                    ).services
+                )
+            ),
+        ),
+    ):
+        response = await hass.services.async_call(
+            DOMAIN,
+            SERVICE_GET_CATALOG,
+            {
+                SERVICE_FIELD_CATALOG_TYPE: "services",
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+            },
+            blocking=True,
+            return_response=True,
+        )
+
+    configured = {item["service_id"]: item["configured"] for item in response["items"]}
+    assert configured == {"amazonmusic": True, "netflix": False}
+
+
+async def test_a_searched_catalog_withholds_the_unfiltered_text(hass) -> None:
+    """`text` is the unfiltered listing, so a search must not hand back removed rows.
+
+    `text` exists to be copied from, and it covers the whole catalog. Returning
+    it alongside a narrowed `items` would show a caller rows the search had
+    filtered out, with nothing marking which of the two was authoritative.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
+        unique_id="user-123",
+        title="Control D Home",
+    )
+    await _async_setup_entry(hass, entry, _inventory("user-123", "profile-1"))
+
+    with (
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_categories",
+            new=AsyncMock(return_value=SERVICE_CATEGORIES),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_service_catalog",
+            new=AsyncMock(return_value=SERVICE_CATALOG),
+        ),
+        patch(
+            "custom_components.controld_manager.api.client.ControlDAPIClient.async_get_profile_services",
+            new=AsyncMock(
+                side_effect=lambda profile_pk: (
+                    _detail_payload(
+                        profile_pk,
+                        include_services=True,
+                        include_rules=False,
+                    ).services
+                )
+            ),
+        ),
+    ):
+        searched = await hass.services.async_call(
+            DOMAIN,
+            SERVICE_GET_CATALOG,
+            {
+                SERVICE_FIELD_CATALOG_TYPE: "services",
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+                SERVICE_FIELD_SEARCH: "amazon",
+            },
+            blocking=True,
+            return_response=True,
+        )
+        unfiltered = await hass.services.async_call(
+            DOMAIN,
+            SERVICE_GET_CATALOG,
+            {
+                SERVICE_FIELD_CATALOG_TYPE: "services",
+                SERVICE_FIELD_PROFILE_NAME: "Primary",
+            },
+            blocking=True,
+            return_response=True,
+        )
+
+    assert searched["item_count"] == 1
+    assert searched["text"] is None
+    # Without a search the copyable listing is still returned in full.
+    assert unfiltered["text"] is not None
 
 
 async def test_get_catalog_returns_rules(hass) -> None:
@@ -7830,9 +7970,9 @@ async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> N
     }
     assert diagnostics["runtime"]["registry_summary"] == {
         "profile_count": 2,
-        "endpoint_count": 3,
-        "discovered_endpoint_count": 2,
-        "router_client_count": 1,
+        "endpoint_count": 2,
+        "client_count": 1,
+        "protected_device_count": 3,
         "service_category_count": 1,
         "filter_profile_count": 2,
         "service_profile_count": 2,
@@ -7844,8 +7984,12 @@ async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> N
         SERVICE_SELECTOR_AUTOMATIC
     ]
     assert diagnostics["runtime"]["profiles"]["profile-1"]["filter_count"] == 5
-    assert diagnostics["runtime"]["profiles"]["profile-1"]["endpoint_count"] == 3
-    assert diagnostics["runtime"]["profiles"]["profile-2"]["endpoint_count"] == 1
+    assert (
+        diagnostics["runtime"]["profiles"]["profile-1"]["protected_device_count"] == 3
+    )
+    assert (
+        diagnostics["runtime"]["profiles"]["profile-2"]["protected_device_count"] == 1
+    )
 
 
 async def test_stale_refresh_is_discarded_when_write_lands_during_fetch(

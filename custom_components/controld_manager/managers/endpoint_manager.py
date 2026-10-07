@@ -15,6 +15,7 @@ from ..models import (
     ControlDEndpointInventoryStats,
     ControlDEndpointSummary,
     build_client_alias_target_key,
+    endpoint_analytics_mode_from_stats_value,
 )
 from .base_manager import BaseManager
 
@@ -343,8 +344,8 @@ class EndpointManager(BaseManager):
                 client_mac_address=self._optional_string(
                     analytics_client_payload.get("mac")
                 ),
-                client_last_active=self._normalize_datetime_value(
-                    analytics_client_payload.get("lastActivityTime")
+                client_last_active=self._client_last_active(
+                    endpoint_row, analytics_client_payload
                 ),
             )
 
@@ -387,12 +388,39 @@ class EndpointManager(BaseManager):
                 client_mac_address=self._optional_string(
                     analytics_client_payload.get("mac")
                 ),
-                client_last_active=self._normalize_datetime_value(
-                    analytics_client_payload.get("lastActivityTime")
+                # No endpoint to join to: this target came only from analytics,
+                # so the analytics timestamp is the only source there is.
+                client_last_active=self._client_last_active(
+                    None, analytics_client_payload
                 ),
             )
 
         return targets
+
+    def _client_last_active(
+        self,
+        endpoint_row: ControlDEndpointSummary | None,
+        analytics_client_payload: dict[str, Any],
+    ) -> datetime | None:
+        """Return when this client was last active.
+
+        A client promoted to its own standalone endpoint has its traffic
+        attributed to that endpoint from then on, and Control D stops updating
+        the analytics client row for it. The row's `lastActivityTime` therefore
+        freezes on the day of promotion, and only the endpoint keeps moving.
+
+        That is not hypothetical: every one of the six standalone endpoints on
+        the account this was diagnosed against reported a last-active of 146 to
+        174 days ago, while their endpoints reported activity minutes earlier,
+        for phones that are in daily use. The endpoint is authoritative whenever
+        one exists; the analytics timestamp is the only source for a client that
+        has no endpoint of its own.
+        """
+        if endpoint_row is not None and endpoint_row.last_active is not None:
+            return endpoint_row.last_active
+        return self._normalize_datetime_value(
+            analytics_client_payload.get("lastActivityTime")
+        )
 
     def aliasable_parent_endpoint_ids(
         self, devices_payload: tuple[dict[str, Any], ...]
@@ -551,7 +579,7 @@ class EndpointManager(BaseManager):
         self, devices_payload: tuple[dict[str, Any], ...]
     ) -> dict[str, ControlDEndpointSummary]:
         """Normalize endpoint inventory into immutable endpoint summaries."""
-        router_client_counts_by_parent = self._summarize_router_clients(devices_payload)
+        client_counts_by_parent = self._summarize_clients_by_parent(devices_payload)
         endpoints: dict[str, ControlDEndpointSummary] = {}
         for device_payload in devices_payload:
             device_id = self._require_string(device_payload, "device_id")
@@ -566,15 +594,16 @@ class EndpointManager(BaseManager):
                     or device_payload.get("last_active")
                 ),
                 attached_profiles=attached_profiles,
-                associated_client_count=router_client_counts_by_parent.get(
-                    device_id, 0
-                ),
+                associated_client_count=client_counts_by_parent.get(device_id, 0),
                 parent_device_id=self._extract_parent_device_id(device_payload),
                 # Present only when this device is also a client under another
                 # endpoint, which is how a standalone endpoint is aliased.
                 parent_client_id=relationship[2] if relationship else None,
                 description=self._optional_string(device_payload.get("desc")),
                 icon=self._optional_string(device_payload.get("icon")),
+                analytics_logging=endpoint_analytics_mode_from_stats_value(
+                    device_payload.get("stats")
+                ),
                 authorize_by_secure_dns=bool(device_payload.get("learn_ip")),
                 require_authorized_ips=bool(device_payload.get("restricted")),
                 legacy_dns_resolver=self._nested_string(
@@ -597,20 +626,20 @@ class EndpointManager(BaseManager):
         devices_payload: tuple[dict[str, Any], ...],
         endpoints: dict[str, ControlDEndpointSummary],
     ) -> ControlDEndpointInventoryStats:
-        """Return account-level endpoint totals without creating extra entities."""
+        """Return account-level inventory totals without creating extra entities."""
         del devices_payload
-        router_client_count = sum(
+        client_count = sum(
             endpoint.associated_client_count for endpoint in endpoints.values()
         )
 
-        discovered_endpoint_count = len(endpoints)
+        endpoint_count = len(endpoints)
         return ControlDEndpointInventoryStats(
-            discovered_endpoint_count=discovered_endpoint_count,
-            router_client_count=router_client_count,
-            protected_endpoint_count=discovered_endpoint_count + router_client_count,
+            endpoint_count=endpoint_count,
+            client_count=client_count,
+            protected_device_count=endpoint_count + client_count,
         )
 
-    def _summarize_router_clients(
+    def _summarize_clients_by_parent(
         self, devices_payload: tuple[dict[str, Any], ...]
     ) -> dict[str, int]:
         """Return deduped nested router-client counts keyed by parent device."""
@@ -626,7 +655,7 @@ class EndpointManager(BaseManager):
                 self._normalize_client_identity(name)
             )
 
-        router_client_counts_by_parent: dict[str, int] = {}
+        client_counts_by_parent: dict[str, int] = {}
         seen_client_keys: set[tuple[str, str]] = set()
         for device_payload in devices_payload:
             parent_device_id = self._optional_string(device_payload.get("device_id"))
@@ -644,11 +673,11 @@ class EndpointManager(BaseManager):
                     parent_device_id, set()
                 ):
                     continue
-                router_client_counts_by_parent[parent_device_id] = (
-                    router_client_counts_by_parent.get(parent_device_id, 0) + 1
+                client_counts_by_parent[parent_device_id] = (
+                    client_counts_by_parent.get(parent_device_id, 0) + 1
                 )
 
-        return router_client_counts_by_parent
+        return client_counts_by_parent
 
     def _iter_attached_profiles(
         self, device_payload: dict[str, Any]

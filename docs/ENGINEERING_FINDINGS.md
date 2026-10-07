@@ -290,6 +290,299 @@ Implementation consequence:
 - if the integration exposes endpoint analytics settings later, the user-facing
   values should map to the proven UI semantics `None`, `Some`, and `Full`
 
+### A write is not immediately visible to the reads
+
+Observed while auditing the LLM tool surface against a live account:
+
+- `create_endpoint` returned `applied` with the new name
+- an immediately following `get_inventory` did **not** list it
+- the same read scoped by `endpoint_name` failed with *"did not resolve to
+  exactly one endpoint"*
+- a `delete_endpoint` by that name moments later succeeded
+
+Working interpretation:
+
+- writes invalidate refresh groups that are re-polled on their own cycles, so a
+  newly created object is absent from derived reads until the group catches up
+- name resolution runs against the held inventory, so it inherits the same lag;
+  resolving by **id** does not, because the id is returned by the write itself
+- this is a propagation delay, not a failed write, and the two must not be
+  reported as each other
+
+Implementation consequence:
+
+- a create returning `applied` is the authoritative statement that the object
+  exists; absence from a following read is not evidence to the contrary
+- the tool descriptions state the lag where a create is involved, and the system
+  model already steers callers to ids
+
+### A profile carries service rows, and the catalog carries availability
+
+Refines the service catalog findings above with the write-side consequence.
+
+- `GET /services/categories/all` is the **availability** set: every service the
+  vendor offers, over a thousand rows
+- `GET /profiles/{id}/services` is the **configured** set: the rows that profile
+  actually carries
+- both surfaces report a mode, so a service with no row and a service explicitly
+  set to `off` are indistinguishable by mode alone
+- `get_catalog`, `catalog_type: 'services'` lists availability and now also
+  reports `configured` per row, which is the only thing separating the two
+
+The write-side consequence is why this matters:
+
+- `set_service_state` on a service with **no profile row** is how a service gets
+  configured; it creates the row
+- that call therefore has no previous mode, and the honest reverse is
+  `delete_service` (removing the row), not a mode reversal
+- before `configured` existed, such a call reported its prior state as
+  unreadable — the registry lookup simply found no row — and offered no undo, so
+  a fully reversible change was reported as irreversible
+
+Implementation consequence:
+
+- `before` on an unconfigured service is `{"targets": [], "configured": false}`,
+  and `undo` names `delete_service`
+- `configured` is reported on catalog rows so a caller can tell in advance
+  whether a set will create a row or change one that exists
+
+### A positional `before` list can attribute state to the wrong target
+
+Found by auditing the LLM tools against a live account, with the caller's target
+order deliberately reversed from the registry's.
+
+The row-taking write tools reported `before` as a bare list of values ordered by
+**registry iteration**, while `target` echoed the **caller's** order:
+
+```
+call:   filter_id = ["x-hagezi-pro", "x-hagezi-light"]     # caller order
+
+target: {"filter_id": ["x-hagezi-pro", "x-hagezi-light"]}   # caller order
+before: {"enabled": [true, false]}                          # registry order
+undo:   [light -> enabled=True, pro -> enabled=False]       # registry order
+```
+
+`x-hagezi-pro` was `false`, but `before[0] = true` presented **light's** value in
+pro's position, and nothing in the payload named which object each value belonged
+to. The `undo` entries prove the true assignment: `undo[1]` restores `pro` to
+`enabled=False`.
+
+Working interpretation:
+
+- a positional list is only safe when its order is pinned to the caller's, and
+  nothing here pins it
+- `set_endpoint_profile` already reported its state as named rows
+  (`{"endpoints": [{"device_id": ..., "profile_id": ...}]}`), so the surface was
+  internally inconsistent as well as ambiguous
+- the same defect applied to `set_rule_state`, which returned **two** parallel
+  arrays (`enabled` and `mode`) that had to be zipped in the same order
+
+Implementation consequence:
+
+- `before` is `{"targets": [{<id_field>: ..., "profile_id": ..., <state>}]}`, one
+  named row per addressed object, for every row-taking write tool
+- `after` stays flat: it is the state the action *requested*, which is identical
+  for every addressed target, so repeating it per row would add nothing
+- nothing is matched by position any more, so a caller cannot misattribute a
+  state even when its own order differs from the registry's
+- `delete_client` is the deliberate exception, reporting a summary
+  (`{client_count, clients, delete_history}`) because the question there is how
+  much history goes with the deletion, not what each value was
+
+**The ordering was not even consistent.** Profile targets came back in the
+**caller's** order, because `_resolve_profile_pks` preserves the argument order,
+while filter, service, option, and rule targets came back in **registry** order.
+So a caller had no single rule it could apply to align values with targets —
+some tools happened to line up and others did not. Naming each row is what
+removes the question rather than answering it per tool.
+
+Two further gaps surfaced when the fix was audited against the whole surface
+rather than only the tools that shared the row-resolution helper:
+
+- **`rename_endpoint`** returned `{"name": [...]}` with no endpoint ids, and six
+  more tools (`set_client_alias`, `clear_client_alias`, `enable_profile`,
+  `disable_profile`, `set_default_rule_state`, `set_endpoint_description`)
+  returned bare lists the same way. The first pass missed them because they do
+  not use `_resolve_row_pks`; the audit had to cover the whole surface, not the
+  helper.
+- **`after` had two shapes depending on `status`**: the `already_in_state` branch
+  set `after=before`, so a no-op reported the named `before` while an applied
+  write reported the flat `_after`. A caller could not read `after` uniformly.
+  It is now `_after` on every status.
+
+### The analytics logging level is readable, and was not being read
+
+`GET /devices` returns `stats` on **every** endpoint row — confirmed against the
+live account, values `0` and `2` present — but the normalizer never read it:
+
+- `stats` was written (`PUT /devices/{id}` `{"stats": 0|1|2}`) and documented as
+  the read field, yet `ControlDEndpointSummary` had no field for it
+- the consequence was a write with **no way to name its own previous value**:
+  `set_endpoint_logging` reported `before: null`, `undo: null`, and warned that
+  the state could not be read, while its own description said the change was
+  reversible
+- the distinction from the service case: there the value existed in the registry
+  and resolution failed; here it was never parsed at all
+
+Confirmed live on 2026-10-07 against the development account:
+
+- 20 device rows returned, every one carrying `stats`, with values `0` and `2`
+  present
+- the field list on a device row is `PK`, `client_count`, `device_id`, `icon`,
+  `ip_count`, `last_activity`, `learn_ip`, `name`, `parent_device`, `profile`,
+  `profile2`, `resolvers`, `stats`, `status`, `ts`, `user`
+
+Working interpretation:
+
+- `stats` is the endpoint's analytics **logging level**, not a statistic: `0`
+  None, `1` Some, `2` Full. The write path already used that mapping; only the
+  read direction was missing
+- an unrecognised value returns None rather than guessing a mode, because a wrong
+  level reported as fact is worse than a reported absence
+
+Implementation consequence:
+
+- `endpoint_analytics_mode_from_stats_value` is the reverse of the existing
+  `endpoint_analytics_stats_value_from_mode`, so both directions now exist
+- `ControlDEndpointSummary.analytics_logging` carries it, exposed on
+  `get_inventory` endpoint rows at the **top level** rather than inside `advanced`
+  — that block is documented read-only, and this is the one endpoint setting a
+  tool here can change
+- `set_endpoint_logging` reads it for `before` and emits a real `undo`, in the
+  display-label vocabulary so `before` and `after` agree
+
+**Other fields on the same row are still unread**, and were not needed for this
+fix: `client_count`, `ip_count`, `status`, `ts`, `user`. `status` in particular is
+the four-state field this document already documents but the integration derives
+endpoint state from `last_activity` instead, so the Soft/Hard Disabled
+distinction remains unexposed.
+
+### A destructive tool reported nothing about what it destroyed
+
+`delete_endpoint` returned `before: null` while its own description asks for the
+blast radius to be stated before running it:
+
+> Deleting a router endpoint is the extreme case: it enforces a profile for a
+> whole network segment, so every device behind it loses that policy at once.
+
+With `before: null`, `target` held only a bare id, so the model could say *"I
+deleted 9dvgob4wau"* but not *"I deleted a router segment enforcing X with N
+clients behind it"* — the one thing the description asks to convey.
+
+The data was already in the registry: `rename_endpoint` and
+`set_endpoint_description` both read `registry.endpoints.get(device_id)`. The
+asymmetry was that `delete_client` reported a full record of its targets and
+`delete_endpoint` reported none.
+
+Implementation consequence:
+
+- `delete_endpoint` reads the endpoint before deleting it and reports its `name`,
+  `enforced_profiles`, and `associated_client_count`
+- `delete_rule` does the same for a rule: its own id, action, enabled state,
+  comment, and folder
+- neither is the target's prior *state* — there is none to restore, and `undo`
+  remains `null` — but what it *was*, which is the information that cannot be
+  recovered afterwards
+
+The two rule tools needed the same rule-row resolution — `set_rule_state` for its
+pre-check and undo, `delete_rule` to describe what it removes — so it moved into
+a shared mixin rather than being duplicated.
+
+**The registry does not hold rules for most profiles**, which the first fix got
+wrong. Custom-rule exposure is opt-in, and 7 of 8 profiles on this account report
+`custom_rules=False` with `rules=0`. Reading only the registry therefore reports
+nothing in the common case: a live `delete_rule` returned `before: null` after the
+fix was in place, because the rule existed upstream but not in the registry.
+
+The row has to be fetched. An earlier version gave the preload to
+`set_rule_state` alone, on the reasoning that "a delete must not depend on a
+network call succeeding first". That reasoning was untested and wrong in the way
+that mattered: the preload **enriches** `before`, so making it tolerant of failure
+gives both properties at once, and splitting it gave up correctness for a risk
+that a `try` removes.
+
+Implementation consequence:
+
+- `_async_preload` catches `ControlDApiError`, logs at debug, and returns without
+  rows. A fetch failure leaves the registry's answer standing and the call
+  proceeds, so the write is never gated by the fetch
+- both rule tools use the same mixin: one resolution, one tolerant preload
+- a rule the registry holds is still answered from there and costs no request
+
+**A mixin stub silently replaced the method it was standing in for.** Extracting
+that mixin broke `set_rule_state` *and* `delete_rule` in production, and every
+test still passed.
+
+The mixin declared `_registry` as a `NotImplementedError` stub, purely so the
+class could be read standalone and satisfy the type checker. But a mixin listed
+*first* in the bases wins on the MRO, so the stub shadowed the real
+implementation on the tool base:
+
+```
+DeleteRuleTool.__mro__ = DeleteRuleTool, _RuleRowMixin, _ControlDControlTool, …
+DeleteRuleTool._registry -> _RuleRowMixin._registry   # the stub, not the base
+```
+
+`_before` is called outside the dispatch's try-clause, so the `NotImplementedError`
+escaped as an empty MCP response with **no traceback in the log** — the tool
+simply did nothing and reported nothing.
+
+Why the tests missed it: the pre-check tests point a tool's registry read at a
+fixture with `tool._registry = lambda hass: registry`, an **instance** attribute.
+Instance attributes shadow the class either way, so the stub was never reached in
+any test while being the only thing reached in production.
+
+Implementation consequence:
+
+- declare delegated members in a mixin as **annotations**, never as stub methods:
+  `_registry: Any`, not `def _registry(...): raise NotImplementedError`
+- `test_no_tool_class_shadows_a_base_method_with_a_stub` asserts every tool class
+  resolves `_registry` to the base implementation at **class** level, which is
+  what an instance patch cannot mask
+- the general lesson beyond this one method: when a test patches an attribute on
+  an instance, it stops testing how the class resolves that attribute, so a
+  structural guard has to check the class
+
+### A client-side tool-name limit can look like a missing tool
+
+Found while testing the MCP surface live: 23 of 24 tools answered, and one
+consistently returned *"the tool does not exist"*.
+
+The cause was client-side, not ours. A client presenting an MCP tool to its model
+commonly renames it to `mcp_<server>_<tool name>`, which shares a **64-character**
+budget with the server name the user chose. Measured:
+
+| Tool | Client-prefixed length | Reachable |
+| --- | --- | --- |
+| `set_endpoint_analytics_logging` | 66 | no |
+| `set_endpoint_description` | 60 | yes |
+| every other tool | ≤ 58 | yes |
+
+Working interpretation:
+
+- `Home Assistant`'s `mcp_server` passes the tool name through untouched — it
+  neither prefixes nor limits — so nothing in the integration enforces this and
+  nothing in it can observe it
+- the prefix belongs to the client and embeds the **server** name, which is the
+  user's, so the budget is not ours to spend
+- a rejected name is dropped from the list rather than truncated, so the symptom
+  is an absent tool with no explanation
+
+Decision: **no integration change.** The tool name mirrors its service name, which
+is the stated convention here, and other clients are unaffected. Renaming a
+production tool to fit one client's ceiling would trade a real inconsistency for
+a hypothetical one.
+
+Implementation consequence:
+
+- the name stays `controld_manager__set_endpoint_analytics_logging`, and clients
+  that enforce the ceiling may not list it
+- the mitigation is a shorter **server** name, which is the user's choice
+- recorded because the symptom is actively misleading: "tool does not exist"
+  reads as a registration bug, and it cost several reload cycles to identify
+- worth re-checking whenever a tool name grows, since it is the longest action
+  that fails first
+
 ### Client rows can be deleted, and deletion also purges their query history
 
 This corrects an earlier assumption that client rows were read-only observations
@@ -1212,6 +1505,36 @@ Settled interpretation:
 - `v2/client` is telemetry-side enrichment
 - it is not the authoritative source for endpoint discovery
 - its identifiers are not yet proven to match `/devices` identifiers directly
+
+### `v2/client` stops updating a client that became a standalone endpoint
+
+The analytics client row is **not** a reliable recency source for a client that
+has been promoted to its own endpoint.
+
+Promoting a client to a standalone endpoint moves its traffic attribution to the
+endpoint. Control D then stops updating the analytics row for that client, so its
+`lastActivityTime` freezes on the day of promotion while the endpoint's
+`last_activity` keeps moving.
+
+Measured on this account, which is what settled it:
+
+| Population | Count | Last active |
+| --- | --- | --- |
+| Standalone-endpoint clients | **6 of 6** | 146 to 174 days ago |
+| Regular clients | 191 | up to minutes ago |
+
+Every standalone endpoint was stale and clustered at 2026-04-14/15 or
+2026-05-11/14, the promotion dates, while its endpoint reported activity within
+minutes. `kadens-phone` is a phone in daily use whose client row read
+`2026-04-15` and whose endpoint read the same day.
+
+So `last_active` on a client row is taken from the endpoint whenever the client
+has one, and from the analytics timestamp only when it does not. Reading the
+analytics value unconditionally makes every promoted client, and therefore every
+phone, look dormant — which is exactly the population alias guidance is aimed at.
+
+This also qualifies the "recency and MAC validity" guidance: recency is only
+meaningful once the endpoint join is applied.
 
 Implementation consequence:
 

@@ -27,15 +27,18 @@ It specifies how implementation work must be written, reviewed, and extended so 
 Use repository terminology consistently.
 
 - use `domain` only for the Home Assistant integration domain `controld_manager`
-- use `profile`, `endpoint`, `policy`, `runtime snapshot`, and `registry` for Control D data concepts
+- use `profile`, `endpoint`, `client`, `policy`, `runtime snapshot`, and `registry` for Control D data concepts
 - use `entity` only for Home Assistant platform objects
 - use `device` only for Home Assistant device registry objects
 - use `unique ID` for the stable registry identifier and `entity_id` for the Home Assistant registry string
+- use `protected device` for the total an endpoint and its clients together cover, which is what the count sensors report
 
 Critical rules:
 
 - never call a Control D profile, endpoint, policy, or API object an entity
-- never call a physical client a device inside integration code or docs; use `endpoint`
+- never call a client an endpoint, or an endpoint a client. They are different objects, and being under an endpoint is what makes something a client
+- a client that is **explicitly assigned a profile** becomes its own endpoint as well, so one device may legitimately be both at once. The client identity is for the alias tools; everything else is read and changed through the endpoint
+- never call a physical client a Home Assistant device; `device` means a Home Assistant device registry object only
 - never use `domain` inside the integration to describe DNS domains or list items
 
 ## Constants taxonomy
@@ -218,7 +221,7 @@ Scope contract:
 
 Examples:
 
-- account entities: `Account Profile Count`, `Account Endpoint Count`
+- account entities: `Account Profile Count`, `Account Protected Devices`
 - profile switch entities: `Options / Disable`, `Filters / Games`, `Services / Hosting / Alibaba Cloud`
 - profile select entities: `Filters / Ads & Trackers Mode`
 - profile rule entities: `Rules / Domain / example.com`

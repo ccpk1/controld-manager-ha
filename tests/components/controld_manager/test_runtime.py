@@ -283,9 +283,9 @@ def test_integration_manager_builds_normalized_registry() -> None:
     assert registry.endpoints["device-1"].associated_client_count == 0
     assert registry.endpoints["device-1"].parent_device_id == "router-1"
     assert registry.endpoints["device-1"].parent_client_id is None
-    assert registry.endpoint_inventory.discovered_endpoint_count == 2
-    assert registry.endpoint_inventory.router_client_count == 1
-    assert registry.endpoint_inventory.protected_endpoint_count == 3
+    assert registry.endpoint_inventory.endpoint_count == 2
+    assert registry.endpoint_inventory.client_count == 1
+    assert registry.endpoint_inventory.protected_device_count == 3
 
 
 def test_integration_manager_reads_org_stats_endpoint_fallback() -> None:
@@ -361,8 +361,114 @@ def test_integration_manager_builds_client_alias_targets() -> None:
         client_hostname="KadensSpyPhone",
         client_ip_address="192.168.202.244",
         client_mac_address="50:eb:71:b6:78:3a",
+        # This client is a standalone endpoint, so its last-active comes from
+        # the endpoint rather than from the analytics row.
+        client_last_active=datetime.fromtimestamp(1775067384, UTC),
     )
     assert registry.endpoints["device-1"].parent_client_id == "2476a6ca95d7"
+
+
+def test_a_standalone_endpoint_client_uses_the_endpoint_last_active() -> None:
+    """A promoted client must not report the analytics timestamp.
+
+    Control D attributes a promoted client's traffic to its endpoint and stops
+    updating the analytics client row, so that timestamp freezes on the day of
+    promotion. On the account this was diagnosed against, all six standalone
+    endpoints reported 146 to 174 days ago while their endpoints reported
+    activity minutes earlier, for phones in daily use.
+    """
+    inventory = _client_alias_inventory()
+    stale = datetime(2026, 4, 15, 1, 12, 59, tzinfo=UTC)
+    inventory = ControlDInventoryPayload(
+        user=inventory.user,
+        profiles=inventory.profiles,
+        devices=inventory.devices,
+        analytics_clients_by_endpoint={
+            "router-1": {
+                "clients": {
+                    "2476a6ca95d7": {
+                        "alias": "Chads-Phone",
+                        "host": "KadensSpyPhone",
+                        # Deliberately stale, as the vendor reports it.
+                        "lastActivityTime": stale.isoformat(),
+                    }
+                }
+            }
+        },
+    )
+
+    device_manager = DeviceManager()
+    entity_manager = EntityManager()
+    integration_manager = IntegrationManager(
+        profile_manager=ProfileManager(),
+        endpoint_manager=EndpointManager(),
+        device_manager=device_manager,
+        entity_manager=entity_manager,
+    )
+
+    with (
+        patch.object(device_manager, "sync_registry"),
+        patch.object(entity_manager, "sync_registry"),
+    ):
+        integration_manager.attach_runtime(
+            cast(Any, SimpleNamespace(options=ControlDOptions()))
+        )
+        registry = integration_manager.build_registry(inventory)
+
+    target = registry.client_alias_targets[
+        build_client_alias_target_key("router-1", "2476a6ca95d7")
+    ]
+
+    # The endpoint wins, and the stale analytics value is not what is reported.
+    assert target.client_last_active == datetime.fromtimestamp(1775067384, UTC)
+    assert target.client_last_active != stale
+
+
+def test_an_analytics_only_client_still_uses_the_analytics_last_active() -> None:
+    """A client with no endpoint of its own has only the analytics source."""
+    inventory = _analytics_only_client_alias_inventory()
+    seen = datetime(2026, 5, 14, 20, 29, 24, tzinfo=UTC)
+    inventory = ControlDInventoryPayload(
+        user=inventory.user,
+        profiles=inventory.profiles,
+        devices=inventory.devices,
+        analytics_clients_by_endpoint={
+            "router-1": {
+                "clients": {
+                    "2476a6ca95d7": {
+                        "alias": "Chads-Phone",
+                        "host": "KadensSpyPhone",
+                        "lastActivityTime": seen.isoformat(),
+                    }
+                }
+            }
+        },
+    )
+
+    device_manager = DeviceManager()
+    entity_manager = EntityManager()
+    integration_manager = IntegrationManager(
+        profile_manager=ProfileManager(),
+        endpoint_manager=EndpointManager(),
+        device_manager=device_manager,
+        entity_manager=entity_manager,
+    )
+
+    with (
+        patch.object(device_manager, "sync_registry"),
+        patch.object(entity_manager, "sync_registry"),
+    ):
+        integration_manager.attach_runtime(
+            cast(Any, SimpleNamespace(options=ControlDOptions()))
+        )
+        registry = integration_manager.build_registry(inventory)
+
+    target = registry.client_alias_targets[
+        build_client_alias_target_key("router-1", "2476a6ca95d7")
+    ]
+
+    assert target.endpoint_device_id is None
+    assert target.client_last_active == seen
 
 
 def test_integration_manager_builds_analytics_only_client_alias_targets() -> None:
