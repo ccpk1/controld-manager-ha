@@ -1374,6 +1374,11 @@ and how to report what is not exposed. Assist gets this in its system prompt
 automatically; an MCP client receives it from that tool, which is why the
 tool is worth calling once before asking anything substantive.
 
+Every tool description also carries the context that applies to it, because
+descriptions are the one channel all clients read. An assistant therefore knows
+what a profile, endpoint, and client are before its first question, rather than
+learning them from your corrections.
+
 Treat Read and control and Full as consequential tiers: the assistant can change
 real policy, and a mistake affects every device on the affected profile. Prefer
 timed changes and leave the tier at Summary only or Off unless you specifically
