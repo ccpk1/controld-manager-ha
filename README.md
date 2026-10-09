@@ -13,11 +13,15 @@ Control D Manager is a standalone Home Assistant custom integration for managing
 
 ## 💡 Why Control D?
 
-Control D is especially compelling in Home Assistant because its **profile model translates cleanly into automation**. **Filters, service overrides, custom rules, default-rule behavior, and endpoint activity** all map naturally to scripts, dashboards, and conditions in a way that many DNS products simply do not expose.
+Control D's profile model translates cleanly into automation. Filters, service overrides,
+custom rules, default-rule behavior, and endpoint activity all map naturally to scripts,
+dashboards, and conditions in a way most DNS products simply do not expose. If you already
+run `ctrld` on a firewall or router, this makes segmenting policy by VLAN, client, or
+profile far easier than brittle scripts and manual workarounds.
 
-That matters because a good Home Assistant integration should do more than mirror a web dashboard. It should **make Control D feel programmable**. This project leans into that by combining a selective entity model with a broader native service layer, so you can build polished dashboards when you want them and keep routine policy changes in the background when you do not.
-
-Control D is also **unusually strong as a homelab foundation**. If you already use `ctrld` on a firewall or router, Control D makes it much easier to segment policy by VLAN, client, or profile without resorting to brittle scripts and manual workarounds. That broader ecosystem is a big part of why this integration exists: the service is already flexible enough to deserve a Home Assistant layer that can actually keep up with it.
+The aim is an integration that does more than mirror the Control D dashboard: one that
+makes Control D feel programmable, and lets you keep routine policy changes in the
+background when you do not want to see them.
 
 ## 📷 Screenshots
 
@@ -40,7 +44,6 @@ Control D is also **unusually strong as a homelab foundation**. If you already u
 - 🏗️ [Development and architecture docs](#development-and-architecture-docs)
 - 🤝 [Community and contribution](#community-and-contribution)
 - 🛡️ [Security and privacy notes](#security-and-privacy-notes)
-- 🔒 [Security and support posture](#security-and-support-posture)
 - ⚠️ [Disclaimer and liability](#disclaimer-and-liability)
 - 📄 [License](#license)
 
@@ -61,66 +64,47 @@ The repository tracks this work in `custom_components/controld_manager/quality_s
 
 Control D Manager goes beyond a basic status integration. It gives Home Assistant a practical operating surface for day-to-day DNS policy control.
 
-### Highlights
+### At-a-glance capabilities
 
-- Zero entity bloat by default: the integration starts with a compact core surface, then lets you opt into the higher-cardinality Control D objects you actually want exposed.
-- Goldilocks entity expansion: Control D can surface thousands of possible filters, services, and options, but Home Assistant only creates the profile surfaces you deliberately enable, with one selector-driven service model that can follow live upstream rows or expose specific categories.
-- Native profile operations: disable profiles, change service modes, adjust filters, modify options, and work with custom rules directly from Home Assistant.
-- Endpoint activity visibility: expose per-endpoint activity entities to see when clients were last active on Control D and which profile currently owns them.
-- Automation-ready service layer: the integration is built for scripts and automations as much as dashboards, including temporary policy changes and copyable catalog discovery.
-- AI assistant tool surface: expose Control D to any Home Assistant LLM API and to MCP clients, tiered from read-only reporting up to a gated destructive set, so you can ask an assistant why something was blocked instead of clicking through a dashboard.
-- Partial Pi-hole dashboard compatibility: reuse familiar DNS dashboard cards for summary analytics without pretending Control D is a full Pi-hole clone.
+| Capability | What it gives you |
+| --- | --- |
+| Profile devices | One Home Assistant device per Control D instance and one per managed profile, giving controls, analytics, and endpoint entities a clean home. |
+| Selective exposure | Control D can offer thousands of filters, services, and options. Home Assistant creates only the profile surfaces you deliberately enable, so the registry stays readable. |
+| Filter and service control | Enable or disable filters, and set service modes to Off, Blocked, Bypassed, or Redirected, from entities or services. |
+| Custom rules | Expose selected rule folders, individual custom rules, or the full live rule surface for a profile. |
+| Endpoint status | Per-endpoint activity entities showing when a client was last seen and which profile currently owns it. |
+| Endpoint hygiene | Rename endpoints, set analytics logging levels, and manage client aliases, without turning those high-churn surfaces into entities. |
+| Analytics | Account and profile sensors for total, blocked, blocked-ratio, bypassed, and redirected queries, plus a manual sync button. |
+| Automation-ready services | Every mutation is a service, so automations never depend on a wall of always-on switches. |
+| Pi-hole dashboard compatibility | Summary analytics sensors align with the `custom:pi-hole` card, so familiar DNS dashboards can be reused. |
+| Tamper-detection hooks | Endpoint activity can be cross-referenced with router or firewall visibility to spot likely DNS bypass behavior. |
+| Stateless pausing | Temporarily disable a profile with a duration, and Control D handles the countdown upstream. |
+| AI assistant access | The same surface is available to an AI assistant or MCP client, from read-only reporting up to a gated destructive set. |
 
-### Profile-centric control
+### The entity model
 
-- Create one Home Assistant account device per Control D instance and one device per managed profile.
-- Expose profile disable state, filters, filter modes, service modes, profile options, default-rule behavior, and selected or all-live custom rules as native Home Assistant entities.
-- Keep endpoint activity visible through compact endpoint status entities without creating a device-registry explosion.
-- Use the options flow to choose which profiles and high-cardinality surfaces Home Assistant should expose, including whether a profile should expose all active services, selected service categories, all custom rules, selected custom rules, or no entities for those surfaces.
+One Home Assistant device per Control D instance, and one per managed profile. Endpoints
+stay as entities rather than devices, which keeps the device registry compact while still
+making per-endpoint activity visible.
 
-Home Assistant also remembers entity-registry enable or disable choices after entities are created. Control D Manager handles the normal default-enabled and default-disabled behavior for newly created or removed surfaces, but if you previously changed entity enablement manually you may still need to re-enable or disable some entities after changing options-flow exposure settings.
+Exposure is opt-in. Control D offers thousands of possible filters, services, and options,
+and the integration creates only the profile surfaces you enable. Home Assistant also
+honours entity-registry enable and disable choices after creation, so changing exposure
+later may need a manual re-enable.
 
-That opt-in model matters with Control D because the available surface is enormous. The integration is capable of exposing very large numbers of filters, services, and options as Home Assistant entities, but it does so thoughtfully so your registry stays usable instead of turning into a wall of noise.
+### Services
 
-### Automation-first service layer
+Every mutation is available as a service, so automations do not depend on a wall of
+always-on switches. There are 24 in total: read services that change nothing, and write
+services covering profiles, filters, services, options, rules, endpoints, and client
+aliases. Writes require an administrator, while a call with no user attached, such as a
+service call from an automation, is not blocked.
 
-When a dashboard switch is not the right tool, the integration exposes shared services for direct automation.
+Services can target profiles and endpoints by name or by id, read per-query activity with
+the filter, service, or rule that caused each action, adjust service modes, create or
+expire rules, and discover configured filters, services, options, and rules.
 
-Service surface:
-
-Read services, which are ungated because they change nothing:
-
-- `controld_manager.get_account_overview`
-- `controld_manager.get_inventory`
-- `controld_manager.get_activity_log`
-- `controld_manager.get_catalog`
-- `controld_manager.test_domain`
-
-Write services:
-
-- `controld_manager.disable_profile`
-- `controld_manager.enable_profile`
-- `controld_manager.set_filter_state`
-- `controld_manager.set_service_state`
-- `controld_manager.delete_service`
-- `controld_manager.set_option_state`
-- `controld_manager.set_default_rule_state`
-- `controld_manager.set_rule_state`
-- `controld_manager.create_rule`
-- `controld_manager.delete_rule`
-- `controld_manager.rename_endpoint`
-- `controld_manager.create_endpoint`
-- `controld_manager.delete_endpoint`
-- `controld_manager.set_endpoint_profile`
-- `controld_manager.set_endpoint_description`
-- `controld_manager.set_endpoint_analytics_logging`
-- `controld_manager.set_client_alias`
-- `controld_manager.clear_client_alias`
-- `controld_manager.delete_client`
-
-Every write service is registered as an admin-only action. Automations and scripts are unaffected, because the check applies only to calls that carry a user, but a non-admin user calling one now fails where it previously succeeded. Reads stay available to any user, since they change nothing.
-
-This makes it possible to target profiles and endpoints by name or by identity, read per-query activity with the filter, service, or rule that caused each action, clean up endpoint naming, tune endpoint analytics logging, assign or clear endpoint profiles, apply or clear downstream client aliases for router-segmented clients, create or expire custom rules from automations, adjust service modes in the background, and query copyable catalogs for filters, services, rules, options, or the default rule.
+Parameters, examples, and the full list are in the [user guide](docs/USER_GUIDE.md#services).
 
 ### Analytics and endpoint visibility
 
@@ -134,67 +118,140 @@ This makes it possible to target profiles and endpoints by name or by identity, 
 
 For households and family-control use cases, endpoint visibility is more than a convenience feature. It can act as a practical tamper-detection signal. If a phone or tablet is normally chatty on Control D and suddenly stops showing activity, that is a useful indicator to investigate whether the device has switched away from the expected DNS path. It is not a cryptographic guarantee, but it is a valuable operational hook for catching the real-world ways DNS controls get bypassed.
 
-### Homelab and segmentation value
-
-Control D pairs especially well with environments that already use profile-based network segmentation. If you run `ctrld` at the firewall or router layer, Control D can give you broad visibility across your network while still letting you separate policy by VLAN and by individual client. This integration complements that model by bringing those profile controls and status surfaces into Home Assistant, where they can participate in the same automations and dashboards as the rest of your stack.
-
-### At-a-glance capabilities
-
-| Feature | Description |
-| --- | --- |
-| Profile devices | Dedicated Home Assistant devices for the Control D account and each managed profile, giving rules, controls, analytics, and endpoints a clean home. |
-| Dynamic routing | Change supported service modes such as Off, Blocked, Bypassed, or Redirected from Home Assistant with a selector-driven service surface that can follow live upstream rows or selected categories. |
-| Endpoint hygiene | Rename endpoints, tune endpoint analytics logging, and clean up client aliases from Home Assistant without turning those high-churn surfaces into extra entities. |
-| Custom rule exposure | Opt in to expose selected rule folders, individual custom rules, or the full live rule surface for a profile. |
-| Tamper-detection hooks | Cross-reference endpoint activity with router or firewall visibility to spot likely DNS bypass behavior. |
-| Stateless pausing | Temporarily disable a profile with a duration while Control D handles the upstream countdown. |
-| AI and MCP access | Expose the same policy surface to an LLM assistant and to MCP clients through Home Assistant, tiered from reporting up to a gated destructive set. |
-
 ## 🤖 AI assistant and MCP tool surface
 
-Control D Manager registers its own Home Assistant LLM API, so an assistant can work with your actual Control D configuration instead of guessing at it. Home Assistant exposes any registered LLM API to the built-in Assist pipeline and, through the MCP Server integration, to external MCP clients. You do not need to run or configure a separate server for this.
+Control D Manager registers its own Home Assistant LLM API. Home Assistant serves that
+to its built-in Assist pipeline and, through the MCP Server integration, to any
+MCP-capable client: desktop and editor assistants, chat apps, and custom agents. There
+is no separate server to run, so the same surface is reachable from Assist or from
+whichever AI harness you already trust.
 
-**Requires Home Assistant `2026.10` or newer.** On older versions every other feature works normally and this setting is simply not offered.
+Tools alone would not make this useful. The part that makes it work is the context
+shipped alongside them. Every tool description is composed from a shared model of how
+Control D works, a block of rules that hold across a family of tools, and that tool's own
+specifics, so an assistant knows what a profile, endpoint, and client are, where
+identifiers come from, and how to read the result of a write, before you ask it anything.
 
-### Access tiers
+That context is the difference between an assistant that can call the API and one that
+reasons about your setup correctly.
 
-Exposure is opt-in, and the tier decides which tools exist at all. It is set in the integration options and is independent of the entity exposure settings.
+Access is tiered and only summary level by default, from read-only reporting up to a separate destructive
+set. Every write requires an administrator, selectors are never guessed, and a write
+reports what actually changed, what the previous value was, and the call that reverses it.
+The tier list, what each tier sends, and how to enable it are in the
+[user guide](docs/USER_GUIDE.md#ai-assistants-and-mcp-tools).
 
-| Tier | Tools | What it reaches |
-| --- | --- | --- |
-| Off | 0 | Nothing is registered |
-| Summary only | 1 | Account counts, plus each profile's name and counts |
-| Read only | 5 | Adds endpoints, clients, addresses, and query-level analytics |
-| Read and control | 21 | Adds reversible changes: filters, services, options, rules, profile enable and disable, endpoint naming, profiles, descriptions, and client aliases |
-| Full | 24 | Adds the three destructive deletes, surfaced as their own tool class |
+### In practice
 
-The 24 tools cover reads such as `get_account_overview`, `get_inventory`, `get_activity_log`, `test_domain`, and `get_catalog`, plus writes such as `set_service_state`, `set_rule_state`, `set_endpoint_profile`, and `create_rule`. The full contract, including every field and response shape, is documented in [docs/MCP_TOOL_REFERENCE.md](docs/MCP_TOOL_REFERENCE.md).
+These are real Assist sessions, lightly trimmed, transcribed from Home Assistant Assist
+using a low-cost zero-data-retention model on OpenRouter. Profile names are changed;
+everything else is as it came back. The tier each session needs is noted, so you can see
+what the default buys you before raising it.
 
-### How the assistant learns to use them
+**A status check** — works at Summary only, the default
 
-An assistant needs more than a list of tools: it needs to know what a profile is, why a client is not an endpoint, where identifiers come from, and how to read the result of a write. That context is one canonical piece of text, delivered two ways:
+> **tell me about my control d**
+>
+> Your Control D account protects 293 devices across 18 endpoints using 8 profiles. In
+> the recent analytics window, your network handled 348,140 total queries: 153,741
+> blocked queries, 194,046 bypassed queries, 353 redirected queries. All 8 profiles are
+> currently active and unpaused.
 
-- **Assist** receives it in the system prompt on every turn.
-- **MCP clients** receive it from `get_account_overview`, which returns it alongside the account counts.
+> **Show me the profiles**
+>
+> Your Control D account has 8 profiles:
+>
+> 1. **Default Profile** (293 protected devices, active)
+> 2. **Alex's Phone** (1 protected device, active)
+> 3. **Ben's Phone** (3 protected devices, active)
+> 4. **Developer Testing** (0 protected devices, active)
+> 5. **Jane's Devices** (3 protected devices, active)
+> 6. **Jane's Phone** (2 protected devices, active)
+> 7. **Nora's Devices** (1 protected device, active)
+> 8. **Nora's Phone** (1 protected device, active)
 
-The second path matters because MCP clients are not required to surface anything except tools, and the common ones do not. So the guidance travels inside a tool result rather than relying on the client to display it. Calling that one tool is enough; it is not needed on every request.
+**An investigation** — needs Read only
 
-### What it is good at
+> **Jane's phone wasn't working right this morning**
+>
+> Looking at the activity log for **Jane's Phone** today, it has experienced several
+> blocked queries by the `x-hagezi-light` filter. Some of the domains being blocked
+> include:
+>
+> - `app-measurement.com`
+> - `googleads.g.doubleclick.net`
+> - `api-eu.mixpanel.com`
+> - `app-analytics-services.com`
+> - `incoming.telemetry.mozilla.org`
+>
+> These are standard tracker/analytics blocks, but if an app or service Jane was trying
+> to use relies on one of them, it could cause issues. Would you like me to make an
+> exception or pause protection for Jane's phone?
 
-The reason this exists is troubleshooting. Control D's per-query activity log and ranked breakdowns are high-cardinality telemetry that would be noise in your entity model, so they are exposed on demand instead. Questions this surface is designed to answer:
+> **Give me some time ranges those blocks happened today**
+>
+> Based on the activity log for **Jane's Phone** today, the blocked queries occurred in
+> these time windows (all times in UTC):
+>
+> - **07:06 to 10:56 UTC**: Consistent background telemetry and analytics blocks (such as
+>   `api-eu.mixpanel.com`, `app-measurement.com`, and `googleads.g.doubleclick.net`)
+>   occurring roughly every 30 minutes.
+> - **10:19 to 10:56 UTC**: Additional blocks including telemetry domains
+>   (`incoming.telemetry.mozilla.org`) and app measurement services.
+>
+> If Jane was using her phone around 7:00 AM to 11:00 AM UTC, those background blocks
+> might have affected her apps.
 
-- "Why couldn't the living room TV send images this morning?" — the answer names the filter, service, or rule that blocked it, and when.
-- "Which profile is blocking YouTube, and on which devices?" — resolved across the profiles an endpoint enforces.
-- "Is `example.com` blocked for this device?" — one call, one verdict, without waiting for real traffic.
-- "What is this profile actually configured to do right now?" — filters, services, options, rules, and the default rule with their current state.
+> **tell me more about that blocking service**
+>
+> The blocking service causing those blocks on Jane's phone is **Hagezi's Light
+> blocklist** (tracked in Control D as `x-hagezi-light`).
+>
+> It is a popular, lightweight third-party community blocklist designed to block common
+> online annoyances without being overly aggressive. Specifically, it targets:
+>
+> - **Ad networks and tracking domains** (like Google Ads / `doubleclick.net`)
+> - **App analytics and telemetry** (like Mixpanel and `app-measurement.com`)
+> - **Browser telemetry** (like Mozilla's telemetry)
+>
+> Because it runs at the DNS level through Control D, it prevents Jane's phone from even
+> resolving the addresses for these trackers and analytics servers, stopping them in the
+> background.
 
-### Safety
+> **why is it being applied?**
+>
+> The `x-hagezi-light` filter is being applied because it is enabled within the
+> configuration of the **Jane's Phone** profile (profile ID `733915vbnc48r`).
+>
+> Every profile in Control D can have its own set of built-in and third-party security or
+> blocking filters turned on. In this case, the Hagezi Light blocklist has been activated
+> specifically for Jane's phone profile, so any DNS requests matching that list get
+> blocked automatically.
 
-- **Every write requires an administrator.** A read changes nothing and is available to any user, but a write is rejected for a non-admin user. This applies to the tools and to the underlying services alike.
-- **Reaching the surface may also require an administrator.** The MCP Server integration has its own *Require an administrator account* option that gates the MCP endpoint itself. With it enabled, a non-admin user cannot reach these tools at all, whatever tier is configured.
-- **The destructive tier is separate.** `delete_rule`, `delete_client`, and `delete_endpoint` exist only at the Full tier, and the tools describe the blast radius before acting.
-- **Writes report honestly.** A change returns whether it actually changed anything, what the state was before, and the call that reverses it where one exists.
-- **Selectors are never guessed.** A name that matches nothing, or more than one object, is refused rather than resolved arbitrarily.
+> **What blocks and filters apply to her Chromebook?**
+>
+> Jane's Chromebook is covered under the **Jane's Devices** profile (with the **Default
+> Profile** applied as a secondary/fallback profile).
+>
+> The active filters and protection categories enabled on the **Jane's Devices** profile
+> include: Adult Content, Clickbait, Dating, Drugs, Gambling, Malware, New Domains,
+> Phishing, Torrents & Piracy, and VPN & DNS.
+
+**Acting on it** — the one step that needs Read and control
+
+> **I want to pause the blocking on Ben's phone for 5 minutes**
+>
+> I have paused the "Ben's Phone" profile for 5 minutes.
+>
+> You can reverse this change at any time by running
+> `controld_manager__enable_profile(profile_id='518044mplx72q')`.
+
+Nothing in that sequence was clicked. The assistant resolved a device to the profile that
+owns it, named the filter responsible, described what that filter does, explained why it
+was active on that profile, and compared the protections on a second device — all of that
+without write access. The pause is the only step above Read only, and it is the clearest
+illustration of why this beats a dashboard: the duration is part of the request, so the
+change is timed and self-reversing, and the result hands back the call that cancels it.
 
 ## ❤️ Support the project
 
@@ -213,42 +270,26 @@ If Control D Manager is making your smart home or homelab better, I would genuin
 
 ## 🧩 Supported setup and prerequisites
 
-- Control D account: you need a valid Control D account and a write-capable API token.
-- Home Assistant: requires Home Assistant `2026.3` or newer.
-- Installation method: HACS is recommended, but manual installation is also supported.
+- Control D account: a valid account and a write-capable API token.
+- Home Assistant: `2026.3` or newer. The optional AI assistant surface needs `2026.10`
+  or newer; on older versions every other feature works normally and the setting is not
+  offered.
+- Installation: HACS is recommended, and manual installation is supported.
 - Connectivity: Home Assistant must be able to reach the Control D cloud API.
 
-Why a write-capable token? Because this integration supports real mutation paths, not just read-only reporting. Profile pause, filter changes, service changes, option changes, and rule management all depend on that permission level.
-
-**Upgrading from 1.x:** every service that changes Control D configuration now requires an administrator. Automations and scripts are unaffected, because the check applies only to calls that carry a user, but a non-admin user calling a write service will now be rejected where it previously succeeded. The read services are unchanged and remain available to any user.
-
-The optional AI assistant (MCP) tool surface requires Home Assistant `2026.10` or newer. On older versions every other feature works normally and the setting is simply not offered.
+A write-capable token is required because the integration supports real mutation paths,
+not just read-only reporting. Profile pause, filter changes, service changes, option
+changes, and rule management all depend on that permission level.
 
 ## ⚡ Quick installation
 
-### One-click HACS install
-
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ccpk1&repository=controld-manager-ha&category=integration)
 
-### Manual HACS setup
+Create a Control D API key with write access, then restart Home Assistant and add the
+integration from **Settings → Devices & services**.
 
-1. Ensure HACS is installed.
-2. In Home Assistant, open HACS -> Integrations -> Custom repositories.
-3. Add `https://github.com/ccpk1/controld-manager-ha` as an Integration repository.
-4. Search for `Control D Manager`, install it, and restart Home Assistant.
-5. Go to Settings -> Devices & Services -> Add Integration.
-6. Select `Control D Manager` and complete the API-token flow.
-
-### Manual installation
-
-1. Download this repository.
-2. Copy `custom_components/controld_manager` into your Home Assistant `custom_components/` directory.
-3. Restart Home Assistant.
-4. Add the integration from Settings -> Devices & Services.
-
-### Before you start the config flow
-
-Create a Control D API key with write access. The integration uses that token for both inventory refresh and supported policy mutations.
+Step-by-step instructions for HACS and for manual installation are in the
+[user guide](docs/USER_GUIDE.md#installation).
 
 ## 📖 User guide
 
@@ -314,20 +355,27 @@ Repository layout:
 
 ## 🛡️ Security and privacy notes
 
-Bridging DNS policy control into Home Assistant is powerful, and that power deserves a clear security posture.
+Bridging DNS policy control into Home Assistant is powerful, and that power deserves a
+clear security posture.
 
-- Unofficial project: this repository is an independent community project and is not affiliated with, endorsed by, or supported by Control D.
-- Sensitive capability: the integration can modify Control D policy, so your Home Assistant security posture matters.
-- Redacted diagnostics: diagnostics are designed to remain useful without exposing sensitive data directly.
-- Cloud-backed integration: this is a `cloud_polling` integration, not a local Control D control plane.
+- Unofficial project: this repository is an independent community project, not
+  affiliated with, endorsed by, or supported by Control D. It is not an official Control D
+  support channel.
+- Sensitive capability: the integration can modify Control D policy, so your Home
+  Assistant security posture matters. If your instance is exposed or compromised, DNS
+  policy changes could be triggered through it. Protect Home Assistant accordingly with
+  sound account, remote-access, and permission practices.
+- Redacted diagnostics: diagnostics are designed to stay useful without exposing sensitive
+  data directly.
+- AI assistant data sharing: the default summary tier sends counts and profile names.
+  Read only and above also send endpoint names and MAC addresses, client names and IP
+  addresses, and activity-log domains to whichever model you use. Credentials, API tokens,
+  and passwords are never sent.
+- Cloud-backed integration: this is a `cloud_polling` integration, not a local Control D
+  control plane.
 
-If your Home Assistant instance is exposed or compromised, DNS policy changes could be triggered through this integration. Protect Home Assistant accordingly with sound account, remote-access, and permission practices.
-
-## 🔒 Security and support posture
-
-- Vulnerability reporting guidance lives in [SECURITY.md](SECURITY.md)
-- Support expectations and contact posture live in [SUPPORT.md](SUPPORT.md)
-- This repository should not be treated as an official Control D support channel
+Vulnerability reporting guidance lives in [SECURITY.md](SECURITY.md), and support
+expectations live in [SUPPORT.md](SUPPORT.md).
 
 ## ⚠️ Disclaimer and liability
 
