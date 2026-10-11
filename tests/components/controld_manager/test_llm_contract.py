@@ -533,19 +533,26 @@ async def test_a_missing_required_argument_is_a_clean_error(
     assert not isinstance(err.value, KeyError)
 
 
+def _is_probatio_validator(schema: object) -> bool:
+    """Whether the validator derives from a probatio class."""
+    return any(
+        klass.__module__.startswith("probatio") for klass in type(schema).__mro__
+    )
+
+
 async def test_every_tool_declares_a_probatio_schema(hass: HomeAssistant) -> None:
     """Tool schemas must be probatio validators, not voluptuous ones.
 
     `llm.Tool.parameters` is annotated `probatio.Schema`, and probatio replaced
-    voluptuous as the validation engine in Core 2026.10. Importing voluptuous
-    still resolves at runtime because HA aliases it to probatio in `sys.modules`,
-    so a wrong import is invisible until something type-checks it. This asserts
-    the validator's own module rather than relying on that alias.
+    voluptuous as the validation engine in Core 2026.10. A stray voluptuous
+    import still resolves at runtime, so it is invisible until something
+    type-checks it. This asserts the validator comes from probatio instead.
 
-    A tool needing a cross-field rule composes `probatio.All(Schema(...), rule)`,
-    which is not nominally a `Schema`, so requiring exactly that type would fail
-    a correct tool. What matters is the origin, and that is also the thing the
-    alias can hide.
+    A tool needing a cross-field rule subclasses `probatio.Schema` (see
+    `_EndpointSelectorSchema`), so the concrete type is defined in this
+    integration even though it is a probatio validator. The probatio base in its
+    MRO carries the origin, so checking the MRO accepts that subclass and still
+    rejects a validator built from voluptuous.
     """
     tools = await _tools(hass, LLM_TOOL_MODE_FULL)
     assert tools
@@ -553,9 +560,26 @@ async def test_every_tool_declares_a_probatio_schema(hass: HomeAssistant) -> Non
     wrong = {
         tool.name: type(tool.parameters).__module__
         for tool in tools
-        if not type(tool.parameters).__module__.startswith("probatio")
+        if not _is_probatio_validator(tool.parameters)
     }
     assert wrong == {}, f"tools not using a probatio validator: {wrong}"
+
+
+async def test_every_tool_parameters_expose_a_field_schema(
+    hass: HomeAssistant,
+) -> None:
+    """`parameters.schema` must exist on every tool, whatever its shape.
+
+    The Google Generative AI conversation agent reads `tool.parameters.schema`
+    before it converts the schema, and the endpoint selector tools lost that
+    attribute while they composed through `probatio.All`, failing every
+    conversation with an HTTP 500 before the model was called.
+    """
+    tools = await _tools(hass, LLM_TOOL_MODE_FULL)
+    assert tools
+
+    missing = [tool.name for tool in tools if not hasattr(tool.parameters, "schema")]
+    assert missing == [], f"tools whose parameters lack `.schema`: {missing}"
 
 
 async def test_tool_schemas_still_convert_for_an_mcp_client(
