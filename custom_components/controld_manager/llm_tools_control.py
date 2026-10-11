@@ -197,20 +197,27 @@ _ENDPOINT_SELECTOR_REQUIRED: Final = probatio.AtLeastOne(
 )
 
 
-def _endpoint_selector_schema(fields: dict[Any, Any]) -> probatio.Schema:
-    """Return a schema that requires an endpoint id or an endpoint name.
+class _EndpointSelectorSchema(probatio.Schema):
+    """Field schema that also requires an endpoint id or an endpoint name.
 
-    ``AtLeastOne`` is a dict-level rule that has to run after the field schema,
-    but ``Schema``'s only second argument is ``extra``, so the two compose
-    through ``All``. ``Tool.parameters`` is annotated ``probatio.Schema`` and an
-    ``All`` combinator is not nominally one, so the result is cast: it validates
-    and converts through ``probatio.to_openapi`` exactly as a ``Schema`` does,
-    which is what the MCP server and the LLM providers actually call.
+    ``AtLeastOne`` is a dict-level rule that has to run after the field schema.
+    ``Schema``'s only second argument is ``extra``, so a plain ``Schema`` cannot
+    carry the rule, and composing through ``All`` would drop the ``.schema``
+    attribute that some providers read off ``Tool.parameters`` before calling
+    ``probatio.to_openapi``. Subclassing keeps both: ``to_openapi`` unwraps a
+    ``Schema`` subclass exactly like a ``Schema``, so the rendered schema is
+    unchanged.
     """
-    return cast(
-        probatio.Schema,
-        probatio.All(probatio.Schema(fields), _ENDPOINT_SELECTOR_REQUIRED),
-    )
+
+    @override
+    def __call__(self, data: Any, **kwargs: Any) -> Any:
+        """Validate the fields, then the dict-level selector rule."""
+        return _ENDPOINT_SELECTOR_REQUIRED(super().__call__(data, **kwargs))
+
+
+def _endpoint_selector_schema(fields: dict[Any, Any]) -> probatio.Schema:
+    """Return a schema that requires an endpoint id or an endpoint name."""
+    return _EndpointSelectorSchema(fields)
 
 
 _ENDPOINT_NAME_SELECTOR_DESCRIPTION: Final = (
