@@ -224,6 +224,7 @@ def test_prompt_covers_the_shipped_surface() -> None:
         "profile",
         "endpoint",
         "client",
+        "default rule",
         "already_in_state",
         "undo",
         "33 day",
@@ -238,6 +239,38 @@ def test_prompt_covers_the_shipped_surface() -> None:
     }
     missing = {term for term in required if term.lower() not in PROMPT.lower()}
     assert missing == set(), f"prompt is missing: {sorted(missing)}"
+
+
+def test_prompt_explains_the_default_rule_sets_the_profile_posture() -> None:
+    """The default rule has to read as the profile's top-level control.
+
+    It decides the query nothing else matched, so it changes what every other
+    setting means: under `Bypassing` a query passes unless something blocks it,
+    and under `Blocking` it is blocked unless something allows it. A model that
+    treats the default rule as one setting among several will invert its answer
+    about why something was or was not blocked.
+    """
+    lowered = PROMPT.lower()
+    assert "default rule" in lowered
+    assert "most important" in lowered
+
+    # Both postures, each stated as how the unmatched query is handled.
+    assert "passes unless" in lowered
+    assert "blocked unless" in lowered
+
+    # The wider control has to be named, or the posture reads as the ceiling.
+    assert "disabling the profile reaches further" in lowered
+
+
+def test_prompt_names_no_literal_escape_sequences() -> None:
+    """A leaked escape reaches the model as text and corrupts the prompt.
+
+    The model string is assembled from concatenated literals, so a doubled
+    backslash in one fragment ships a literal `\\n` or `\\u2014` to the model
+    instead of the character it was meant to be.
+    """
+    for leaked in ("\\n", "\\u", '\\"'):
+        assert leaked not in PROMPT, f"prompt contains a literal {leaked!r}"
 
 
 def test_prompt_explains_the_outcomes_are_not_degrees_of_one_thing() -> None:
@@ -257,6 +290,48 @@ def test_prompt_explains_the_outcomes_are_not_degrees_of_one_thing() -> None:
     )
     assert "allowed" in bypassed_line.lower()
     assert "routine" in bypassed_line.lower()
+
+
+def test_prompt_bridges_disable_to_the_paused_field() -> None:
+    """The model says `disabled`; the overview returns `paused`.
+
+    `get_account_overview` reports the state as `paused`, while the vocabulary,
+    the entity naming, and the vendor's own interface all use `disable`. Without
+    the field named, an agent reading `paused: true` has to guess that it is the
+    disabled profile the model describes, and the profile-pause question in #21
+    stays unanswered.
+    """
+    lowered = PROMPT.lower()
+    assert "paused" in lowered
+    assert "`paused`" in PROMPT
+    assert "get_account_overview" in PROMPT
+    assert "disable_profile" in PROMPT
+    assert "enable_profile" in PROMPT
+
+    # A disable is time-bound, so the model must not let an agent describe one
+    # as permanent.
+    assert "always temporary" in lowered
+    assert "never permanent" in lowered
+    assert "re-enables itself" in lowered
+
+
+def test_prompt_explains_two_profiles_are_merged_not_ordered() -> None:
+    """Two enforced profiles pool their rules rather than applying in turn.
+
+    The merge is what makes a shared baseline plus a device-specific policy
+    work, and it is why "which profile did this?" can have two answers. A model
+    that assumes an order will name one profile and miss the other.
+    """
+    lowered = PROMPT.lower()
+    assert "merged before matching" in lowered
+    assert "applied in order" in lowered
+    # Each profile keeps its own posture, so the merge is not a default-rule
+    # override.
+    assert "each keeps its own default rule" in lowered
+    # The reporting consequence has to be stated, not just the mechanism.
+    assert "name every enforced profile" in lowered
+    # A client inherits both, since it follows what its endpoint enforces.
+    assert "follows the profiles its endpoint enforces" in lowered
 
 
 def test_prompt_does_not_describe_removed_tools() -> None:
