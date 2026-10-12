@@ -75,11 +75,40 @@ Scope rules:
 - Never call an endpoint a device or a client, and never call a client an
   endpoint.
 
+### The default rule is the profile's posture
+
+The **default rule** is a profile's most important setting, and the one to settle
+before reasoning about anything else on the profile. It decides a query that no
+filter, service, or rule matched, and that answer is what gives every other
+setting its meaning:
+
+| Default rule | Posture | A query is… |
+| --- | --- | --- |
+| `Bypassing`, `Redirecting` | allow by default | passed unless a filter, service, or rule blocks it |
+| `Blocking` | block by default | blocked unless a service or rule bypasses or redirects it |
+
+The same filter, service, and rule configuration therefore means opposite things
+under the two, which is why the default rule has to be established before saying
+whether something was blocked. A **filter blocks and cannot bypass or
+redirect**, so under a `Blocking` default rule a filter adds nothing: blocking is
+already the default. The default rule is never unset and has no `Off`.
+
+Two things sit outside or alongside it:
+
+- **Disabling the profile** reaches wider, and reaches further by removing the
+  policy rather than by moving the unmatched case. A **disabled** profile applies
+  nothing at all — no filter, service, rule, or default rule — so the endpoint
+  enforcing it falls back to its other profile, or to no filtering.
+- An endpoint may enforce **two profiles at once**, merged before matching rather
+  than applied in order. **Each keeps its own default rule**, so with two
+  enforced, "which profile did this?" can have two answers.
+
 ### The system model
 
 One canonical piece of text explains what this surface is and what is true
-across all of its tools: the vocabulary, where identifiers come from, how to read
-a write result, and how to report what is not exposed. It is served two ways:
+across all of its tools: the vocabulary, what a profile's default rule decides,
+where identifiers come from, how to read a write result, and how to report what
+is not exposed. It is served two ways:
 
 - As the API prompt, which Assist appends to the system prompt on every turn.
 - As `result.system_model` on `get_account_overview`, so a client that only ever
@@ -105,7 +134,8 @@ path is universal:
 | Tool descriptions | yes | **yes, on `tools/list`** |
 
 So an agent that sends `tools/list` and goes directly to a write tool would
-otherwise know nothing about what a profile, endpoint, or client is. **Tool
+otherwise know nothing about what a profile, endpoint, or client is, or about
+the default rule that gives those settings their meaning. **Tool
 descriptions are the only channel every client is guaranteed to receive**, which
 makes them the one place a rule that must not be missed can live.
 
@@ -113,7 +143,7 @@ Text is therefore layered, and no two layers say the same thing:
 
 | Layer | Scope | Examples |
 | --- | --- | --- |
-| **System model** | true across all 24 tools | the vocabulary, identifier provenance, the action-result fields, `undo`, the `200 ok` trap, tier gating, retention |
+| **System model** | true across all 24 tools | the vocabulary, the default-rule posture, identifier provenance, the action-result fields, `undo`, the `200 ok` trap, tier gating, retention |
 | **Family injection** | true across one family, and absent from the model | read: a capped result is not complete. delete: there is no undo, prefer a reversible alternative |
 | **Description body** | true of one tool | its arguments, its enums, its own failure modes |
 

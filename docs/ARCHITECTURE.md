@@ -33,6 +33,8 @@ Use these terms consistently across code and docs.
 | Device | A Home Assistant device registry object used only as a logical and visual container |
 | Entity | A Home Assistant platform object only |
 | Profile | A Control D configuration container holding rules, services, and blocklists |
+| Default rule | A profile's catch-all action, and its most important setting: it decides the query nothing else matched, so it sets whether the profile allows by default (`Bypassing`, `Redirecting`) or blocks by default (`Blocking`). Never unset, and has no `Off` |
+| Disabled profile | A profile applying nothing at all — no filter, service, rule, or default rule. Wider than any profile setting, including the default rule |
 | Endpoint | A Control D DNS resolver that enforces a profile: a top-level protected row from `/devices`, whether a router segment, a ctrld instance, or an individually protected device. An endpoint **always** enforces at least one profile |
 | Client | A device seen under an endpoint in analytics and device relationships; client aliases are client-scoped, not endpoint-scoped |
 | Protected device | Everything DNS protection covers: an endpoint, or a client under one. The count sensors report the total, which is endpoints plus clients |

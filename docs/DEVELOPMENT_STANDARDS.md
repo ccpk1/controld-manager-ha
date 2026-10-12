@@ -28,6 +28,8 @@ Use repository terminology consistently.
 
 - use `domain` only for the Home Assistant integration domain `controld_manager`
 - use `profile`, `endpoint`, `client`, `policy`, `runtime snapshot`, and `registry` for Control D data concepts
+- use `default rule` for a profile's catch-all action, which sets whether the profile allows by default (`Bypassing`, `Redirecting`) or blocks by default (`Blocking`); it is a profile's most important setting and is never unset
+- use `disabled` for a profile applying nothing at all, which is wider than its default rule
 - use `entity` only for Home Assistant platform objects
 - use `device` only for Home Assistant device registry objects
 - use `unique ID` for the stable registry identifier and `entity_id` for the Home Assistant registry string
