@@ -252,18 +252,11 @@ def test_prompt_explains_the_default_rule_sets_the_profile_posture() -> None:
     """
     lowered = PROMPT.lower()
     assert "default rule" in lowered
-    assert "blocking" in lowered
-    assert "bypassing" in lowered
     assert "most important" in lowered
 
-    # Both postures must be stated, and the blocking one must be the
-    # deny-by-default reading rather than a restatement of blocking as an action.
-    blocking_line = next(
-        line
-        for line in PROMPT.splitlines()
-        if line.startswith("- With the default rule `Blocking`")
-    )
-    assert "blocked unless" in blocking_line.lower()
+    # Both postures, each stated as how the unmatched query is handled.
+    assert "passes unless" in lowered
+    assert "blocked unless" in lowered
 
     # The wider control has to be named, or the posture reads as the ceiling.
     assert "disabling the profile reaches further" in lowered
