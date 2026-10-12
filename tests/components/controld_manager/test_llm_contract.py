@@ -565,21 +565,29 @@ async def test_every_tool_declares_a_probatio_schema(hass: HomeAssistant) -> Non
     assert wrong == {}, f"tools not using a probatio validator: {wrong}"
 
 
-async def test_every_tool_parameters_expose_a_field_schema(
+async def test_every_tool_parameters_expose_the_field_mapping(
     hass: HomeAssistant,
 ) -> None:
-    """`parameters.schema` must exist on every tool, whatever its shape.
+    """`parameters.schema` must be the field dict on every tool.
 
     The Google Generative AI conversation agent reads `tool.parameters.schema`
     before it converts the schema, and the endpoint selector tools lost that
     attribute while they composed through `probatio.All`, failing every
     conversation with an HTTP 500 before the model was called.
+
+    The attribute alone is not enough: `Schema(Schema(fields)).schema` is
+    another `Schema` rather than a dict, which passes a bare `hasattr` and then
+    breaks Home Assistant core, whose action tools iterate it with `.items()`.
     """
     tools = await _tools(hass, LLM_TOOL_MODE_FULL)
     assert tools
 
-    missing = [tool.name for tool in tools if not hasattr(tool.parameters, "schema")]
-    assert missing == [], f"tools whose parameters lack `.schema`: {missing}"
+    wrong = {
+        tool.name: type(getattr(tool.parameters, "schema", None)).__name__
+        for tool in tools
+        if not isinstance(getattr(tool.parameters, "schema", None), dict)
+    }
+    assert wrong == {}, f"parameters.schema is not the field mapping: {wrong}"
 
 
 async def test_tool_schemas_still_convert_for_an_mcp_client(
