@@ -292,6 +292,41 @@ def test_prompt_explains_the_outcomes_are_not_degrees_of_one_thing() -> None:
     assert "routine" in bypassed_line.lower()
 
 
+def test_prompt_bridges_disable_to_the_paused_field() -> None:
+    """The model says `disabled`; the overview returns `paused`.
+
+    `get_account_overview` reports the state as `paused`, while the vocabulary
+    and the entity naming use `disabled`. Without the field named, an agent
+    reading `paused: true` has to guess that it is the disabled profile the
+    model describes, and the profile-pause question in #21 stays unanswered.
+    """
+    lowered = PROMPT.lower()
+    assert "paused" in lowered
+    assert "`paused`" in PROMPT
+    assert "get_account_overview" in PROMPT
+    assert "disable_profile" in PROMPT
+    assert "enable_profile" in PROMPT
+
+
+def test_prompt_explains_two_profiles_are_merged_not_ordered() -> None:
+    """Two enforced profiles pool their rules rather than applying in turn.
+
+    The merge is what makes a shared baseline plus a device-specific policy
+    work, and it is why "which profile did this?" can have two answers. A model
+    that assumes an order will name one profile and miss the other.
+    """
+    lowered = PROMPT.lower()
+    assert "merged before matching" in lowered
+    assert "applied in order" in lowered
+    # Each profile keeps its own posture, so the merge is not a default-rule
+    # override.
+    assert "each keeps its own default rule" in lowered
+    # The reporting consequence has to be stated, not just the mechanism.
+    assert "name every enforced profile" in lowered
+    # A client inherits both, since it follows what its endpoint enforces.
+    assert "follows the profiles its endpoint enforces" in lowered
+
+
 def test_prompt_does_not_describe_removed_tools() -> None:
     """The ranked analytics tools were dropped, so the prompt must not imply them."""
     for removed in (
