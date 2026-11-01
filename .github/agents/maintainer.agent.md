@@ -83,13 +83,13 @@ Apply changes while enforcing standards:
 
 Run checks based on task scope:
 
-| Request         | Command set                                                                                                                                                       |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Request         | Command set                                                                                                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Full validation | `.venv/bin/python -m ruff check .` + `.venv/bin/python -m ruff format .` + `.venv/bin/python -m mypy custom_components/controld_manager` + `.venv/bin/python -m pytest tests/ -v` |
-| Lint check      | `.venv/bin/python -m ruff check .` + `.venv/bin/python -m ruff format .`                                                                                          |
-| Full test suite | `.venv/bin/python -m pytest tests/ -v`                                                                                                                            |
-| Type check      | `.venv/bin/python -m mypy custom_components/controld_manager`                                                                                                     |
-| Test area       | `.venv/bin/python -m pytest tests/components/controld_manager -k "[AREA]" -v`                                                                                     |
+| Lint check      | `.venv/bin/python -m ruff check .` + `.venv/bin/python -m ruff format .`                                                                                                          |
+| Full test suite | `.venv/bin/python -m pytest tests/ -v`                                                                                                                                            |
+| Type check      | `.venv/bin/python -m mypy custom_components/controld_manager`                                                                                                                     |
+| Test area       | `.venv/bin/python -m pytest tests/components/controld_manager -k "[AREA]" -v`                                                                                                     |
 
 ### 5. Report
 
