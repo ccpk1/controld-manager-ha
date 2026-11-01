@@ -17,8 +17,8 @@ Run and pass:
 
 ```bash
 bash ./utils/quick_lint.sh
-python -m mypy custom_components/controld_manager
-python -m pytest tests/ -v
+.venv/bin/python -m mypy custom_components/controld_manager
+.venv/bin/python -m pytest tests/ -v
 ```
 
 Checklist:

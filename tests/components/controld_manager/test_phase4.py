@@ -5,12 +5,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 import voluptuous as vol
+from homeassistant.components.diagnostics import REDACTED
 from homeassistant.components.select import ATTR_OPTION
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID
@@ -7947,7 +7949,7 @@ async def test_external_filter_entities_are_disabled_by_default_when_exposed(
 
 
 async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> None:
-    """Diagnostics should redact entry secrets and stay scoped to one runtime."""
+    """Diagnostics should redact account identifiers but keep per-profile scope."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_API_TOKEN: "token-value", "entry_name": "Control D Home"},
@@ -7958,11 +7960,11 @@ async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> N
 
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
 
-    assert diagnostics["entry"][CONF_API_TOKEN] == "**REDACTED**"
+    assert diagnostics["entry"][CONF_API_TOKEN] == REDACTED
     assert diagnostics["options"]["profile_policies"]["profile-1"][
         "allowed_service_categories"
     ] == [SERVICE_SELECTOR_AUTOMATIC]
-    assert diagnostics["runtime"]["instance_id"] == "user-123"
+    assert diagnostics["runtime"]["instance_id"] == REDACTED
     assert diagnostics["runtime"]["refresh_intervals"] == {
         "configuration_sync_minutes": 15,
         "profile_analytics_minutes": 5,
@@ -7979,7 +7981,10 @@ async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> N
         "rule_profile_count": 2,
         "option_profile_count": 2,
     }
-    assert diagnostics["runtime"]["profiles"]["profile-1"]["name"] == "Primary"
+    # Profile names are frequently people's names, so they are redacted. The
+    # profile PK stays as the key, which keeps every per-profile row attributable.
+    assert set(diagnostics["runtime"]["profiles"]) == {"profile-1", "profile-2"}
+    assert diagnostics["runtime"]["profiles"]["profile-1"]["name"] == REDACTED
     assert diagnostics["runtime"]["profiles"]["profile-1"]["service_selector"] == [
         SERVICE_SELECTOR_AUTOMATIC
     ]
@@ -7990,6 +7995,11 @@ async def test_diagnostics_redact_entry_data_and_report_runtime_scope(hass) -> N
     assert (
         diagnostics["runtime"]["profiles"]["profile-2"]["protected_device_count"] == 1
     )
+
+    # Guard the whole dump, so a newly added identifier field cannot slip back in.
+    serialized = json.dumps(diagnostics, default=str)
+    assert "user-123" not in serialized
+    assert "Primary" not in serialized
 
 
 async def test_stale_refresh_is_discarded_when_write_lands_during_fetch(

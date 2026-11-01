@@ -1,7 +1,21 @@
 ---
 name: Control D Maintainer
 description: Ad-hoc assistant for debugging, analysis, cleanup, and small fixes in the Control D Manager repository.
-tools: ["search", "edit", "read", "execute", "web", "agent", "todo"]
+tools:
+  [
+    execute,
+    read,
+    agent,
+    vscodeGeneral/rename,
+    vscodeGeneral/usages,
+    vscodeNotebooks/createJupyterNotebook,
+    vscodeNotebooks/editNotebook,
+    edit,
+    search,
+    web,
+    "control-d-ha/*",
+    todo,
+  ]
 handoffs:
   - label: Escalate to Strategist
     agent: Control D Strategist
@@ -69,13 +83,13 @@ Apply changes while enforcing standards:
 
 Run checks based on task scope:
 
-| Request | Command set |
-| --- | --- |
-| Full validation | `python -m ruff check .` + `python -m ruff format .` + `python -m mypy custom_components/controld_manager` + `python -m pytest tests/ -v` |
-| Lint check | `python -m ruff check .` + `python -m ruff format .` |
-| Full test suite | `python -m pytest tests/ -v` |
-| Type check | `python -m mypy custom_components/controld_manager` |
-| Test area | `python -m pytest tests/components/controld_manager -k "[AREA]" -v` |
+| Request         | Command set                                                                                                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full validation | `.venv/bin/python -m ruff check .` + `.venv/bin/python -m ruff format .` + `.venv/bin/python -m mypy custom_components/controld_manager` + `.venv/bin/python -m pytest tests/ -v` |
+| Lint check      | `.venv/bin/python -m ruff check .` + `.venv/bin/python -m ruff format .`                                                                                                          |
+| Full test suite | `.venv/bin/python -m pytest tests/ -v`                                                                                                                                            |
+| Type check      | `.venv/bin/python -m mypy custom_components/controld_manager`                                                                                                                     |
+| Test area       | `.venv/bin/python -m pytest tests/components/controld_manager -k "[AREA]" -v`                                                                                                     |
 
 ### 5. Report
 
@@ -85,9 +99,9 @@ Run checks based on task scope:
 
 ## Boundaries
 
-| Allowed | Not allowed |
-| --- | --- |
-| Modify code for bug fixes and cleanup | Create new `_IN-PROCESS.md` plans |
-| Refactor a local function or class | Perform repo-wide architecture rewrites |
+| Allowed                                    | Not allowed                                    |
+| ------------------------------------------ | ---------------------------------------------- |
+| Modify code for bug fixes and cleanup      | Create new `_IN-PROCESS.md` plans              |
+| Refactor a local function or class         | Perform repo-wide architecture rewrites        |
 | Run validation commands and report results | Skip validation without explicitly stating why |
-| Update release metadata when asked | Add new dependencies without user approval |
+| Update release metadata when asked         | Add new dependencies without user approval     |

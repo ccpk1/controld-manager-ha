@@ -16,6 +16,12 @@ EOF
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# Prefer the repository venv so Ruff matches the pinned Home Assistant release.
+python_bin="python"
+if [[ -x ".venv/bin/python" ]]; then
+    python_bin=".venv/bin/python"
+fi
+
 mode="check"
 
 case "${1-}" in
@@ -36,9 +42,9 @@ case "${1-}" in
 esac
 
 if [[ "$mode" == "fix" ]]; then
-    python -m ruff check . --fix
-    python -m ruff format .
+    "$python_bin" -m ruff check . --fix
+    "$python_bin" -m ruff format .
 else
-    python -m ruff format --check .
-    python -m ruff check .
+    "$python_bin" -m ruff format --check .
+    "$python_bin" -m ruff check .
 fi

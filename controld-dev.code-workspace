@@ -61,19 +61,24 @@
         },
       },
       {
+        "label": "Setup test venv",
+        "type": "shell",
+        "command": "uv venv .venv --python 3.14 && uv pip install --python .venv/bin/python -e '.[dev]'",
+      },
+      {
         "label": "Ruff",
         "type": "shell",
-        "command": "/home/vscode/.local/ha-venv/bin/python -m ruff check .",
+        "command": ".venv/bin/python -m ruff check .",
       },
       {
         "label": "MyPy",
         "type": "shell",
-        "command": "/home/vscode/.local/ha-venv/bin/python -m mypy custom_components/controld_manager",
+        "command": ".venv/bin/python -m mypy custom_components/controld_manager",
       },
       {
         "label": "Pytest",
         "type": "shell",
-        "command": "/home/vscode/.local/ha-venv/bin/python -m pytest tests/ -v",
+        "command": ".venv/bin/python -m pytest tests/ -v",
       },
     ],
   },
