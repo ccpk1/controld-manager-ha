@@ -66,12 +66,12 @@ It is a compact reference for review and maintenance. It should stay focused on 
 
 ### Automated gates
 
-Run:
+Run from the repository `.venv`:
 
-- `python -m ruff check .`
-- `python -m ruff format .`
-- `python -m mypy custom_components/controld_manager`
-- `python -m pytest tests/ -v`
+- `.venv/bin/python -m ruff check .`
+- `.venv/bin/python -m ruff format .`
+- `.venv/bin/python -m mypy custom_components/controld_manager`
+- `.venv/bin/python -m pytest tests/ -v`
 
 ### Review gates
 

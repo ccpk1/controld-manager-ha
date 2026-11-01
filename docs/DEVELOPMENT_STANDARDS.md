@@ -393,11 +393,11 @@ Review changes against these questions:
 
 ## Validation workflow
 
-Run these commands for relevant changes:
+Run these commands from the repository `.venv` (see `CONTRIBUTING.md`):
 
-- `python -m ruff check .`
-- `python -m ruff format .`
-- `python -m mypy custom_components/controld_manager`
-- `python -m pytest tests/ -v`
+- `.venv/bin/python -m ruff check .`
+- `.venv/bin/python -m ruff format .`
+- `.venv/bin/python -m mypy custom_components/controld_manager`
+- `.venv/bin/python -m pytest tests/ -v`
 
 Documentation and translations must be updated when behavior changes require them.

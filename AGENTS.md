@@ -45,11 +45,15 @@ This repository is a standalone Home Assistant custom integration scaffold for C
 Run these in this repository unless the task clearly does not affect code:
 
 ```bash
-python -m ruff check .
-python -m ruff format .
-python -m mypy custom_components/controld_manager
-python -m pytest tests/ -v
+.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff format .
+.venv/bin/python -m mypy custom_components/controld_manager
+.venv/bin/python -m pytest tests/ -v
 ```
+
+Use the repository `.venv`, not the interpreter on `PATH`: a Home Assistant core
+development checkout cannot load the test plugin. See `CONTRIBUTING.md` for the
+one-time setup.
 
 For focused work, narrower pytest scopes are allowed during iteration, but the final report should say what was and was not run.
 
