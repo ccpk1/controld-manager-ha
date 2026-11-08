@@ -2,5 +2,7 @@
   "name": "Control D Manager",
   "homeassistant": "2026.3",
   "hacs": "2.0.5",
-  "hide_default_branch": true
+  "hide_default_branch": true,
+  "zip_release": true,
+  "filename": "controld_manager.zip"
 }

@@ -47,6 +47,24 @@ Checklist:
 - [ ] The integration package still includes the files HACS expects.
 - [ ] The repository still passes HACS structure expectations.
 - [ ] The current release posture remains compatible with Home Assistant 2026.3 or newer.
+- [ ] `hacs.json` still declares `zip_release` with the `filename`
+      `controld_manager.zip`, and `.github/workflows/release.yaml` still builds
+      and attaches an archive with that exact name.
+
+### Release assets
+
+`hacs.json` declares `zip_release` with a `filename`, so HACS resolves installs
+through `releases/download/<tag>/<filename>` instead of the tag's source archive.
+That makes the asset **required**, not optional: without it (or with a different
+name) every install fails with `Download of controld_manager.zip was not
+completed`. It is also the only reason download counts are non-null, since HACS
+reads the figure from the asset's `download_count`.
+
+- The published archive must have the integration at its root, with no enclosing
+  directory, because HACS extracts it directly into `custom_components/`.
+- Verification is automated in `tests/components/controld_manager/test_release_packaging.py`;
+  it checks the declared filename, the trigger, the zip directory and the built
+  layout.
 
 ## 6. Runtime smoke
 
@@ -60,6 +78,21 @@ Checklist:
 - [ ] Use a plain SemVer Git tag matching `manifest.json`, such as `0.1.0`.
 - [ ] Publish a short release summary in the GitHub release body.
 - [ ] Do not rely on a separate generated changelog system for the first release line.
+- [ ] The `Release` workflow is already on `main` **before** publishing. A
+      `release` event only runs workflows that exist on the default branch at the
+      time, so merging the workflow and the release in one step silently skips it.
+
+### Publication order
+
+1. Publish the release (a draft does not trigger the workflow).
+2. Confirm the `Release` run is green. That also proves the tag matches
+   `manifest.json`, because the workflow fails on a mismatch.
+3. Confirm `controld_manager.zip` is attached and is a plausible size (hundreds
+   of KB, not a few KB).
+4. Only then treat the version as live.
+
+If the asset is missing or malformed, **re-run the workflow**; do not re-tag and
+re-publish, which would change the artifact existing users already installed.
 - [ ] **For a pre-release, mark the GitHub release as a pre-release.** This is the
       only mechanism that distinguishes it: HACS has no `prerelease` key in
       `hacs.json`, so it reads the flag from the release itself. Without it a beta
